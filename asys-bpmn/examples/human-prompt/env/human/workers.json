@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "human-prompt",
+  "description": "Human questions for the terminal prompt example.",
+  "types": {
+    "human": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-human"
+      ]
+    }
+  }
+}

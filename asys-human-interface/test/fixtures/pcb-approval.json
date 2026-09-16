@@ -1,0 +1,43 @@
+{
+  "title": "Approve the PCB design",
+  "prompt": "Approve, or reject with comments describing the required correction.",
+  "form": {
+    "type": "object",
+    "properties": {
+      "approved": {
+        "type": "boolean"
+      },
+      "comments": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "approved"
+    ],
+    "additionalProperties": false,
+    "anyOf": [
+      {
+        "properties": {
+          "approved": {
+            "const": true
+          }
+        }
+      },
+      {
+        "properties": {
+          "approved": {
+            "const": false
+          },
+          "comments": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "comments"
+        ]
+      }
+    ]
+  }
+}

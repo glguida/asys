@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Check container-local heartbeat files without opening dcomp streams."""
+from pathlib import Path
+import sys
+import time
+
+try:
+    healthy = len(sys.argv) > 1 and all(0 <= time.time() - Path(path).stat().st_mtime < 15 for path in sys.argv[1:])
+except OSError:
+    healthy = False
+raise SystemExit(0 if healthy else 1)

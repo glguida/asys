@@ -1,0 +1,35 @@
+{
+  "name": "@cyclo/gateway-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cyclo gateway discovery and administration contracts",
+  "files": [
+    "gen",
+    "proto"
+  ],
+  "exports": {
+    "./contract": {
+      "types": "./gen/cyclo/gateway/v1/gateway_pb.d.ts",
+      "default": "./gen/cyclo/gateway/v1/gateway_pb.js"
+    },
+    "./schema.json": "./gen/schema.json"
+  },
+  "scripts": {
+    "generate": "buf lint && buf generate && npm run generate:python && buf build --as-file-descriptor-set --exclude-source-info -o gen/schema.json",
+    "generate:python": "buf generate --template buf.gen.python.yaml && sed -i 's/[[:space:]]*$//' ../../../../cyclo/gateway/v1/gateway_connect.py",
+    "prepack": "npm run generate",
+    "test": "npm run generate && node --test"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.12.1",
+    "@connectrpc/connect": "2.1.2"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "1.72.0",
+    "@bufbuild/protoc-gen-es": "2.12.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

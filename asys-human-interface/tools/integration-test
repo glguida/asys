@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Exercise the terminal handler and Human bridge in an isolated dcomp system."""
+import asyncio
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT.parent / "python"), str(ROOT.parent / "asys-runtime")]
+from asys_runtime import Queue
+
+
+class HumanQueue(Queue):
+    def __init__(self, root, jobs, workspace):
+        super().__init__(root)
+        self.job_records = jobs
+        self.workspace = workspace
+
+    def submit(self, job_type, job_id, **options):
+        directory = self.job_records / job_id
+        directory.mkdir()
+        return super().submit(job_type, job_id, directory=directory, workspace=self.workspace, **options)
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="asys-human-it-") as temporary:
+        temp = Path(temporary)
+        system = "human-test-" + uuid.uuid4().hex[:10]
+        dcomp = [os.environ.get("DCOMP_BINARY", "dcomp"), "--state-root", str(temp / "dcomp")]
+        log = temp / "commands.log"
+        processes = []
+
+        def run(command, *args):
+            result = subprocess.run(command + list(args), capture_output=True, text=True, timeout=180)
+            with log.open("a") as output:
+                output.write(f"{command + list(args)}\n{result.stdout}{result.stderr}\n")
+            if result.returncode:
+                raise AssertionError(f"Command failed: {command + list(args)}\n{result.stdout[-1000:]}{result.stderr[-3000:]}")
+            return result.stdout
+
+        def until(check, timeout=60):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                result = check()
+                if result:
+                    return result
+                time.sleep(0.05)
+            raise AssertionError(f"Timed out\n{log.read_text()[-3000:]}")
+
+        def components():
+            return {item["name"]: item for item in json.loads(run(dcomp, "view", "--json", system))["components"]}
+
+        def add_worker(name):
+            definition = temp / name
+            definition.mkdir()
+            worker_image = os.environ.get("ASYS_WORKERS_IMAGE", "asys-workers:dev")
+            (definition / "component.dcomp").write_text(f"docker {worker_image}\noutput asys.human.v1.Human human\n")
+            (definition / "workers.json").write_text(json.dumps({"version": 1, "name": name,
+                "types": {"human": {"command": ["/opt/asys/asys-workers/tools/asys-human"]}}}))
+            state = temp / f"{name}-state"
+            runtime, jobs = state / "runtime", state / "jobs"
+            workspace = temp / f"{name} project"
+            for path in (runtime, jobs, workspace):
+                path.mkdir(parents=True)
+            (state / "workspace").symlink_to(workspace, target_is_directory=True)
+            (workspace / "review.md").write_text(f"# {name} project\n\nReview the actual workspace.")
+            run(dcomp, "add-component", "--user", f"{os.getuid()}:{os.getgid()}",
+                "--bind", f"{definition},/opt/asys/environment,ro",
+                "--bind", f"{runtime},/var/lib/asys/runtime,rw",
+                "--bind", f"{jobs},/var/lib/asys/jobs,rw",
+                "--bind", f"{workspace},/var/lib/asys/workspace,rw", system, name, str(definition))
+            # Store the same relative workspace reference used by real launchers.
+            return HumanQueue(runtime / "environments" / name, jobs, state / "workspace")
+
+        def launch(label, extra=()):
+            output = temp / f"{label}.log"
+            with output.open("w") as stream:
+                process = subprocess.Popen([sys.executable, str(ROOT / "tools/asys-human-prompt"), "--system", system,
+                    "--dcomp-state-root", str(temp / "dcomp"), "--root", str(temp / label), "--claimant", "alice", *extra],
+                    stdin=subprocess.PIPE, stdout=stream, stderr=stream, text=True)
+            processes.append(process)
+            def contains(needle):
+                if process.poll() is not None:
+                    raise AssertionError(f"Handler exited: {process.returncode}\n{output.read_text()}")
+                return needle in output.read_text()
+            return process, output, contains
+
+        def human_state(queue, id):
+            path = queue.paths(id)["directory"] / "human/state.json"
+            return json.loads(path.read_text()) if path.exists() else {"status": "pending"}
+
+        try:
+            alpha = add_worker("alpha")
+            alpha_id = components()["alpha"]["status"]["container_id"]
+            first, first_log, first_contains = launch("first")
+            until(lambda: first_contains("Following 1 Human interface"))
+            alpha.submit("human", "review", input={"title": "First question", "prompt": "Approve A?", "candidates": ["alice"],
+                "files": [{"label": "Missing job output", "path": "/var/lib/asys/jobs/review/output/board.kicad_pcb"}],
+                "context": "Full report A", "form": {"type": "object", "properties": {"approved": {"type": "boolean"}, "comments": {"type": "string"}},
+                    "required": ["approved"], "additionalProperties": False}}, metadata={"environment": "alpha"})
+            until(lambda: first_contains("1. Approve"))
+            assert "Full report A" in first_log.read_text()
+            document = json.loads(next((temp / "first").glob("*/request.json")).read_text())
+            files = {entry["role"]: entry for entry in document["files"]}
+            assert set(files) == {"workspace"}, files
+            assert files["workspace"]["path"] == str(alpha.workspace.resolve())
+            assert (Path(files["workspace"]["path"]) / "review.md").read_text().startswith("# alpha project")
+            assert files["workspace"]["path"] in first_log.read_text()
+            assert "Missing job output" not in first_log.read_text()
+            assert "Answer result" not in first_log.read_text()
+            assert "Job records" not in first_log.read_text()
+            assert document["uischema"]["elements"][0] == {"type": "Label", "text": "First question"}
+            beta = add_worker("beta")
+            beta.submit("human", "review", input={"title": "Second question", "prompt": "Approve B?", "form": {"type": "boolean"}})
+            until(lambda: first_contains("Following 2 Human interface"))
+            assert "Approve B?" not in first_log.read_text(), "only one question is presented at a time"
+            assert human_state(beta, "review")["status"] == "pending", "queued work must remain unclaimed"
+            assert human_state(alpha, "review")["status"] == "claimed", "refresh preserves the current worker claim"
+            first.stdin.write("approve\nLooks good.\n"); first.stdin.flush()
+            until(lambda: first_contains("Submit response?"))
+            assert human_state(alpha, "review")["status"] == "claimed", "editing a form must not complete the task"
+            assert human_state(beta, "review")["status"] == "pending", "the next question must wait for submission"
+            first.stdin.write("y\n"); first.stdin.flush()
+            until(lambda: first_contains("Approve B?"))
+            first.stdin.write("disapprove\ny\n"); first.stdin.flush()
+            assert alpha.wait("review", timeout=10)["result"] == {"approved": True, "comments": "Looks good."}
+            assert beta.wait("review", timeout=10)["result"] is False
+            first.stdin.close()
+            assert first.wait(timeout=30) == 0, first_log.read_text()
+            current = components()
+            assert set(current) == {"alpha", "beta"}
+            assert current["alpha"]["status"]["container_id"] == alpha_id
+            before = {name: item["status"]["container_id"] for name, item in current.items()}
+            print("PASS: one component discovers new workers, queues colliding IDs, and records approve/disapprove through Human RPC", flush=True)
+
+            alpha.submit("human", "text", input={"prompt": "Explain the decision?"})
+            second, second_log, second_contains = launch("interrupt")
+            until(lambda: second_contains("Answer: "))
+            second.send_signal(signal.SIGTERM)
+            assert second.wait(timeout=30) == 130, second_log.read_text()
+            assert human_state(alpha, "text")["status"] == "pending"
+            assert set(components()) == {"alpha", "beta"}
+            third, third_log, third_contains = launch("resume", ["--once", "alpha.human"])
+            third.stdin.write("The report needs revision.\ny\n"); third.stdin.flush()
+            assert third.wait(timeout=30) == 0, third_log.read_text()
+            assert alpha.wait("text", timeout=10)["result"] == "The report needs revision."
+            assert {name: item["status"]["container_id"] for name, item in components().items()} == before
+            print("PASS: interrupt releases the current claim; another invocation answers it and removes only its own component", flush=True)
+
+            alpha.submit("human", "cancel-me", input={"prompt": "This question will be cancelled"})
+            fourth, fourth_log, fourth_contains = launch("cancellation")
+            until(lambda: fourth_contains("Answer: "))
+            alpha.cancel("cancel-me")
+            assert alpha.wait("cancel-me", timeout=10)["status"] == "cancelled"
+            beta.submit("human", "count", input={"prompt": "Enter an even count", "form": {"type": "object", "properties": {"count": {"type": "integer", "multipleOf": 2}},
+                "required": ["count"], "additionalProperties": False}})
+            fourth.stdin.write("Late answer\ny\n"); fourth.stdin.flush()
+            until(lambda: fourth_contains("Count: "))
+            fourth.stdin.write("wrong type\n"); fourth.stdin.flush()
+            until(lambda: fourth_contains("Enter a whole number."))
+            fourth.stdin.write("3\ny\n"); fourth.stdin.flush()
+            until(lambda: fourth_contains("Result does not match task form"))
+            fourth.stdin.write("2\ny\n"); fourth.stdin.flush()
+            assert beta.wait("count", timeout=10)["result"] == {"count": 2}
+
+            alpha.submit("human", "graphical-only", input={"prompt": "A form with a conditional UI rule", "form": {"type": "boolean"},
+                "uischema": {"type": "Control", "scope": "#", "rule": {"effect": "HIDE", "condition": {"scope": "#", "schema": {"const": False}}}}})
+            until(lambda: fourth_contains("Cannot render this form:"))
+            until(lambda: human_state(alpha, "graphical-only")["status"] == "pending")
+
+            beta.submit("human", "ui-review", input={"prompt": "Review with JSON Forms", "form": {"type": "object", "properties": {
+                "approved": {"type": "boolean", "oneOf": [{"const": True, "title": "Accept"}, {"const": False, "title": "Request changes"}]},
+                "comments": {"type": "string"}}, "required": ["approved"], "additionalProperties": False},
+                "uischema": {"type": "Group", "label": "Design review", "elements": [
+                    {"type": "Control", "scope": "#/properties/comments", "label": "Reviewer note", "options": {"multi": True}},
+                    {"type": "Control", "scope": "#/properties/approved", "label": "Decision", "options": {"format": "radio"}}]}})
+            until(lambda: fourth_contains("Reviewer note ("))
+            fourth.stdin.write("Move the connector.\nKeep the test point.\n/done\n2\ny\n"); fourth.stdin.flush()
+            assert beta.wait("ui-review", timeout=10)["result"] == {"comments": "Move the connector.\nKeep the test point.", "approved": False}
+
+            # Exact schema from pcb-engineer's waiting human request. A rejection
+            # must retain the claim until the worker accepts a nonblank comment.
+            approval = json.loads((ROOT / "test/fixtures/pcb-approval.json").read_text())
+            alpha.submit("human", "pcb-reject", input=approval)
+            until(lambda: fourth_contains("Approve the PCB design"))
+            rejected = fourth_log.read_text().count("Answer rejected:")
+            fourth.stdin.write("disapprove\n\ny\n"); fourth.stdin.flush()
+            until(lambda: fourth_log.read_text().count("Answer rejected:") > rejected)
+            assert human_state(alpha, "pcb-reject")["status"] == "claimed"
+            rejected = fourth_log.read_text().count("Answer rejected:")
+            fourth.stdin.write("\n   \ny\n"); fourth.stdin.flush()
+            until(lambda: fourth_log.read_text().count("Answer rejected:") > rejected)
+            assert human_state(alpha, "pcb-reject")["status"] == "claimed"
+            fourth.stdin.write("\nMove the connector.\ny\n"); fourth.stdin.flush()
+            assert alpha.wait("pcb-reject", timeout=10)["result"] == {"approved": False, "comments": "Move the connector."}
+
+            beta.submit("human", "pcb-approve", input={**approval, "title": "PCB approval without a comment"})
+            until(lambda: fourth_contains("PCB approval without a comment"))
+            fourth.stdin.write("approve\n\ny\n"); fourth.stdin.flush()
+            assert beta.wait("pcb-approve", timeout=10)["result"] == {"approved": True}
+            assert "Schema combinations" not in fourth_log.read_text()
+            print("PASS: pcb-engineer's anyOf form renders; the worker rejects missing/blank rejection comments and accepts corrections or approval without a comment", flush=True)
+            assert "JSON answer" not in fourth_log.read_text()
+            fourth.stdin.close()
+            assert fourth.wait(timeout=30) == 0, fourth_log.read_text()
+            assert {name: item["status"]["container_id"] for name, item in components().items()} == before
+            print("PASS: cancellation and unsupported forms do not stop the queue; worker validation permits correction; JSON Forms controls collect multiline comments and decisions", flush=True)
+
+            # Exercise the actual full-screen host with real Human RPC. Pilot
+            # drives only this isolated system, never a user's waiting request.
+            sys.path[:0] = [str(ROOT / ".host-deps"), str(ROOT / "python")]
+            from asys_human.interaction import Interaction
+            from asys_human.launcher import Launcher, arguments, run_handler
+            from asys_human.tui import HumanApp
+            from asys_human.tui_forms import FieldEditor
+            from textual.widgets import DirectoryTree, RadioButton, Static
+            from asys_human.tui_files import FilesView
+
+            beta.submit("human", "tui-reject", input=approval)
+            interaction = Interaction()
+            launcher = Launcher(arguments(["--system", system, "--dcomp-state-root", str(temp / "dcomp"),
+                "--root", str(temp / "tui"), "--claimant", "alice"]), interaction)
+            app = HumanApp(interaction, lambda: run_handler(launcher), claimant="alice", system=system)
+
+            async def terminal_test():
+                async with app.run_test(size=(120, 40)) as pilot:
+                    async def wait_for(check):
+                        deadline = time.monotonic() + 60
+                        while time.monotonic() < deadline:
+                            if check():
+                                return
+                            await pilot.pause(0.05)
+                        raise AssertionError("Timed out waiting for the terminal handler")
+
+                    await wait_for(lambda: app.document and app.document["task"] == "tui-reject" and not app.submitting)
+                    await pilot.press("f3")
+                    files = app.query_one(FilesView)
+                    assert files.location == beta.workspace.resolve()
+                    assert files.query_one(DirectoryTree).path == beta.workspace.resolve()
+                    approved = next(field for field in app.query(FieldEditor) if field.node.path == ("approved",))
+                    comment = next(field for field in app.query(FieldEditor) if field.node.path == ("comments",)).editor
+                    await pilot.press("f4")
+                    await pilot.click(approved.editor.query(RadioButton)[1])
+                    await pilot.press("ctrl+s")
+                    await wait_for(lambda: not app.submitting and bool(str(app.query_one("#answer-error", Static).content)))
+                    assert human_state(beta, "tui-reject")["status"] == "claimed"
+                    comment.load_text("Rotate the connector.\nKeep its pads inside the board.")
+                    await pilot.press("ctrl+s")
+                    await wait_for(lambda: human_state(beta, "tui-reject")["status"] == "completed")
+                    assert beta.wait("tui-reject", timeout=10)["result"] == {
+                        "approved": False, "comments": "Rotate the connector.\nKeep its pads inside the board."}
+                    beta.submit("human", "tui-release", input={"prompt": "Leave this request pending"})
+                    await wait_for(lambda: app.document and app.document["task"] == "tui-release" and not app.submitting)
+                    assert human_state(beta, "tui-release")["status"] == "claimed"
+                    await pilot.press("ctrl+q")
+                    await wait_for(lambda: not app.backend.is_alive())
+
+            try:
+                asyncio.run(terminal_test())
+            finally:
+                interaction.stopping.set()
+                if app.backend:
+                    app.backend.join(timeout=60)
+            assert human_state(beta, "tui-release")["status"] == "pending"
+            assert not launcher.owned and launcher.active is None
+            assert {name: item["status"]["container_id"] for name, item in components().items()} == before
+            print("PASS: full-screen TUI submits the actual PCB form, preserves worker-validation retries, follows the queue, and releases its claim on quit", flush=True)
+            (ROOT / "integration-failure.log").unlink(missing_ok=True)
+        except BaseException:
+            with log.open("a") as output:
+                for path in temp.glob("*.log"):
+                    if path != log:
+                        output.write(f"\n{path.name}\n{path.read_text()}")
+            shutil.copyfile(log, ROOT / "integration-failure.log")
+            raise
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill(); process.wait()
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+            subprocess.run(dcomp + ["down", system], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+
+if __name__ == "__main__":
+    main()

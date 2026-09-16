@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Execute a workflow-supplied argument vector using the ordinary job contract."""
+import os
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit("program jobs require a command in their arguments")
+try:
+    os.execvp(sys.argv[1], sys.argv[1:])
+except OSError as error:
+    sys.exit(str(error))

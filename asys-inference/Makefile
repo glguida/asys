@@ -1,0 +1,23 @@
+GO ?= go
+PREFIX ?= $(HOME)/.local
+.PHONY: build test integration install prepare-runtime
+prepare-runtime:
+	install -d components/vendor/asys-runtime
+	install -m 0644 ../asys-runtime/javascript/channel.mjs ../asys-runtime/javascript/queue.mjs ../asys-runtime/javascript/permissions.mjs components/vendor/asys-runtime/
+	install -m 0644 ../LICENSE ../asys-runtime/LICENSE.multiagent components/vendor/asys-runtime/
+build: prepare-runtime
+	mkdir -p bin
+	CGO_ENABLED=0 $(GO) build -buildvcs=false -trimpath -o bin/asys-inference ./cmd/asys-inference
+test: prepare-runtime
+	$(GO) test ./...
+integration: build
+	tools/integration-test
+install: build
+	install -d "$(DESTDIR)$(PREFIX)/bin" "$(DESTDIR)$(PREFIX)/share/asys-inference/components"
+	install -m 0755 bin/asys-inference "$(DESTDIR)$(PREFIX)/bin/"
+	tar --exclude=node_modules --exclude=__pycache__ -C components -cf - . | tar -C "$(DESTDIR)$(PREFIX)/share/asys-inference/components" -xf -
+	install -m 0644 tools/gateway-channel "$(DESTDIR)$(PREFIX)/share/asys-inference/gateway-channel"
+	install -m 0644 tools/provider-channel "$(DESTDIR)$(PREFIX)/share/asys-inference/provider-channel"
+	install -d "$(DESTDIR)$(PREFIX)/share/asys-inference/python/asys_runtime"
+	install -m 0644 ../asys-runtime/asys_runtime/*.py "$(DESTDIR)$(PREFIX)/share/asys-inference/python/asys_runtime/"
+	install -m 0644 ../LICENSE ../asys-runtime/LICENSE.multiagent "$(DESTDIR)$(PREFIX)/share/asys-inference/"

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:asys="urn:asys:workflow:1" id="AgentTask" targetNamespace="urn:asys:examples">
+  <bpmn:process id="agent_task" name="Run an agent task" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="work" name="Answer the request">
+      <bpmn:extensionElements>
+        <asys:job type="agent" input="= {prompt: request}"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="work"/>
+    <bpmn:sequenceFlow id="finish" sourceRef="work" targetRef="end"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="AgentTaskDiagram">
+    <bpmndi:BPMNPlane id="AgentTaskPlane" bpmnElement="agent_task">
+      <bpmndi:BPMNShape id="StartShape" bpmnElement="start">
+        <dc:Bounds x="180" y="122" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="WorkShape" bpmnElement="work">
+        <dc:Bounds x="276" y="100" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="EndShape" bpmnElement="end">
+        <dc:Bounds x="476" y="122" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="BeginEdge" bpmnElement="begin">
+        <di:waypoint x="216" y="140"/>
+        <di:waypoint x="276" y="140"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FinishEdge" bpmnElement="finish">
+        <di:waypoint x="416" y="140"/>
+        <di:waypoint x="476" y="140"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -1,0 +1,282 @@
+import { setTimeout as delay } from "node:timers/promises";
+
+import { Code, ConnectError } from "@connectrpc/connect";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { Modality } from "@cyclo/provider/contract";
+import {
+  decodePayload,
+  encodePayload,
+  PI_INFERENCE_FORMAT,
+  splitPublicModelId,
+} from "@cyclo/provider/protocol";
+import { resourceExhaustedRetryAt } from "@cyclo/provider/errors";
+
+const API = "cyclo-pi";
+const ZERO_COST = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+const MAX_SAFE_UINT64 = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MIN_EXHAUSTION_RETRY_DELAY_MS = 1_000;
+
+export function groupModels(models, { onInvalid = console.warn } = {}) {
+  if (!Array.isArray(models)) throw new TypeError("Provider catalogue has no model list");
+  if (typeof onInvalid !== "function") throw new TypeError("onInvalid must be a function");
+  const groups = new Map();
+  const publicIds = new Set();
+
+  for (const portable of models) {
+    let provider;
+    let id;
+    try {
+      const split = splitPublicModelId(portable?.id);
+      if (!split) throw new TypeError(`model id ${portable?.id} must be PROVIDER/MODEL`);
+      ({ provider, model: id } = split);
+      if (publicIds.has(portable.id)) throw new TypeError(`duplicate model ${portable.id}`);
+      const model = piModel(portable, id);
+      publicIds.add(portable.id);
+      const group = groups.get(provider) ?? [];
+      group.push({ publicId: portable.id, model });
+      groups.set(provider, group);
+    } catch (error) {
+      onInvalid(diagnosticMessage(error));
+    }
+  }
+  return groups;
+}
+
+function diagnosticMessage(error) {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 512) || "invalid provider model";
+}
+
+// This is the only Pi-to-wire boundary. Context and inference options are
+// serialized once, then every Provider component sees one opaque string.
+export function streamProvider(
+  client,
+  publicId,
+  model,
+  context,
+  options = {},
+  { now = Date.now, sleep = abortableSleep, onExhaustion = () => {}, onRetry = () => {} } = {},
+) {
+  const output = createAssistantMessageEventStream();
+  void pump(output, client, publicId, model, context, options, { now, sleep, onExhaustion, onRetry });
+  return output;
+}
+
+async function pump(output, client, publicId, model, context, options, { now, sleep, onExhaustion, onRetry }) {
+  const { attemptTimeoutMs } = options;
+  try {
+    if (attemptTimeoutMs !== undefined && !(Number.isFinite(attemptTimeoutMs) && attemptTimeoutMs > 0)) {
+      throw new TypeError("attemptTimeoutMs must be a positive number of milliseconds");
+    }
+    const request = Object.freeze({
+      model: publicId,
+      payload: encodePayload({
+        context: { ...context, messages: context.messages.map(toProviderMessage) },
+        options: inferenceOptions(options),
+      }),
+    });
+    // Relays and poolers get the first chance to handle exhaustion. If it
+    // reaches this terminal adapter, keep Pi's stream open and wait outside the
+    // completed RPC before replaying the same request. The wait lasts until the
+    // provider is expected back, however long that is; only operator
+    // cancellation ends it. The attempt timeout bounds each RPC on its own.
+    while (true) {
+      options.signal?.throwIfAborted();
+      let receivedResponse = false;
+      const attempt = attemptSignal(options.signal, attemptTimeoutMs);
+      try {
+        for await (const response of client.infer(
+          request,
+          cancellationOptions(attempt),
+        )) {
+          receivedResponse = true;
+          const event = decodePayload(response.payload);
+          // Every streamed view must agree with the model registered in Pi.
+          for (const field of ["partial", "message", "error"]) {
+            if (event[field]?.role === "assistant") event[field] = toPiMessage(event[field], publicId);
+          }
+          output.push(event);
+          if (event.type === "done" || event.type === "error") return;
+        }
+        throw new Error("Provider stream ended without a terminal Pi event");
+      } catch (error) {
+        if (attempt?.aborted && !options.signal?.aborted) {
+          throw new Error(
+            `Provider produced no complete response within ${attemptTimeoutMs} ms`,
+          );
+        }
+        const retryAt = receivedResponse || options.signal?.aborted
+          ? undefined
+          : resourceExhaustedRetryAt(error);
+        if (retryAt === undefined) throw error;
+        const delayMs = Math.max(
+          MIN_EXHAUSTION_RETRY_DELAY_MS,
+          retryAt.getTime() - now(),
+        );
+        onExhaustion({ retryAt, delayMs });
+        await sleep(delayMs, options.signal);
+        options.signal?.throwIfAborted();
+        onRetry();
+      }
+    }
+  } catch (error) {
+    const aborted = options.signal?.aborted
+      || (error instanceof ConnectError && error.code === Code.Canceled);
+    const message = assistantMessage(model);
+    message.stopReason = aborted ? "aborted" : "error";
+    message.errorMessage = aborted
+      ? "Provider request aborted"
+      : `Provider request failed: ${providerErrorMessage(error)}`;
+    output.push({
+      type: "error",
+      reason: message.stopReason,
+      error: message,
+    });
+  }
+}
+
+// Pi compares assistant identities with the selected public route when deciding
+// whether to recover from context overflow. The gateway needs the original
+// identity to replay native reasoning/signatures. Keep it in local session data
+// and restore it before history crosses the Provider interface.
+export function toPiMessage(message, publicId) {
+  if (message.role !== "assistant") return message;
+  const native = toProviderMessage(message);
+  const { provider, model } = splitPublicModelId(publicId);
+  if (native.api === API && native.provider === provider && native.model === model) return native;
+  return {
+    ...native, api: API, provider, model,
+    asysNativeIdentity: { api: native.api, provider: native.provider, model: native.model },
+  };
+}
+
+export function toProviderMessage(message) {
+  if (message.role !== "assistant" || !message.asysNativeIdentity) return message;
+  const { asysNativeIdentity, ...native } = message;
+  return { ...native, api: asysNativeIdentity.api, provider: asysNativeIdentity.provider, model: asysNativeIdentity.model };
+}
+
+async function abortableSleep(delayMs, signal) {
+  let remaining = delayMs;
+  while (remaining > 0) {
+    const chunk = Math.min(remaining, MAX_TIMER_DELAY_MS);
+    await delay(chunk, undefined, { signal });
+    remaining -= chunk;
+  }
+}
+
+// These values control the local process or the credential boundary; they are
+// not inference data and therefore never enter the payload. All other JSON
+// options, including provider-specific options unknown to Cyclo, pass through.
+function inferenceOptions(options) {
+  const {
+    signal: _signal,
+    apiKey: _apiKey,
+    headers: _headers,
+    env: _env,
+    client: _client,
+    onPayload: _onPayload,
+    onResponse: _onResponse,
+    transport: _transport,
+    timeoutMs: _timeoutMs,
+    attemptTimeoutMs: _attemptTimeoutMs,
+    websocketConnectTimeoutMs: _websocketConnectTimeoutMs,
+    maxRetries: _maxRetries,
+    maxRetryDelayMs: _maxRetryDelayMs,
+    ...inference
+  } = options;
+  return inference;
+}
+
+// Infer has no pipeline-wide deadline. Pi's timeout controls describe its
+// native provider request, which is owned by the gateway, and must not become
+// an absolute ConnectRPC deadline across every provider component. Operator
+// cancellation is the only Pi process control propagated through the call.
+function cancellationOptions(signal) {
+  return signal === undefined ? {} : { signal };
+}
+
+// One RPC attempt ends on operator cancellation or its own timeout. Exhaustion
+// waits between attempts are deliberately outside this signal.
+function attemptSignal(signal, attemptTimeoutMs) {
+  if (attemptTimeoutMs === undefined) return signal;
+  const timeout = AbortSignal.timeout(attemptTimeoutMs);
+  return signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+}
+
+function providerErrorMessage(error) {
+  const raw = error instanceof Error ? error.message : String(error ?? "unknown error");
+  const safe = raw.replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/\s+/gu, " ").trim();
+  return safe.slice(0, 512) || "unknown provider error";
+}
+
+function piModel(portable, id) {
+  if (portable?.inferenceFormat !== PI_INFERENCE_FORMAT) {
+    throw new TypeError(
+      `model ${portable?.id} uses unsupported inference format ${portable?.inferenceFormat || "(missing)"}`,
+    );
+  }
+  const capabilities = portable?.capabilities;
+  if (!capabilities || !Array.isArray(capabilities.inputModalities)
+      || !Array.isArray(capabilities.outputModalities)) {
+    throw new TypeError(`model ${portable?.id} has invalid capabilities`);
+  }
+  if ((portable.extensions ?? []).length || (capabilities.extensionTypes ?? []).length) {
+    throw new TypeError(`model ${portable.id} requires unsupported catalogue extensions`);
+  }
+  const allowedInput = new Set([Modality.TEXT, Modality.IMAGE]);
+  if (!capabilities.inputModalities.includes(Modality.TEXT)
+      || capabilities.inputModalities.some((value) => !allowedInput.has(value))) {
+    throw new TypeError(`model ${portable.id} has unsupported input modalities`);
+  }
+  if (capabilities.outputModalities.length !== 1
+      || capabilities.outputModalities[0] !== Modality.TEXT) {
+    throw new TypeError(`model ${portable.id} has unsupported output modalities`);
+  }
+  if (portable.displayName !== undefined && typeof portable.displayName !== "string") {
+    throw new TypeError(`model ${portable.id} has an invalid display name`);
+  }
+  return Object.freeze({
+    id,
+    name: portable.displayName || id,
+    reasoning: capabilities.reasoning === true,
+    input: Object.freeze(capabilities.inputModalities.includes(Modality.IMAGE)
+      ? ["text", "image"]
+      : ["text"]),
+    cost: ZERO_COST,
+    contextWindow: uint64Number(portable.contextWindowTokens, "context window", portable.id),
+    maxTokens: uint64Number(portable.maxOutputTokens, "output limit", portable.id),
+  });
+}
+
+function uint64Number(value, label, model) {
+  if (typeof value !== "bigint" || value <= 0n || value > MAX_SAFE_UINT64) {
+    throw new TypeError(`model ${model} has no usable ${label}`);
+  }
+  return Number(value);
+}
+
+function assistantMessage(model) {
+  return {
+    role: "assistant",
+    content: [],
+    api: API,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}

@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Run the human interface component and answer its requests in a terminal."""
+from pathlib import Path
+import sys
+
+executable = Path(__file__).resolve()
+for directory in [executable.parents[1] / "share/asys-human/vendor", executable.parents[1] / ".host-deps"]:
+    if directory.is_dir():
+        sys.path.insert(0, str(directory))
+for directory in [executable.parents[1] / "share/asys-human/python", executable.parents[1] / "python",
+                  executable.parents[1] / "share/asys/python", executable.parents[2] / "python",
+                  executable.parents[2] / "asys-runtime"]:
+    if any((directory / package).is_dir() for package in ["asys_human", "asys_runtime", "asys"]):
+        sys.path.insert(0, str(directory))
+from asys_human.launcher import main
+
+if __name__ == "__main__":
+    sys.exit(main())

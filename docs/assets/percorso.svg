@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" role="img" aria-label="A workflow run: the rail starts at a tick, an agent step and a program step run in sequence, a gateway forks the rail into an agent branch and a human branch, a gateway joins them, and the run continues off the page. The environment is the field the rail crosses.">
+  <rect width="1200" height="340" fill="#EFE7D6"/>
+  <rect x="140" y="60" width="1060" height="240" fill="#E4DCCA"/>
+  <text x="1160" y="88" text-anchor="end" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">ENVIRONMENT · env/default</text>
+  <line x1="70" y1="174" x2="70" y2="206" stroke="#201A12" stroke-width="3" stroke-linecap="square"/>
+  <line x1="70" y1="190" x2="520" y2="190" stroke="#928B7E" stroke-width="3.5" stroke-linecap="square"/>
+  <polyline points="520,190 600,110 860,110 940,190" fill="none" stroke="#3E7C5A" stroke-width="3.5" stroke-linejoin="miter" stroke-linecap="square"/>
+  <polyline points="520,190 600,270 860,270 940,190" fill="none" stroke="#928B7E" stroke-width="3.5" stroke-linejoin="miter" stroke-linecap="square"/>
+  <line x1="940" y1="190" x2="1200" y2="190" stroke="#928B7E" stroke-width="3.5" stroke-linecap="square"/>
+  <polygon points="178.0,190 222.0,190 200,151.9" fill="#3E7C5A"/> <polygon points="358.0,190 402.0,190 380,151.9" fill="#2A5CAA"/>
+  <polygon points="710.0,110 750.0,110 730,75.4" fill="#3E7C5A"/>
+  <polygon points="710.0,270 750.0,270 730,235.4" fill="#D8402E"/>
+  <polygon points="508.0,183.1 532.0,183.1 520,203.9" fill="#EFB02C"/> <polygon points="928.0,183.1 952.0,183.1 940,203.9" fill="#EFB02C"/>
+  <polygon points="1062.0,190 1118.0,190 1090,141.5" fill="#2A5CAA"/>
+  <text x="200" y="220" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">AGENT</text>
+  <text x="380" y="220" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">PROGRAM</text>
+  <text x="730" y="68" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">AGENT</text>
+  <text x="730" y="300" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">HUMAN</text>
+  <text x="1090" y="220" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">PROGRAM</text>
+  <text x="520" y="242" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#6E675C">GATEWAY</text>
+  <text x="70" y="230" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#6E675C">START</text>
+  <text x="730" y="182" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" letter-spacing="2.5" fill="#201A12">WORKFLOW</text>
+</svg>

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:asys="urn:asys:workflow:1" id="SharedWorkspaceExample" name="Shared workspace example" targetNamespace="urn:asys:examples">
+  <bpmn:process id="workspace" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:scriptTask id="prepare" name="Prepare project" scriptFormat="python">
+      <bpmn:extensionElements><asys:job type="program" args='= ["python3", "-c", task.script]'/></bpmn:extensionElements>
+      <bpmn:script><![CDATA[
+import json, sys
+from pathlib import Path
+request = json.load(sys.stdin).get("request", "Build a two-section report.")
+project = Path("project")
+project.mkdir(exist_ok=True)
+(project / "request.md").write_text(request)
+(project / "design.txt").write_text("Shared design\n")
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:parallelGateway id="fork"/>
+    <bpmn:scriptTask id="left" name="Write first section" scriptFormat="python">
+      <bpmn:extensionElements><asys:job type="program" args='= ["python3", "-c", task.script]'/></bpmn:extensionElements>
+      <bpmn:script><![CDATA[
+from pathlib import Path
+source = Path("project/design.txt")
+assert source.read_text() == "Shared design\n"
+Path("project/left.txt").write_text("First section\n")
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:scriptTask id="right" name="Write second section" scriptFormat="python">
+      <bpmn:extensionElements><asys:job type="program" args='= ["python3", "-c", task.script]'/></bpmn:extensionElements>
+      <bpmn:script><![CDATA[
+from pathlib import Path
+source = Path("project/design.txt")
+assert source.read_text() == "Shared design\n"
+Path("project/right.txt").write_text("Second section\n")
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:parallelGateway id="join"/>
+    <bpmn:scriptTask id="assemble" name="Assemble and verify" scriptFormat="python">
+      <bpmn:extensionElements><asys:job type="program" args='= ["python3", "-c", task.script]'/></bpmn:extensionElements>
+      <bpmn:script><![CDATA[
+import json, os
+from pathlib import Path
+sections = []
+for step in ["left", "right"]:
+    section = Path("project", step + ".txt")
+    sections.append(section.read_text())
+report = "".join(sections)
+assert report == "First section\nSecond section\n"
+Path("project/report.txt").write_text(report)
+Path(os.environ["ASYS_RESULT"]).write_text(json.dumps({"report": report, "sections": len(sections)}))
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="prepare"/>
+    <bpmn:sequenceFlow id="split" sourceRef="prepare" targetRef="fork"/>
+    <bpmn:sequenceFlow id="to_left" sourceRef="fork" targetRef="left"/>
+    <bpmn:sequenceFlow id="to_right" sourceRef="fork" targetRef="right"/>
+    <bpmn:sequenceFlow id="from_left" sourceRef="left" targetRef="join"/>
+    <bpmn:sequenceFlow id="from_right" sourceRef="right" targetRef="join"/>
+    <bpmn:sequenceFlow id="assemble_all" sourceRef="join" targetRef="assemble"/>
+    <bpmn:sequenceFlow id="finish" sourceRef="assemble" targetRef="end"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="WorkspaceDiagram">
+    <bpmndi:BPMNPlane id="WorkspacePlane" bpmnElement="workspace">
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start"><dc:Bounds x="80" y="162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="prepare_di" bpmnElement="prepare"><dc:Bounds x="160" y="140" width="130" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fork_di" bpmnElement="fork"><dc:Bounds x="340" y="155" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="left_di" bpmnElement="left"><dc:Bounds x="440" y="60" width="140" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="right_di" bpmnElement="right"><dc:Bounds x="440" y="240" width="140" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="join_di" bpmnElement="join"><dc:Bounds x="630" y="155" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="assemble_di" bpmnElement="assemble"><dc:Bounds x="730" y="140" width="140" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_di" bpmnElement="end"><dc:Bounds x="920" y="162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="begin_di" bpmnElement="begin"><di:waypoint x="116" y="180"/><di:waypoint x="160" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="split_di" bpmnElement="split"><di:waypoint x="290" y="180"/><di:waypoint x="340" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="to_left_di" bpmnElement="to_left"><di:waypoint x="365" y="155"/><di:waypoint x="365" y="100"/><di:waypoint x="440" y="100"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="to_right_di" bpmnElement="to_right"><di:waypoint x="365" y="205"/><di:waypoint x="365" y="280"/><di:waypoint x="440" y="280"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="from_left_di" bpmnElement="from_left"><di:waypoint x="580" y="100"/><di:waypoint x="655" y="100"/><di:waypoint x="655" y="155"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="from_right_di" bpmnElement="from_right"><di:waypoint x="580" y="280"/><di:waypoint x="655" y="280"/><di:waypoint x="655" y="205"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="assemble_all_di" bpmnElement="assemble_all"><di:waypoint x="680" y="180"/><di:waypoint x="730" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="finish_di" bpmnElement="finish"><di:waypoint x="870" y="180"/><di:waypoint x="920" y="180"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

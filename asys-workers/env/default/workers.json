@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "name": "default",
+  "description": "Pi agents, ordinary programs, and human requests.",
+  "types": {
+    "agent": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-agent",
+        "--agent",
+        "general",
+        "--model",
+        "account/model",
+        "--extension",
+        "/opt/asys/asys-workers/extensions/bpmn.mjs"
+      ]
+    },
+    "program": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-program"
+      ]
+    },
+    "human": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-human"
+      ]
+    }
+  }
+}

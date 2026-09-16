@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 84" role="img" aria-label="asys footer band">
+  <rect width="1200" height="84" fill="#EFE7D6"/>
+  <polygon points="56.0,60 66.0,60 61,51.3" fill="#3E7C5A"/>
+    <polygon points="74.0,60 88.0,60 81,47.9" fill="#2A5CAA"/>
+    <polygon points="96.0,60 114.0,60 105,44.4" fill="#D8402E"/>
+    <polygon points="122.0,60 146.0,60 134,39.2" fill="#EFB02C"/>
+    <polygon points="154.0,60 184.0,60 169,34.0" fill="#3E7C5A"/>
+    <polygon points="192.0,60 216.0,60 204,39.2" fill="#2A5CAA"/>
+    <polygon points="224.0,60 242.0,60 233,44.4" fill="#D8402E"/>
+    <polygon points="250.0,60 264.0,60 257,47.9" fill="#EFB02C"/>
+    <polygon points="272.0,60 282.0,60 277,51.3" fill="#3E7C5A"/>
+  <line x1="56" y1="60" x2="1144" y2="60" stroke="#201A12" stroke-width="2" stroke-linecap="square"/>
+  <text x="1144" y="54" text-anchor="end" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" font-weight="700" letter-spacing="2.5" fill="#201A12">ASYS · MIT LICENCE</text>
+</svg>

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:asys="urn:asys:workflow:1" id="Hello" targetNamespace="urn:asys:examples">
+  <bpmn:process id="hello" name="Hello from a worker environment" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:scriptTask id="greet" name="Write a greeting" scriptFormat="python">
+      <bpmn:extensionElements>
+        <asys:job type="program" args='= ["python3", "-c", task.script]'/>
+      </bpmn:extensionElements>
+      <bpmn:script><![CDATA[
+import json
+import os
+with open(os.environ["ASYS_RESULT"], "w") as result:
+    json.dump({"message": "Hello from asys."}, result)
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="greet"/>
+    <bpmn:sequenceFlow id="finish" sourceRef="greet" targetRef="end"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="HelloDiagram">
+    <bpmndi:BPMNPlane id="HelloPlane" bpmnElement="hello">
+      <bpmndi:BPMNShape id="StartShape" bpmnElement="start">
+        <dc:Bounds x="180" y="122" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="GreetShape" bpmnElement="greet">
+        <dc:Bounds x="276" y="100" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="EndShape" bpmnElement="end">
+        <dc:Bounds x="476" y="122" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="BeginEdge" bpmnElement="begin">
+        <di:waypoint x="216" y="140"/>
+        <di:waypoint x="276" y="140"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FinishEdge" bpmnElement="finish">
+        <di:waypoint x="416" y="140"/>
+        <di:waypoint x="476" y="140"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

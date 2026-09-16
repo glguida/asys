@@ -1,0 +1,38 @@
+{
+  "name": "@asys/workers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent and human-task programs for the asys filesystem runtime",
+  "engines": { "node": ">=22.19.0" },
+  "exports": {
+    "./client": "./src/client.mjs",
+    "./contract": "./gen/asys/human/v1/human_pb.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "generate": "buf lint && buf generate && cp human-protocol.package.json gen/package.json"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.12.1",
+    "@connectrpc/connect": "2.1.2",
+    "@connectrpc/connect-node": "2.1.2",
+    "@cyclo/component": "file:../asys-inference/components/protocol/component",
+    "@cyclo/provider": "file:../asys-inference/components/protocol/provider",
+    "@dcomp/component": "file:../asys-inference/components/vendor/dcomp-component",
+    "@earendil-works/pi-ai": "0.84.0",
+    "@earendil-works/pi-coding-agent": "0.84.0",
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "1.72.0",
+    "@bufbuild/protoc-gen-es": "2.12.1"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai": "0.84.0",
+    "@earendil-works/pi-agent-core": "0.84.0",
+    "@earendil-works/pi-client": "0.84.0",
+    "@earendil-works/pi-protocol": "0.84.0",
+    "@earendil-works/pi-tui": "0.84.0"
+  }
+}

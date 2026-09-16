@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Private host client for a provider's model catalogue channel."""
+import argparse
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+location = Path(__file__).resolve()
+for root in (location.parent / "python", location.parents[2] / "asys-runtime"):
+    if (root / "asys_runtime/channel.py").is_file():
+        sys.path.insert(0, str(root))
+        break
+from asys_runtime.channel import Reader, Writer, direction_root
+
+
+def request(root):
+    incoming = Reader(direction_root(root, "provider", "out"))
+    outgoing = Writer(direction_root(root, "provider", "in"))
+    parent = os.getppid()
+    interrupted = False
+
+    def interrupt(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+
+    previous = {s: signal.signal(s, interrupt) for s in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        after = incoming.last()
+        if not after:
+            raise ValueError("Provider channel is not ready; run asys-inference start")
+        instance = incoming.event(after)["data"].get("instance")
+        if not instance:
+            raise ValueError("Provider channel has no running instance; run asys-inference start")
+        sent = outgoing.send("models", {"instance": instance})
+        deadline = time.monotonic() + 20
+        while True:
+            if interrupted or os.getppid() != parent:
+                raise KeyboardInterrupt()
+            if time.monotonic() > deadline:
+                raise ValueError("Provider stopped responding to the catalogue request")
+            for event in incoming.read(after):
+                after = event["sequence"]
+                data = event["data"]
+                if data.get("instance") != instance:
+                    raise ValueError("Provider restarted; retry the command")
+                incoming.advance(after)
+                if data.get("request") == sent["sequence"]:
+                    incoming.prune()
+                    if event["type"] == "error":
+                        raise ValueError(data["message"])
+                    if event["type"] == "result":
+                        return data["result"]
+            incoming.prune()
+            time.sleep(.025)
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("root", type=Path)
+    args = parser.parse_args()
+    try:
+        print(json.dumps(request(args.root), indent=2), flush=True)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(1)

@@ -1,0 +1,2 @@
+docker cyclo-gateway:dev
+output cyclo.provider.v1.Provider provider

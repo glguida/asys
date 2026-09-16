@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package asys.human.v1;
+
+// Human decisions for filesystem jobs. Caller identities are supplied by trusted
+// components connected through dcomp. They are not an authentication mechanism.
+service Human {
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc ClaimTask(ClaimTaskRequest) returns (ClaimTaskResponse);
+  rpc ReleaseTask(ReleaseTaskRequest) returns (ReleaseTaskResponse);
+  rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+  // Sends outstanding pending/claimed task IDs on connection, then newly created
+  // or released tasks. Reconnect to receive outstanding tasks again. Notifications
+  // are hints: IDs may repeat; use GetTask to read the current state before acting.
+  rpc WatchAttention(WatchAttentionRequest) returns (stream WatchAttentionResponse);
+}
+
+message Task {
+  string id = 1;
+  string status = 2;
+  string input_json = 3;
+  string result_json = 4;
+  string claimant = 5;
+  string created_at = 6;
+  string updated_at = 7;
+  string metadata_json = 8;
+}
+
+message ListTasksRequest {
+  string status = 1;
+  string after_id = 2;
+  uint32 limit = 3;
+}
+message ListTasksResponse {
+  repeated Task tasks = 1;
+  string next_after_id = 2;
+}
+message GetTaskRequest { string id = 1; }
+message GetTaskResponse { Task task = 1; }
+message ClaimTaskRequest {
+  string id = 1;
+  string claimant = 2;
+  // Reuse this ID when retrying the same claim after a lost response.
+  string claim_id = 3;
+}
+message ClaimTaskResponse {
+  Task task = 1;
+  string token = 2;
+}
+message ReleaseTaskRequest {
+  string id = 1;
+  string token = 2;
+}
+message ReleaseTaskResponse { Task task = 1; }
+message CompleteTaskRequest {
+  string id = 1;
+  string token = 2;
+  // Reuse this ID and result when retrying a completion.
+  string completion_id = 3;
+  string result_json = 4;
+}
+message CompleteTaskResponse { Task task = 1; }
+
+message WatchAttentionRequest {}
+message WatchAttentionResponse {
+  string task_id = 1;
+}

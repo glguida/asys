@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-label="asys — Agentic systems, composed. Composable agentic systems. V0.1.0, MIT, Linux, dcomp 0.3, Python 3.10+.">
+  <rect width="1200" height="420" fill="#EFE7D6"/>
+  <g transform="translate(500 -50) scale(1.1)">
+    <line x1="24" y1="236" x2="24" y2="264" stroke="#201A12" stroke-width="3" stroke-linecap="square"/>
+    <line x1="24" y1="250" x2="180" y2="250" stroke="#928B7E" stroke-width="3.5" stroke-linecap="square"/>
+    <polyline points="180,250 280,150 480,150 580,250" fill="none" stroke="#928B7E" stroke-width="3.5" stroke-linejoin="miter" stroke-linecap="square"/>
+    <polyline points="180,250 280,350 480,350 580,250" fill="none" stroke="#928B7E" stroke-width="3.5" stroke-linejoin="miter" stroke-linecap="square"/>
+    <line x1="580" y1="250" x2="700" y2="250" stroke="#928B7E" stroke-width="3.5" stroke-linecap="square"/>
+    <polygon points="59.0,250 81.0,250 70,230.9" fill="#3E7C5A"/>
+    <polygon points="113.0,250 143.0,250 128,224.0" fill="#2A5CAA"/>
+    <polygon points="300.0,150 336.0,150 318,118.8" fill="#D8402E"/>
+    <polygon points="363.0,150 407.0,150 385,111.9" fill="#3E7C5A"/>
+    <polygon points="429.0,150 467.0,150 448,117.1" fill="#2A5CAA"/>
+    <polygon points="309.0,350 351.0,350 330,313.6" fill="#3E7C5A"/>
+    <polygon points="406.0,350 458.0,350 432,305.0" fill="#D8402E"/>
+    <polygon points="169.0,243.6 191.0,243.6 180,262.7" fill="#EFB02C"/>
+    <polygon points="569.0,243.6 591.0,243.6 580,262.7" fill="#EFB02C"/>
+    <polygon points="627.0,250 697.0,250 662,189.4" fill="#3E7C5A"/>
+  </g>
+  <text x="56" y="56" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="700" letter-spacing="2.5" fill="#201A12">ASYS · COMPOSABLE AGENTIC SYSTEMS</text>
+  <text x="52" y="328" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="132" font-weight="700" letter-spacing="-8" fill="#201A12">asys</text>
+  <text x="56" y="370" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="27" font-weight="500" fill="#201A12">Agentic systems, <tspan fill="#3E7C5A">composed.</tspan></text>
+  <text x="56" y="403" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="700" letter-spacing="2.5" fill="#201A12">V0.1.0 · MIT · LINUX · DCOMP 0.3 · PYTHON 3.10+</text>
+</svg>

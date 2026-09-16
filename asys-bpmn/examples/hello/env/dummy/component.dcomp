@@ -1,0 +1,2 @@
+docker asys-hello-dummy:dev
+output asys.human.v1.Human human

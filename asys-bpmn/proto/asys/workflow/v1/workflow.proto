@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package asys.workflow.v1;
+
+// A reusable component loads BPMN workflows. Runs stay pinned to
+// the workflow version with which they were started.
+service Workflow {
+  rpc LoadWorkflow(LoadWorkflowRequest) returns (LoadWorkflowResponse);
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse);
+  rpc CheckWorkflow(CheckWorkflowRequest) returns (CheckWorkflowResponse);
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  rpc ResumeRun(ResumeRunRequest) returns (ResumeRunResponse);
+  rpc GetRun(GetRunRequest) returns (GetRunResponse);
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  rpc GetEvents(GetEventsRequest) returns (GetEventsResponse);
+}
+
+message LoadWorkflowRequest { string bpmn_xml = 1; }
+message LoadWorkflowResponse { string workflow_id = 1; }
+message ListWorkflowsRequest {}
+message ListWorkflowsResponse { repeated WorkflowInfo workflows = 1; }
+message WorkflowInfo {
+  string id = 1;
+  string name = 2;
+  repeated string process_ids = 3;
+  string loaded_at = 4;
+}
+message DescribeRequest { string workflow_id = 1; }
+message DescribeResponse { WorkflowInfo workflow = 1; string bpmn_xml = 2; }
+message Environment {
+  string name = 1;
+  string description = 2;
+  repeated string types = 3;
+  // Digest of workers.json; this is not a toolchain or task-success check.
+  string definition = 4;
+}
+message ListEnvironmentsRequest {}
+message ListEnvironmentsResponse { repeated Environment environments = 1; }
+message CheckWorkflowRequest {
+  string workflow_id = 1;
+  string process_id = 2;
+  string environment = 3;
+}
+message CheckWorkflowResponse {
+  bool compatible = 1;
+  repeated string required_types = 2;
+  repeated string missing_types = 3;
+}
+message Run {
+  string id = 1;
+  string process_id = 2;
+  string status = 3;
+  string variables_json = 4;
+  string output_json = 5;
+  string error = 6;
+  string created_at = 7;
+  string updated_at = 8;
+  string workflow_id = 9;
+  string environment = 10;
+}
+message StartRunRequest {
+  // The caller chooses an idempotency key. Reusing it with other input fails.
+  string id = 1;
+  string process_id = 2;
+  string variables_json = 3;
+  string workflow_id = 4;
+  // Required. All jobs in this run use this registered environment.
+  string environment = 5;
+}
+message StartRunResponse { Run run = 1; }
+// Resume a failed run from saved execution state, retaining completed jobs.
+message ResumeRunRequest { string id = 1; }
+message ResumeRunResponse { Run run = 1; }
+message GetRunRequest { string id = 1; }
+message GetRunResponse { Run run = 1; }
+message ListRunsRequest { uint32 limit = 1; string before = 2; }
+message ListRunsResponse { repeated Run runs = 1; string next_before = 2; }
+message CancelRunRequest { string id = 1; }
+message CancelRunResponse { Run run = 1; }
+message SendMessageRequest {
+  string run_id = 1;
+  // A BPMN Message or Signal ID, or the execution ID of a waiting receive task.
+  string target = 2;
+  string payload_json = 3;
+  string id = 4;
+}
+message SendMessageResponse { Run run = 1; }
+message Event {
+  uint64 sequence = 1;
+  string run_id = 2;
+  string type = 3;
+  string activity_id = 4;
+  string time = 5;
+  string data_json = 6;
+}
+message GetEventsRequest { string run_id = 1; uint64 after = 2; uint32 limit = 3; }
+message GetEventsResponse { repeated Event events = 1; }

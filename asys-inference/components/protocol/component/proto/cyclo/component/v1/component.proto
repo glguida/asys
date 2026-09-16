@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package cyclo.component.v1;
+
+enum HealthStatus {
+  // Callers treat an unspecified status as unhealthy.
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  // The component can serve its declared interfaces.
+  HEALTH_STATUS_READY = 1;
+  // The process is reachable but cannot currently serve its interfaces.
+  HEALTH_STATUS_NOT_READY = 2;
+}

@@ -1,0 +1,13 @@
+version: v2
+clean: false
+plugins:
+  - remote: buf.build/bufbuild/py:v0.1.1
+    revision: 1
+    out: ../../../..
+    opt:
+      - init_files=false
+  - remote: buf.build/connectrpc/py:v0.11.1
+    revision: 1
+    out: ../../../..
+    opt:
+      - io=sync

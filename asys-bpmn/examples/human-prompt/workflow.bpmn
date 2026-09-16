@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:asys="urn:asys:workflow:1" id="HumanPromptDemo" name="Human prompt demo"
+  targetNamespace="urn:asys:examples" expressionLanguage="feel">
+  <bpmn:process id="human_prompt" name="Review release notes" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:parallelGateway id="fork"/>
+    <bpmn:userTask id="approval" name="Approve the release notes">
+      <bpmn:extensionElements>
+        <asys:job type="human" input='= {title: "Approve the release notes", prompt: "Approve these release notes?", context: "Draft: We added a human review step and a place for reviewer feedback.", form: {type: "object", properties: {approved: {type: "boolean", oneOf: [{const: true, title: "Approve"}, {const: false, title: "Disapprove"}]}, comments: {type: "string"}}, required: ["approved"], additionalProperties: false}, uischema: {type: "Group", label: "Release review", elements: [{type: "Control", scope: "#/properties/approved", label: "Decision", options: {format: "radio"}}, {type: "Control", scope: "#/properties/comments", label: "Comments", options: {multi: true}}]}}'/>
+      </bpmn:extensionElements>
+    </bpmn:userTask>
+    <bpmn:userTask id="feedback" name="Leave a short comment">
+      <bpmn:extensionElements>
+        <asys:job type="human" input='= {title: "Leave a short comment", prompt: "What would you change in these release notes?", context: "Draft: We added a human review step and a place for reviewer feedback.", form: {type: "string", minLength: 1}}'/>
+      </bpmn:extensionElements>
+    </bpmn:userTask>
+    <bpmn:parallelGateway id="join"/>
+    <bpmn:endEvent id="end"/>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="fork"/>
+    <bpmn:sequenceFlow id="request_approval" sourceRef="fork" targetRef="approval"/>
+    <bpmn:sequenceFlow id="request_feedback" sourceRef="fork" targetRef="feedback"/>
+    <bpmn:sequenceFlow id="approved" sourceRef="approval" targetRef="join"/>
+    <bpmn:sequenceFlow id="commented" sourceRef="feedback" targetRef="join"/>
+    <bpmn:sequenceFlow id="finish" sourceRef="join" targetRef="end"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="HumanPromptDiagram">
+    <bpmndi:BPMNPlane id="HumanPromptPlane" bpmnElement="human_prompt">
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start"><dc:Bounds x="80" y="162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fork_di" bpmnElement="fork"><dc:Bounds x="170" y="155" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="approval_di" bpmnElement="approval"><dc:Bounds x="280" y="60" width="160" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="feedback_di" bpmnElement="feedback"><dc:Bounds x="280" y="240" width="160" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="join_di" bpmnElement="join"><dc:Bounds x="500" y="155" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_di" bpmnElement="end"><dc:Bounds x="610" y="162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="begin_di" bpmnElement="begin"><di:waypoint x="116" y="180"/><di:waypoint x="170" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="request_approval_di" bpmnElement="request_approval"><di:waypoint x="195" y="155"/><di:waypoint x="195" y="100"/><di:waypoint x="280" y="100"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="request_feedback_di" bpmnElement="request_feedback"><di:waypoint x="195" y="205"/><di:waypoint x="195" y="280"/><di:waypoint x="280" y="280"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="approved_di" bpmnElement="approved"><di:waypoint x="440" y="100"/><di:waypoint x="525" y="100"/><di:waypoint x="525" y="155"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="commented_di" bpmnElement="commented"><di:waypoint x="440" y="280"/><di:waypoint x="525" y="280"/><di:waypoint x="525" y="205"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="finish_di" bpmnElement="finish"><di:waypoint x="550" y="180"/><di:waypoint x="610" y="180"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

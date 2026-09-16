@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Real dcomp 0.3.1 and providers; no credentials or paid inference."""
+import concurrent.futures
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'tests/fixtures'))
+from terminal import login as terminal_login
+sys.path.insert(0, str(ROOT.parent / 'test-support'))
+from channel_client import Client, RPCError
+
+def main():
+    with tempfile.TemporaryDirectory(prefix='asys-inference-integration-') as temporary:
+        temp = Path(temporary)
+        machine = temp / 'machine'
+        droot = temp / 'dcomp'
+        system = 'asys-inference-test'
+        prefix = temp / 'installed'
+        machine_cli = [str(prefix / 'bin/asys-inference'), '--root', str(machine)]
+        dcomp = [os.environ.get('DCOMP_BINARY', 'dcomp'), '--state-root', str(droot)]
+        version = subprocess.check_output(dcomp[:1] + ['version'], text=True).strip()
+        if version != 'dcomp 0.3.1':
+            raise RuntimeError(f'Docker acceptance requires dcomp 0.3.1, got {version}')
+        env = dict(os.environ, DOCKER_HOST=os.environ.get('DOCKER_HOST', 'unix:///var/run/docker.sock'))
+        tags = []
+        volume = None
+        extra_volumes = []
+        consumer_user = f'{os.getuid()}:{os.getgid()}'
+        consumer_workspace = temp / 'consumer-workspace'
+        consumer_workspace.mkdir()
+        clients = {name: Client(temp / 'host' / name) for name in ['consumer', 'direct', 'peer']}
+        log = temp / 'commands.log'
+        def run(command, *args, ok=True, timeout=300, stdin=None):
+            result = subprocess.run(command + list(args), env=env, input=stdin, capture_output=True, text=True, timeout=timeout)
+            with log.open('a') as output:
+                output.write(f'{command[0]} {args}\n{result.stdout}{result.stderr}\n')
+            if ok and result.returncode:
+                raise AssertionError(f'{args}: {result.stderr[-8000:]}')
+            if not ok and result.returncode == 0:
+                raise AssertionError(f'unexpected success: {args}')
+            return result
+        def config():
+            return json.loads((machine / 'machine.json').read_text())
+        def view():
+            return json.loads(run(dcomp, 'view', '--json', system).stdout)
+        def ids():
+            return {c['name']:c['status']['container_id'] for c in view()['components']}
+        def wait_ready():
+            for _ in range(90):
+                result = subprocess.run(machine_cli + ['status','--json'], env=env, capture_output=True, text=True)
+                if result.returncode == 0:
+                    return json.loads(result.stdout)
+                time.sleep(1)
+            raise AssertionError(f'endpoint did not become healthy: {result.stdout} {result.stderr}')
+        def input_identity():
+            return clients['consumer'].call('provider', 'InputIdentity', {})['inode']
+        def models(name='consumer'):
+            return clients[name].call('provider', 'ListModels', {}).get('models', [])
+        def infer(payload, model='b/model', cancel=False):
+            with clients['consumer'].stream('provider', 'Infer', {'model': model, 'payload': payload}) as receive:
+                result = []
+                while True:
+                    try:
+                        result.append(receive()['payload'])
+                    except StopIteration:
+                        break
+                    if cancel:
+                        break
+                return result
+        def add_consumer(name, target=None):
+            args = ['add-component', '--user', consumer_user, '--bind', f'{clients[name].root},/run/asys-test,rw']
+            if name == 'consumer':
+                args += ['--bind', f'{consumer_workspace},/workspace,rw']
+            if target:
+                args += ['--link', f'provider={target}']
+            return run(dcomp, *args, system, name, str(consumer))
+        try:
+            run(['make', '-C', str(ROOT)], 'install', f'PREFIX={prefix}')
+            run(['python3', '-I', '-S', str(prefix / 'share/asys-inference/gateway-channel')], '--help')
+            run(['python3', '-I', '-S', str(prefix / 'share/asys-inference/provider-channel')], '--help')
+            run(machine_cli,'init','--dcomp-state-root',str(droot),'--system',system)
+            document=config()
+            identity=document['id']
+            tagbase=f'asys-inference-{identity}-'
+            run(machine_cli,'start')
+            wait_ready()
+            providers=json.loads(run(machine_cli,'gateway','providers').stdout)['providers']
+            assert providers, 'real gateway discovery is empty'
+            assert json.loads(run(machine_cli,'gateway','models').stdout)['models']==[]
+            assert json.loads(run(machine_cli,'models','--json').stdout)['models']==[]
+            volume=json.loads(run(dcomp,'volume','--json',system,'asys-inference-gateway','credentials').stdout)['name']
+            assert not json.loads(run(['docker'], 'inspect', ids()['asys-inference-gateway']).stdout)[0]['HostConfig']['PortBindings']
+            # The real CLI talks only through the runtime channel. A native Pi
+            # fixture supplies API-key and OAuth flows without external calls.
+            auth = temp / 'auth-fixture'
+            auth.mkdir()
+            shutil.copyfile(ROOT/'tests/fixtures/gateway.mjs', auth/'gateway.mjs')
+            (auth/'Dockerfile').write_text(f'FROM {tagbase}gateway:current\nCOPY gateway.mjs /opt/cyclo/gateway/src/test-gateway.mjs\nENTRYPOINT ["node","src/test-gateway.mjs"]\n')
+            (auth/'component.dcomp').write_text('docker unused:local\noutput cyclo.provider.v1.Provider provider\n')
+            (auth/'runtime.json').write_text(json.dumps({'host_channel':'gateway', 'volumes':[{'name':'credentials', 'target':'/var/lib/cyclo-gateway', 'read_only':False}]}))
+            run(machine_cli,'add','authfixture',str(auth))
+            extra_volumes.append(json.loads(run(dcomp,'volume','--json',system,'asys-inference-authfixture','credentials').stdout)['name'])
+            admin = machine_cli + ['gateway','--name','authfixture']
+            assert json.loads(run(admin,'login','test','--as','piped','--api-key-stdin',stdin='piped-test-key\n').stdout)['authentication']=='api_key'
+            env['ASYS_GATEWAY_TEST_KEY']='environment-test-key'
+            assert json.loads(run(admin,'login','test','--api-key-env','ASYS_GATEWAY_TEST_KEY','--as','environment').stdout)['account']=='environment'
+            for mode in ['manual', 'callback', 'key', 'cancel']:
+                command = admin + ['login','test','--as',mode,'--authentication', 'api_key' if mode in ['key','cancel'] else 'oauth']
+                result = terminal_login(command, mode)
+                if mode != 'cancel':
+                    assert result['account']==mode, result
+            models_before=json.loads(run(admin,'models').stdout)['models']
+            assert {m['id'] for m in models_before}=={f'{a}/model' for a in ['piped','environment','manual','callback','key']}
+            run(admin,'rename','manual','renamed')
+            run(admin,'logout','callback')
+            assert json.loads(run(admin,'usage').stdout)['totals']['requests']=='0'
+            for path in (machine/'host/authfixture/channels/gateway/in').glob('*.json'):
+                assert not any(secret in path.read_text() for secret in ['piped-test-key','environment-test-key','terminal-test-key','test-code'])
+            run(['docker'],'restart',ids()['asys-inference-authfixture'])
+            wait_ready()
+            assert {m['id'] for m in json.loads(run(admin,'models').stdout)['models']}=={f'{a}/model' for a in ['piped','environment','renamed','key']}
+            run(machine_cli,'select','gateway')
+            run(machine_cli,'remove','authfixture')
+            print('PASS: installed CLI; filesystem administration; piped, environment and terminal API keys; OAuth manual-code and callback flows; cancellation; restart; secret cleanup.', flush=True)
+            if '--gateway-only' in sys.argv[1:]:
+                return
+            run(machine_cli,'add','relay','passthrough','-L','upstream=gateway.provider')
+            wait_ready()
+            initial=ids()
+            assert run(machine_cli,'models').stdout==''
+            assert ids()==initial, 'listing models changed components'
+            # An independent program creates consumers of the virtual interface.
+            consumer = temp/'consumer'
+            consumer.mkdir()
+            consumer_tag=f'{tagbase}test-consumer:current'; tags.append(consumer_tag)
+            shutil.copyfile(ROOT/'tests/fixtures/consumer.mjs', consumer/'consumer.mjs')
+            shutil.copyfile(ROOT.parent/'test-support/channel-server.mjs', consumer/'channel-server.mjs')
+            (consumer/'Dockerfile').write_text(f'FROM {tagbase}gateway:current\nCOPY consumer.mjs channel-server.mjs /opt/cyclo/gateway/src/\nHEALTHCHECK --interval=1s CMD ["node","-e","process.exit(0)"]\nENTRYPOINT ["node","src/consumer.mjs"]\n')
+            run(['docker'],'build','-t',consumer_tag,str(consumer))
+            (consumer/'component.dcomp').write_text(f'docker {consumer_tag}\ninput cyclo.provider.v1.Provider provider\n')
+            add_consumer('consumer', '@inference_endpoint')
+            add_consumer('direct', 'asys-inference-gateway.provider')
+            assert models()==[] and models('direct')==[]
+            peers=ids(); inode=input_identity()
+            assert json.loads(run(['docker'], 'inspect', peers['consumer']).stdout)[0]['Config']['User']==consumer_user
+            consumer_workspace.rename(temp / 'moved-consumer-workspace')
+            assert json.loads(run(machine_cli,'models','--json').stdout)['models']==[]
+            assert json.loads(run(machine_cli,'status','--json').stdout)['operational']
+            # Failed additions report startup errors and preserve the serving output.
+            failed_add=run(machine_cli,'add','bad','pooler','-L','upstream=gateway.provider',ok=False)
+            assert 'exited with code 1' in failed_add.stderr, failed_add.stderr
+            assert 'pooler requires at least two members' in failed_add.stderr, failed_add.stderr
+            assert next(g for g in view()['globals'] if g['name']=='inference_endpoint')['target']['component']=='asys-inference-relay'
+            assert models()==[]
+            assert json.loads(run(machine_cli,'models','--json').stdout)['models']==[], 'listing followed the failed desired endpoint'
+            failed_status=subprocess.run(machine_cli+['status','--json'],env=env,capture_output=True,text=True)
+            observed=json.loads(failed_status.stdout)
+            assert failed_status.returncode==1 and observed['serving'] and not observed['operational']
+            assert next(p for p in observed['components'] if p['name']=='bad')['exit_code']==1
+            run(machine_cli,'select','relay')
+            run(machine_cli,'remove','bad')
+            # Custom provider with the very same wire contract, using the real relay image.
+            fixture=temp/'provider';fixture.mkdir()
+            shutil.copyfile(ROOT/'tests/fixtures/provider.mjs',fixture/'provider.mjs')
+            (fixture/'Dockerfile').write_text(f'FROM {tagbase}relay:current\nCOPY provider.mjs /opt/cyclo/passthrough/src/test-provider.mjs\nENTRYPOINT ["node","src/test-provider.mjs"]\n')
+            (fixture/'component.dcomp').write_text('docker unused:local\noutput cyclo.provider.v1.Provider provider\n')
+            run(machine_cli,'add','stub',str(fixture))
+            run(machine_cli,'remove','relay')
+            run(machine_cli,'add','relay','passthrough','-L','upstream=stub.provider')
+            wait_ready()
+            assert [m['id'] for m in models()]==['a/model','b/model']
+            assert run(machine_cli,'models').stdout.splitlines()==['a/model','b/model']
+            opaque=' { "duplicate":1,"duplicate":2, "future": [null, "λ"] } \n'
+            assert infer(opaque)==[opaque,'original']
+            assert infer('wait',cancel=True)==['wait']
+            for _ in range(30):
+                if infer('cancellations')==['1']: break
+                time.sleep(.1)
+            else: raise AssertionError('cancellation did not reach the native endpoint')
+            assert all(ids()[n]==i for n,i in peers.items() if n!='asys-inference-relay'), 'update replaced unrelated containers'
+            assert input_identity()==inode
+            assert models('direct')==[], 'direct wire followed global assignment'
+            assert next(c for c in view()['components'] if c['name']=='consumer')['user']==consumer_user
+            print('PASS: inference reads UID/GID components and edits providers after an unrelated workspace moves; consumer identity and runtime policy are preserved.', flush=True)
+            # The pooler uses its logical name and preserves typed exhaustion.
+            run(machine_cli,'add','pool','pooler','a/model','b/model','--link','upstream=relay.provider','model=balanced')
+            wait_ready()
+            assert run(machine_cli,'models').stdout.splitlines()==['a/model','b/model','pool/balanced']
+            assert 'pool/balanced' in [m['id'] for m in models()]
+            assert infer(opaque,'pool/balanced')==[opaque,'original']
+            run(machine_cli,'add','outer','passthrough','-L','upstream=pool.provider')
+            wait_ready(); before=ids()
+            assert run(machine_cli,'models').stdout.splitlines()==['a/model','b/model','pool/balanced']
+            catalogue=json.loads(run(machine_cli,'models','--json').stdout)['models']
+            native=models()
+            assert [m['id'] for m in catalogue]==[m['id'] for m in native]
+            for public, typed in zip(catalogue, native):
+                assert public['contextWindowTokens']==typed['contextWindowTokens']
+                assert public['maxOutputTokens']==typed['maxOutputTokens']
+                assert public['inferenceFormat']==typed['inferenceFormat']
+                assert public['capabilities']['inputModalities']==typed['capabilities']['inputModalities']
+            assert ids()==before, 'listing models created or replaced components'
+            print('PASS: models lists the live global through gateway, pooler and passthrough; logical pool prefix and catalogue metadata survive.', flush=True)
+            # Independent contributors can add components while the tool reconciles its subset.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                updates=[pool.submit(run,machine_cli,'start'),pool.submit(add_consumer,'peer')]
+                for update in updates:update.result()
+            assert 'peer' in ids()
+            # Kill the tool after dcomp has journaled an owned apply, then recover via start.
+            recovery_source=temp/'recovery';recovery_source.mkdir()
+            (recovery_source/'component.dcomp').write_text(f'docker {tagbase}stub:current\noutput cyclo.provider.v1.Provider provider\n')
+            operation_file=droot/'systems'/system/'operation.json'
+            with log.open('a') as output:
+                child=subprocess.Popen(machine_cli+['add','recovery',str(recovery_source)],env=env,stdout=output,stderr=output)
+                interrupted=False
+                deadline=time.monotonic()+120
+                while child.poll() is None and time.monotonic()<deadline:
+                    try:
+                        operation=json.loads(operation_file.read_text())
+                    except (FileNotFoundError,json.JSONDecodeError):
+                        time.sleep(.001);continue
+                    if any(c['name']=='asys-inference-recovery' for c in operation['target']['components']):
+                        child.send_signal(signal.SIGKILL)
+                        child.wait(timeout=10)
+                        interrupted=True
+                        break
+                    time.sleep(.001)
+                if child.poll() is None:
+                    child.kill();child.wait(timeout=10)
+                assert interrupted, 'did not observe a journaled update to interrupt'
+            assert config()['pending']['digest']==operation['target']['digest']
+            run(machine_cli,'start');wait_ready()
+            assert 'asys-inference-recovery' in ids() and config().get('pending') is None
+            run(machine_cli,'select','outer')
+            run(machine_cli,'remove','recovery')
+            # A failed runtime update still records its desired configuration for sync.
+            missing=temp/'missing';missing.mkdir()
+            missing_tag=f'{tagbase}retry:current';tags.append(missing_tag)
+            (missing/'component.dcomp').write_text(f'docker {missing_tag}\noutput cyclo.provider.v1.Provider provider\n')
+            run(machine_cli,'add','retry',str(missing),ok=False)
+            failed=config();assert failed['revision']>failed['applied_revision']
+            assert infer(opaque,'pool/balanced')==[opaque,'original']
+            run(['docker'],'tag',f'{tagbase}stub:current',missing_tag)
+            run(machine_cli,'start');wait_ready()
+            assert config()['revision']==config()['applied_revision']
+            run(machine_cli,'remove','retry')
+            run(machine_cli,'select','relay');wait_ready()
+            run(machine_cli,'remove','relay')
+            observed=view()
+            assert next(g for g in observed['globals'] if g['name']=='inference_endpoint')['target']['component']==''
+            assert '@inference_endpoint is unbound' in run(machine_cli,'models',ok=False).stderr
+            assert next(l for l in observed['links'] if l['input']['component']=='consumer')['global']=='inference_endpoint'
+            try: models()
+            except (OSError,RPCError): pass
+            else: raise AssertionError('unbound global still answered')
+            run(machine_cli,'select','stub')
+            run(machine_cli,'remove','outer')
+            run(machine_cli,'remove','pool');wait_ready()
+            assert infer(opaque)==[opaque,'original']
+            final_peers={n:ids()[n] for n in ['consumer','direct','peer']}
+            run(machine_cli,'stop')
+            assert ids()==final_peers
+            assert next(g for g in view()['globals'] if g['name']=='inference_endpoint')['target']['component']==''
+            run(machine_cli,'start');wait_ready()
+            assert all(ids()[n]==i for n,i in final_peers.items())
+            assert json.loads(run(dcomp,'volume','--json',system,'asys-inference-gateway','credentials').stdout)['name']==volume
+            assert infer(opaque)==[opaque,'original']
+            print('PASS: gateway/passthrough/pooler, ListModels, opaque streaming, cancellation, typed failover, live edits, shared-system isolation, interrupted-apply recovery, saved-intent retry, stop/start, and credential-volume persistence.')
+        except BaseException:
+            try:
+                for component in view()['components']:
+                    container = component.get('status', {}).get('container_id')
+                    if container:
+                        run(['docker'], 'logs', '--tail', '100', container)
+            except Exception:
+                pass  # Preserve the original failure even if Docker is unavailable.
+            shutil.copyfile(log,ROOT/'integration-failure.log')
+            print(f'Failure details: {ROOT / "integration-failure.log"}',flush=True)
+            raise
+        finally:
+            # The complete test system and volume were created exclusively above.
+            subprocess.run(dcomp+['resume',system],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
+            subprocess.run(dcomp+['down',system],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
+            if volume:
+                subprocess.run(['docker','volume','rm',volume],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            for extra in extra_volumes:
+                subprocess.run(['docker','volume','rm',extra],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            if 'tagbase' in locals():
+                listing=subprocess.run(['docker','image','ls','--format','{{.Repository}}:{{.Tag}}'],env=env,capture_output=True,text=True)
+                tags += [tag for tag in listing.stdout.splitlines() if tag.startswith(tagbase)]
+            if tags:
+                subprocess.run(['docker','image','rm',*set(tags)],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
+if __name__=='__main__':main()

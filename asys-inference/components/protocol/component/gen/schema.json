@@ -1,0 +1,1 @@
+{"file":[{"name":"cyclo/component/v1/component.proto","package":"cyclo.component.v1","enumType":[{"name":"HealthStatus","value":[{"name":"HEALTH_STATUS_UNSPECIFIED","number":0},{"name":"HEALTH_STATUS_READY","number":1},{"name":"HEALTH_STATUS_NOT_READY","number":2}]}],"syntax":"proto3"}]}

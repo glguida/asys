@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:asys:workflow:1"
+  xmlns:asys="urn:asys:workflow:1" elementFormDefault="qualified">
+  <xs:element name="job">
+    <xs:complexType>
+      <xs:attribute name="type" use="required">
+        <xs:simpleType><xs:restriction base="xs:string">
+          <xs:pattern value="[A-Za-z0-9][A-Za-z0-9._\-]{0,127}"/>
+        </xs:restriction></xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="input" type="xs:string" default="= variables"/>
+      <xs:attribute name="args" type="xs:string" default="= []"/>
+      <xs:attribute name="result" type="xs:string"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

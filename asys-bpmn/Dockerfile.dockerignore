@@ -1,0 +1,11 @@
+**/node_modules
+**/.git
+**/test
+**/tests
+**/bin
+**/__pycache__
+**/.venv
+**/*.sqlite*
+**/.asys-runtime
+**/.agents
+**/.codex

@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Run a BPMN workflow in a worker environment."""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import shlex
+import signal
+import sys
+import time
+
+executable = Path(__file__).resolve()
+package_roots = []
+for package_root in (executable.parents[1] / "share/asys-bpmn/python", executable.parents[1] / "python",
+                     executable.parents[1] / "share/asys/python", executable.parents[2] / "python",
+                     executable.parents[2] / "asys-runtime"):
+    if (package_root / "asys_runtime/channel.py").is_file() or (package_root / "asys_bpmn/runs.py").is_file() or (package_root / "asys/runs.py").is_file():
+        package_roots.append(str(package_root))
+sys.path[:0] = package_roots
+try:
+    from asys_runtime.channel import Reader, Writer, direction_root
+    from asys_runtime.environment import Environment
+    from asys_runtime.permissions import mkdir, shared
+    from asys_runtime.files import read_json, timestamp, write_json
+    from asys.runs import default_root
+    from asys.lifecycle import LaunchError, Interrupted
+    from asys.execution import EnvironmentHost, execution_options, prepare_run
+    from asys_bpmn.runs import Runs, component_names, workflow_name
+    from asys_bpmn.journal import WorkflowHistory, agent_notices
+except ImportError as error:
+    raise SystemExit(f"asys-bpmn needs its installed Python packages: {error}")
+
+
+SERVICE = "asys.workflow.v1.Workflow"
+CHANNEL = "workflow"
+TERMINAL = {"completed", "failed", "cancelled"}
+
+
+def read_object(path):
+    value = read_json(path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    return value
+
+
+def arguments(argv):
+    common = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    common.add_argument("--root", type=Path, default=default_root(),
+                        metavar="DIRECTORY", help="saved run state (default: XDG state directory/asys/runs)")
+    global_args, remaining = common.parse_known_args(argv)
+    commands = {
+        "run": "Run WORKFLOW.bpmn in ENVIRONMENT_DIRECTORY and wait for its result",
+        "resume": "Resume a failed RUN from its saved BPMN state and environment",
+    }
+    if not remaining or remaining[0] in {"-h", "--help"}:
+        print("Usage: asys-bpmn COMMAND [ARGUMENTS] [OPTIONS]\n")
+        for command, description in commands.items():
+            print(f"  {command:8} {description}")
+        print("\nAll commands accept --root DIRECTORY. Options may appear before or after arguments.\nUse asys-bpmn COMMAND --help for details.")
+        raise SystemExit(0)
+    command = remaining.pop(0)
+    if command not in commands:
+        common.error(f"unknown command {command!r}; choose run or resume; use asys for status, logs, and top")
+    parser = argparse.ArgumentParser(
+        prog=f"asys-bpmn {command}", parents=[common],
+        description=commands[command],
+        epilog="Options may appear before or after arguments.",
+        allow_abbrev=False,
+    )
+    parser.set_defaults(command=command, root=global_args.root)
+    if command == "resume":
+        parser.add_argument("run", metavar="RUN", help="saved run ID, unique prefix, or state directory")
+        return parser.parse_intermixed_args(remaining)
+    parser.add_argument("workflow", type=Path, metavar="WORKFLOW.bpmn")
+    parser.add_argument("environment", type=Path, metavar="ENVIRONMENT_DIRECTORY")
+    parser.add_argument("--input", metavar="FILE", help="Markdown request file, available as request in the workflow; - reads stdin")
+    parser.add_argument("--process", default="", metavar="ID", help="process ID when the BPMN contains several executable processes")
+    parser.add_argument("--name", metavar="NAME", help="override the BPMN workflow name used in status and component names")
+    execution_options(parser)
+    return parser.parse_intermixed_args(remaining)
+
+
+class Launcher(EnvironmentHost):
+    def __init__(self, args):
+        super().__init__(args)
+        self.active = False
+        self.request = None
+        self.outbound = None
+        self.record = {}
+        self.lease = None
+        self.save_record = args.command != "resume"
+
+    def say(self, message):
+        if self.directory is not None:
+            try:
+                with (self.directory / "run.log").open("a", encoding="utf-8") as log:
+                    print(message, file=log)
+            except OSError as error:
+                print(f"Could not save run log: {error}", file=sys.stderr)
+        print(message, file=sys.stderr, flush=True)
+
+    def snapshot(self):
+        if not self.save_record:
+            return
+        self.record["updated_at"] = timestamp()
+        if self.record.get("status") in TERMINAL:
+            self.record.setdefault("finished_at", self.record["updated_at"])
+        write_json(self.directory / "run.json", self.record)
+
+    def setup(self):
+        if self.args.command == "resume":
+            return self.setup_resume()
+        args = self.args
+        workflow = args.workflow.expanduser().resolve(strict=True)
+        environment = args.environment.expanduser().resolve(strict=True)
+        if not workflow.is_file() or not environment.is_dir():
+            raise LaunchError("Expected a BPMN file and an environment directory")
+        self.xml = workflow.read_text()
+        display_name = workflow_name(self.xml, workflow, args.name)
+        if args.input == "-":
+            self.say("Reading workflow request from stdin")
+        self.variables = {}
+        if args.input:
+            self.variables["request"] = (sys.stdin.read() if args.input == "-"
+                                         else Path(args.input).expanduser().read_text(encoding="utf-8"))
+        self.id, self.directory, workspace = prepare_run(args.root, args.workspace)
+        self.lease = (self.directory / "launcher.lock").open("xb")
+        fcntl.flock(self.lease, fcntl.LOCK_EX)
+        for child in ("workflow", "engine"):
+            mkdir(self.directory / child)
+        self.names = component_names(display_name, self.id)
+        # The host and the workflow component talk over a runtime channel in
+        # the shared runtime root: no published port, no token.
+        self.channel = self.directory / "runtime" / "channels" / CHANNEL
+        # Dcomp starts both components with the host user's UID/GID.
+        for path in [self.channel.parent, self.channel, self.channel / "in", self.channel / "out"]:
+            mkdir(path)
+        self.record = {"id": self.id, "name": display_name, "created_at": timestamp(), "workflow": str(workflow), "environment_directory": str(environment),
+                       "workspace": str(workspace), "system": args.system, "components": self.names,
+                       "dcomp": self.dcomp, "status": "starting", "channel": str(self.channel)}
+        self.snapshot()
+        self.say(f"Run {self.id}\nState: {self.directory}")
+        self.prepare_environment(environment, args.link)
+        engine_id = self.engine_image()
+        (self.directory / "engine/component.dcomp").write_text(f"docker {engine_id}\noutput {SERVICE} workflow\n")
+        self.snapshot()
+        self.start_components()
+
+    def engine_image(self):
+        image = os.environ.get("ASYS_BPMN_IMAGE") or "asys-bpmn:dev"
+        try:
+            return self.command(["docker", "image", "inspect", "--format", "{{.Id}}", image]).strip()
+        except LaunchError as error:
+            raise LaunchError(f"Workflow image {image} is unavailable. Build the asys images with make -C asys-bpmn build.\n{error}") from error
+
+    def setup_resume(self):
+        directory = Runs(self.args.root).select(self.args.run)
+        if shared(directory):
+            os.umask(0o007)
+        lease = (directory / "launcher.lock").open("a+b")
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lease.close()
+            raise LaunchError("This run already has an active launcher") from None
+        self.lease = lease
+        record = read_object(directory / "run.json")
+        if record.get("status") != "failed":
+            raise LaunchError(f"Cannot resume a {record.get('status', 'unknown')} run; select a failed run")
+        if not (directory / "workflow/workflow.sqlite").is_file():
+            raise LaunchError("This run has no saved BPMN execution state")
+        if not (directory / "environment/component.dcomp").is_file():
+            raise LaunchError("This run has no saved environment image")
+        self.directory, self.record = directory, record
+        self.id, self.names = record["id"], record["components"]
+        self.args.system = record["system"]
+        self.dcomp = list(record["dcomp"])
+        if os.environ.get("DCOMP_BINARY"):
+            self.dcomp[0] = os.environ["DCOMP_BINARY"]
+        self.channel = directory / "runtime/channels" / CHANNEL
+        if not isinstance(record.get("links"), dict):
+            raise LaunchError("This run has no saved environment connections")
+        existing = self.document("view", "--json", self.args.system)
+        if existing.get("operation") or any(item["name"] in self.names.values() for item in existing["components"]):
+            raise LaunchError("The previous run's components or dcomp operation are still present; finish their cleanup before resuming")
+        engine_id = self.engine_image()
+        self.say(f"Resuming run {self.id}\nState: {directory}")
+        self.refresh_environment()
+        (directory / "engine/component.dcomp").write_text(f"docker {engine_id}\noutput {SERVICE} workflow\n")
+        self.start_components()
+
+    def refresh_environment(self):
+        environment = Path(self.record["environment_directory"]).expanduser().resolve()
+        if not environment.is_dir():
+            raise LaunchError(f"Cannot refresh environment source: {environment} is unavailable")
+        if Environment(environment).name != self.record['environment']:
+            raise LaunchError('The saved workflow requires the original environment name')
+        self.prepare_environment(environment, [f"{source}={target}" for source, target in self.record['links'].items()])
+
+    def start_components(self):
+        self.start_workers()
+        self.add("engine", "engine", self.execution_mounts() + [
+            "--bind", f"{self.directory / 'workflow'},/var/lib/asys-bpmn,rw",
+            "--arg=--host-channel", f"--arg={CHANNEL}",
+        ])
+        self.wait_ready()
+        self.snapshot()
+        self.say(f"Workflow channel: {self.channel}")
+
+    def events(self, after):
+        """Channel events past `after`, and the sequence of the last one."""
+        events = self.outbound.read(after)
+        return events, (events[-1]["sequence"] if events else after)
+
+    def finish(self, event):
+        run = event["data"]
+        self.active = False
+        self.record["status"] = run["status"]
+        self.record["workflow_id"] = run.get("workflowId")
+        write_json(self.directory / "result.json", run)
+        return run
+
+    def execute(self):
+        inbound = Writer(direction_root(self.directory / "runtime", CHANNEL, "in"))
+        self.outbound = Reader(direction_root(self.directory / "runtime", CHANNEL, "out"))
+        resuming = self.args.command == "resume"
+        after = max(self.outbound.sequences(), default=0) if resuming else 0
+        history = WorkflowHistory(self.directory)
+        observer = Runs(self.args.root)
+        notices = set()
+        if resuming:
+            history.read(self.record)
+            notices = {key for key, _ in agent_notices(observer.progress.events(observer.jobs(self.directory)))}
+        self.record["channel_after"] = after
+        if resuming:
+            self.request = inbound.send("resume", {"id": self.id})
+            self.record["resumed_at"] = timestamp()
+        else:
+            self.request = inbound.send("start", {"id": self.id, "bpmnXml": self.xml, "processId": self.args.process,
+                                                  "environment": self.record["environment"], "variables": self.variables,
+                                                  "environmentDefinition": self.definition})
+        self.active = True  # The request is durable even if this process stops.
+        self.save_record = True
+        self.record["status"] = "running"
+        self.record["components_removed"] = False
+        self.record.pop("error", None)
+        self.record.pop("finished_at", None)
+        self.snapshot()
+        self.say(f"{'Resuming' if resuming else 'Running'} {self.record['workflow']} in {self.record['environment']}")
+
+        def agent_progress():
+            for key, line in agent_notices(observer.progress.events(observer.jobs(self.directory))):
+                if key not in notices:
+                    self.say(line)
+                    notices.add(key)
+        next_health_check = time.monotonic() + 2
+        with (self.directory / "events.jsonl").open("a") as events_file:
+            while True:
+                self.check_interrupt()
+                events, after = self.events(after)
+                for event in events:
+                    data = event["data"]
+                    if event["type"] == "rejected" and data.get("request") == self.request["sequence"]:
+                        self.active = False
+                        raise LaunchError(f"{self.request['type']}: {data.get('message', data)}")
+                    if event["type"] == "accepted" and data.get("request") == self.request["sequence"]:
+                        self.record["workflow_id"] = data["workflowId"]
+                        self.snapshot()
+                    if "activityId" in data:  # A run event, mirrored in the engine's own numbering.
+                        saved = {"sequence": data["store"], "runId": data["runId"], "type": event["type"],
+                                 "activityId": data["activityId"], "time": data["time"], "dataJson": json.dumps(data["data"])}
+                        events_file.write(json.dumps(saved) + "\n")
+                        activity = data["activityId"]
+                        observed = self.record
+                        failed = None
+                        if event["type"] == "job.failed":
+                            job_id = data["data"].get("jobId")
+                            jobs = Runs(self.args.root).jobs(self.directory)
+                            failed = next((job for job in jobs if job["id"] == job_id), None)
+                            observed = {**self.record, "jobs": jobs}
+                        progress = history.consume(saved, observed)
+                        if progress:
+                            self.say(progress)
+                        if event["type"] == "job.failed":
+                            self.say(f"  Logs: asys logs {shlex.quote(str(self.directory))} {shlex.quote(failed['activity'] if failed else activity)}")
+                    if event["type"] == "run.result" and data.get("runId") == self.id:
+                        agent_progress()
+                        events_file.flush()
+                        self.outbound.advance(event["sequence"])
+                        run = self.finish(event)
+                        if run["status"] != "completed":
+                            raise LaunchError(run.get("error") or f"Workflow {run['status']}")
+                        print(json.dumps(run.get("output", {}), indent=2, ensure_ascii=False))
+                        return
+                events_file.flush()
+                agent_progress()
+                if events:
+                    self.outbound.advance(after)
+                if time.monotonic() >= next_health_check:
+                    self.check_components(self.observe()[1])
+                    next_health_check = time.monotonic() + 2
+                self.interrupted.wait(0.2)
+
+    def close(self):
+        if self.directory is None:
+            if self.lease:
+                self.lease.close()
+            return True
+        if self.active and self.outbound is not None:
+            try:
+                Writer(direction_root(self.directory / "runtime", CHANNEL, "in")).send("cancel", {"id": self.id})
+                after, deadline = self.outbound.cursor, time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    events, after = self.events(after)
+                    done = next((e for e in events if e["type"] == "run.result" and e["data"].get("runId") == self.id), None)
+                    if done:
+                        self.outbound.advance(done["sequence"])
+                        self.finish(done)
+                        break
+                    time.sleep(0.1)
+                else:
+                    self.say("The workflow component did not confirm the cancellation in time")
+            except Exception as error:
+                self.say(f"Could not cancel through the workflow channel: {error}")
+        clean = self.cleanup_components()
+        self.record["components_removed"] = clean
+        self.snapshot()
+        if self.lease:
+            self.lease.close()
+        return clean
+
+
+def main(argv=None):
+    args = arguments(sys.argv[1:] if argv is None else argv)
+    launcher = Launcher(args)
+    def interrupt(*_):
+        launcher.interrupted.set()
+        # Before resources exist, interrupt blocking stdin immediately. During
+        # lifecycle edits, let dcomp finish its transaction before cleanup.
+        if launcher.directory is None:
+            raise Interrupted()
+    previous = {sig: signal.signal(sig, interrupt) for sig in [signal.SIGINT, signal.SIGTERM]}
+    code = 0
+    try:
+        launcher.setup()
+        launcher.execute()
+    except Interrupted:
+        launcher.say("Cancelling workflow")
+        launcher.record["status"] = "cancelled"
+        code = 130
+    except (LaunchError, OSError, ValueError, KeyError) as error:
+        launcher.say(f"error: {error}")
+        launcher.record.update(status="failed", error=str(error))
+        code = 1
+    finally:
+        try:
+            if not launcher.close() and code == 0:
+                code = 1
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

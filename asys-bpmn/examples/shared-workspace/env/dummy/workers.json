@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "workspace-demo",
+  "description": "Deterministic programs working together in a project directory.",
+  "types": {
+    "program": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-program"
+      ]
+    }
+  }
+}

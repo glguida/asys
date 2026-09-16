@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+import { program } from '../src/program.mjs';
+import { human } from '../src/human.mjs';
+
+program(human).catch(error => { console.error(error.message); process.exitCode = 1; });

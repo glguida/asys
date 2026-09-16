@@ -1,0 +1,10 @@
+**
+!LICENSE
+!asys-runtime
+!asys-runtime/asys_runtime
+!asys-runtime/asys_runtime/*.py
+!asys-runtime/javascript
+!asys-runtime/javascript/*.mjs
+!asys-runtime/tools
+!asys-runtime/tools/*
+!asys-runtime/LICENSE.multiagent

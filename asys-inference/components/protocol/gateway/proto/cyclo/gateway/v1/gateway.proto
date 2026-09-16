@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package cyclo.gateway.v1;
+
+// Discovery reports authentication providers supported by this gateway.
+// It is a read-only interface and does not inspect or mutate stored accounts.
+service Discovery {
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+}
+
+// Usage exposes a read-only aggregate of the gateway's private usage audit.
+service Usage {
+  rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
+}
+
+// Admin serializes operations that change the gateway credential catalogue.
+// Login uses the component's attached stdin and stdout for its interactive UI;
+// the RPC lifetime defines the operation boundary.
+service Admin {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc Rename(RenameRequest) returns (RenameResponse);
+}
+
+message ListProvidersRequest {}
+
+message ListProvidersResponse {
+  repeated LoginProvider providers = 1;
+}
+
+message LoginProvider {
+  string id = 1;
+  string description = 2;
+  bool oauth = 3;
+  bool api_key = 4;
+}
+
+message GetUsageRequest {}
+
+message GetUsageResponse {
+  uint32 version = 1;
+  UsageCounters totals = 2;
+  map<string, UsageCounters> by_provider = 3;
+  map<string, UsageCounters> by_model = 4;
+}
+
+message UsageCounters {
+  uint64 requests = 1;
+  uint64 latency_ms = 2;
+  uint64 input_tokens = 3;
+  uint64 output_tokens = 4;
+  uint64 total_tokens = 5;
+  uint64 cached_input_tokens = 6;
+  uint64 reasoning_tokens = 7;
+  map<string, uint64> outcomes = 8;
+}
+
+enum AuthenticationMethod {
+  // Login auto-selects OAuth when supported, otherwise native API-key/ambient
+  // authentication. Responses always contain the selected concrete method.
+  AUTHENTICATION_METHOD_UNSPECIFIED = 0;
+  AUTHENTICATION_METHOD_OAUTH = 1;
+  AUTHENTICATION_METHOD_API_KEY = 2;
+}
+
+message LoginRequest {
+  string provider = 1;
+  string account = 2;
+  AuthenticationMethod authentication = 3;
+  // Controls the provider-owned setup dialogue. Its answers travel over
+  // attached stdin and are never part of this request.
+  bool interactive = 4;
+}
+
+message LoginResponse {
+  string account = 1;
+  AuthenticationMethod authentication = 2;
+}
+
+message LogoutRequest {
+  string account = 1;
+}
+
+message LogoutResponse {
+  string account = 1;
+}
+
+message RenameRequest {
+  string account = 1;
+  string new_account = 2;
+}
+
+message RenameResponse {
+  string account = 1;
+  string new_account = 2;
+}

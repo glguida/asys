@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "dummy",
+  "description": "Hello example environment: ordinary programs, echo agents, and human requests.",
+  "types": {
+    "agent": {
+      "command": [
+        "./programs/agent"
+      ]
+    },
+    "program": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-program"
+      ]
+    },
+    "human": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-human"
+      ]
+    }
+  }
+}

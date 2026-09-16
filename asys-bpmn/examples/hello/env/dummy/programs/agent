@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""A declared dummy implementation: echo a prompt without inference or tools."""
+import json
+import os
+import sys
+
+request = json.load(sys.stdin)
+if not isinstance(request, dict) or not isinstance(request.get("prompt"), str) or not request["prompt"].strip():
+    sys.exit("dummy agent requires a prompt")
+text = request["prompt"]
+result = {"final": text, "exception": None}
+with open(os.environ["ASYS_RESULT"], "w") as stream:
+    json.dump(result, stream)

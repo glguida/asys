@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""BPMN, Pi SDK tools, filesystem jobs, and human decisions in real dcomp containers."""
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE = ROOT.parent
+BPMN_IMAGE = os.environ.get("ASYS_BPMN_IMAGE", "asys-bpmn:dev")
+WORKERS_IMAGE = os.environ.get("ASYS_WORKERS_IMAGE", "asys-workers:dev")
+sys.path.insert(0, str(ROOT / 'test'))
+from launcher import check_launcher
+sys.path.insert(0, str(WORKSPACE / 'test-support'))
+from channel_client import Client, RPCError
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="asys-wf-") as temporary:
+        temp = Path(temporary)
+        droot = temp / "dcomp"
+        system = f"workflow-test-{temp.name.rsplit('-', 1)[-1].replace('_', '-')}"
+        dcomp = [os.environ.get("DCOMP_BINARY", "dcomp"), "--state-root", str(droot)]
+        log = temp / "commands.log"
+        tags = []
+        host = Client(temp / 'host')
+
+        def run(command, *args, timeout=180, cwd=None):
+            result = subprocess.run(command + list(args), capture_output=True, text=True, timeout=timeout, cwd=cwd)
+            with log.open("a") as output:
+                output.write(f"{command[0]} {args}\n{result.stdout}{result.stderr}\n")
+            if result.returncode:
+                raise AssertionError(f"{args}: {result.stdout[-2000:]} {result.stderr[-6000:]}")
+            return result.stdout
+
+        def rpc(service, method, body):
+            return host.call(service, method, body)
+
+        @contextmanager
+        def watch_attention():
+            # The fixture component owns the Human input. Its streaming RPC
+            # yields host channel events; closing the context cancels the RPC.
+            with host.stream('human', 'WatchAttention', {}) as receive:
+                yield lambda: receive()['taskId']
+
+        def until(fn, timeout=40):
+            deadline = time.monotonic() + timeout
+            last = None
+            while time.monotonic() < deadline:
+                try:
+                    last = fn()
+                    if last:
+                        return last
+                except (OSError, RPCError) as error:
+                    last = error
+                time.sleep(0.1)
+            raise AssertionError(f"Timed out: {last}")
+
+        try:
+            version = json.loads(run(dcomp[:1], "version", "--json"))
+            assert version['api_version'] == 2 and tuple(map(int, version['version'].split('.'))) >= (0, 3, 1), "requires dcomp 0.3.1+"
+            print(run(["docker"], "run", "--rm", "--network", "none", "--user", "0:0",
+                      "--mount", f"type=bind,source={WORKSPACE},target=/opt/asys,readonly",
+                      "--entrypoint", "python3", BPMN_IMAGE,
+                      "/opt/asys/asys-bpmn/test/host-permissions.py").strip(), flush=True)
+            queue = temp / "queue"
+            state = temp / "state"
+            queue.mkdir(); state.mkdir()
+            fixture = temp / "provider"
+            fixture.mkdir()
+            shutil.copyfile(ROOT / "test/provider.mjs", fixture / "provider.mjs")
+            provider_tag = f"asys-bpmn-provider-test:{temp.name}"
+            tags.append(provider_tag)
+            (fixture / "Dockerfile").write_text(f'FROM {WORKERS_IMAGE}\nCOPY provider.mjs /opt/asys/asys-workers/provider.mjs\nENTRYPOINT ["node","/opt/asys/asys-workers/provider.mjs"]\nHEALTHCHECK --interval=1s CMD ["python3","/opt/asys/asys-runtime/tools/asys-healthcheck","/tmp/asys-provider-health"]\n')
+            (fixture / "component.dcomp").write_text(f"docker {provider_tag}\noutput cyclo.provider.v1.Provider provider\n")
+            run(["docker"], "build", "-t", provider_tag, str(fixture))
+            client = temp / "client"
+            client.mkdir()
+            client_tag = f"asys-bpmn-client-test:{temp.name}"
+            tags.append(client_tag)
+            shutil.copyfile(ROOT / "test/gateway.mjs", client / "gateway.mjs")
+            shutil.copyfile(WORKSPACE / 'test-support/channel-server.mjs', client / 'channel-server.mjs')
+            shutil.copyfile(WORKSPACE / "asys-workers/gen/asys/human/v1/human_pb.js", client / "human_pb.js")
+            (client / "Dockerfile").write_text(f'FROM {BPMN_IMAGE}\nCOPY gateway.mjs human_pb.js channel-server.mjs /opt/asys/asys-bpmn/\nENTRYPOINT ["node","/opt/asys/asys-bpmn/gateway.mjs"]\nCMD []\nHEALTHCHECK --interval=1s CMD ["python3","/opt/asys/asys-runtime/tools/asys-healthcheck","/tmp/asys-gateway-health"]\n')
+            (client / "component.dcomp").write_text(f"docker {client_tag}\ninput asys.workflow.v1.Workflow workflow\ninput asys.human.v1.Human human\n")
+            run(["docker"], "build", "-t", client_tag, str(client))
+            agent_environment = temp / "environment"
+            shutil.copytree(WORKSPACE / "asys-workers/env/default", agent_environment)
+            dockerfile = agent_environment / "Dockerfile"
+            dockerfile.write_text(dockerfile.read_text().replace("asys-workers:dev", WORKERS_IMAGE))
+            configuration = json.loads((agent_environment / "workers.json").read_text())
+            command = configuration["types"]["agent"]["command"]
+            command[command.index("--model") + 1] = "fixture/worker"
+            (agent_environment / "workers.json").write_text(json.dumps(configuration))
+            environment_tag = f"asys-bpmn-environment-test:{temp.name}"
+            tags.append(environment_tag)
+            manifest = agent_environment / "component.dcomp"
+            manifest.write_text(manifest.read_text().replace("asys-env-default:dev", environment_tag))
+            run(["docker"], "build", "-t", environment_tag, str(agent_environment))
+            engine = temp / "engine"
+            engine.mkdir()
+            (engine / "component.dcomp").write_text(f"docker {BPMN_IMAGE}\noutput asys.workflow.v1.Workflow workflow\n")
+            jobs, workspace = temp / "jobs", temp / "workspace"
+            for directory in (jobs, workspace):
+                directory.mkdir()
+                directory.chmod(0o777)
+            system_file = temp / "system.dcomp"
+            system_file.write_text(f"""system {system}
+component provider {fixture}
+component workers {agent_environment}
+component dummy {ROOT / 'examples/hello/env/dummy'}
+component workflow {engine}
+component client {client}
+user provider {os.getuid()}:{os.getgid()}
+user workers {os.getuid()}:{os.getgid()}
+user dummy {os.getuid()}:{os.getgid()}
+user workflow {os.getuid()}:{os.getgid()}
+user client {os.getuid()}:{os.getgid()}
+global inference_endpoint cyclo.provider.v1.Provider provider.provider
+link workers.inference @inference_endpoint
+link client.workflow workflow.workflow
+link client.human workers.human
+bind workers {queue} /var/lib/asys/runtime rw
+bind workers {jobs} /var/lib/asys/jobs rw
+bind workers {workspace} /var/lib/asys/workspace rw
+bind dummy {queue} /var/lib/asys/runtime rw
+bind dummy {jobs} /var/lib/asys/jobs rw
+bind dummy {workspace} /var/lib/asys/workspace rw
+bind workflow {queue} /var/lib/asys/runtime rw
+bind workflow {jobs} /var/lib/asys/jobs rw
+bind workflow {workspace} /var/lib/asys/workspace rw
+bind workflow {state} /var/lib/asys-bpmn rw
+bind client {host.root} /run/asys-test rw
+""")
+            run(dcomp, "up", str(system_file))
+            client_id = run(["docker"], "ps", "-q", "--filter", f"label=io.dcomp.system={system}", "--filter", "label=io.dcomp.component=client").strip()
+            assert client_id and '\n' not in client_id, client_id
+            assert not json.loads(run(["docker"], "inspect", "--format", '{{json .HostConfig.PortBindings}}', client_id))
+            until(lambda: rpc("workflow", "ListWorkflows", {}) is not None)
+            environments = rpc("workflow", "ListEnvironments", {})['environments']
+            assert {item['name'] for item in environments} == {'default', 'dummy'}, environments
+            source = (ROOT / "examples/agent-review.bpmn").read_text()
+            workflow_id = rpc("workflow", "LoadWorkflow", {"bpmnXml": source})["workflowId"]
+            assert rpc("workflow", "CheckWorkflow", {"workflowId": workflow_id, "environment": "default"})['compatible']
+            variables = {"request": "Write a draft and create proof.txt."}
+            with watch_attention() as receive_attention:
+                rpc("workflow", "StartRun", {"id": "review", "workflowId": workflow_id, "environment": "default", "variablesJson": json.dumps(variables)})
+                task = rpc("human", "GetTask", {"id": receive_attention()})['task']
+                assert task['status'] == 'pending', task
+            claim = rpc("human", "ClaimTask", {"id": task["id"], "claimant": "reviewer", "claimId": "claim1"})
+            run(dcomp, "restart", system, "workflow")
+            until(lambda: rpc("human", "GetTask", {"id": task["id"]})["task"]["status"] == "claimed")
+            with watch_attention() as receive_attention:
+                assert receive_attention() == task['id'], 'Reconnect must announce the unanswered claimed task'
+            completion = {"id": task["id"], "token": claim["token"], "completionId": "decision1", "resultJson": '{"approved":true}'}
+            rpc("human", "CompleteTask", completion)
+
+            def finished():
+                record = rpc("workflow", "GetRun", {"id": "review"})["run"]
+                if record["status"] == "failed":
+                    raise AssertionError(record.get("error"))
+                return record if record["status"] == "completed" else None
+
+            record = until(finished)
+            assert record['environment'] == 'default', record
+            output = json.loads(record["outputJson"])
+            assert output["work"]["approval"]["approved"] is True, output
+            assert output["work"]["result"]["final"] == "Approved.", output
+            assert rpc("human", "CompleteTask", completion)["task"]["status"] == "completed"
+            default_jobs = queue / 'environments/default/jobs'
+            jobs = [json.loads(path.read_text()) for path in default_jobs.glob("*/state.json")]
+            assert all(job["status"] == "done" for job in jobs), jobs
+            assert len(jobs) == 3, jobs
+            assert all('attempt' not in job for job in jobs), jobs
+            assert (workspace / 'proof.txt').read_text() == "draft\n"
+            # The exact same XML selects a different implementation at StartRun.
+            portable = (ROOT / 'examples/agent-task.bpmn').read_text()
+            portable_id = rpc('workflow', 'LoadWorkflow', {'bpmnXml': portable})['workflowId']
+            for environment in ['default', 'dummy']:
+                rpc('workflow', 'StartRun', {'id': environment, 'workflowId': portable_id, 'environment': environment,
+                    'variablesJson': json.dumps({'request': 'Prepare a draft.'})})
+                def portable_finished():
+                    result = rpc('workflow', 'GetRun', {'id': environment})['run']
+                    assert result['status'] != 'failed', result
+                    return result if result['status'] == 'completed' else None
+                result = until(portable_finished)
+                assert result['environment'] == environment
+                expected = 'Prepare a draft.' if environment == 'dummy' else 'The draft is ready.'
+                assert json.loads(result['outputJson'])['work']['final'] == expected, result
+            check_launcher(ROOT, dcomp, system, temp, run, until, log, agent_environment, tags)
+            print("PASS: filesystem host channels, real dcomp interfaces, environment selection, Provider/Pi tools, human attention push and reconnect, decisions, restart recovery, path-based CLI, failures, cancellation, and cleanup preserving existing components.")
+            (ROOT / 'integration-failure.log').unlink(missing_ok=True)
+        except BaseException:
+            try:
+                run(dcomp, "logs", system)
+            except BaseException:
+                pass
+            if log.exists():
+                shutil.copyfile(log, ROOT / "integration-failure.log")
+                print(f"Failure details: {ROOT / 'integration-failure.log'}", flush=True)
+            raise
+        finally:
+            subprocess.run(dcomp + ["resume", system], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            subprocess.run(dcomp + ["down", system], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            if tags:
+                subprocess.run(["docker", "image", "rm", *tags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,7 @@
+{
+  "external_egress": true,
+  "volumes": [
+    {"name": "credentials", "target": "/var/lib/cyclo-gateway", "read_only": false}
+  ],
+  "host_channel": "gateway"
+}

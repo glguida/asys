@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "types": {
+    "echo": {"command": ["./echo.py"]}
+  }
+}

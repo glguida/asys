@@ -1,0 +1,13 @@
+**/bin/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/integration-failure.log
+**/.asys-runtime/
+**/.asys/
+**/.venv/
+**/.host-deps/
+asys-env
+**/*.egg-info/
+asys-inference/components/vendor/asys-runtime/
+/.claude/worktrees/

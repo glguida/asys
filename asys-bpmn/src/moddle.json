@@ -1,0 +1,17 @@
+{
+  "name": "AsysWorkflow",
+  "uri": "urn:asys:workflow:1",
+  "prefix": "asys",
+  "xml": { "tagAlias": "lowerCase" },
+  "types": [
+    {
+      "name": "Job", "superClass": ["Element"],
+      "properties": [
+        { "name": "type", "type": "String", "isAttr": true },
+        { "name": "args", "type": "String", "isAttr": true },
+        { "name": "input", "type": "String", "isAttr": true },
+        { "name": "result", "type": "String", "isAttr": true }
+      ]
+    }
+  ]
+}

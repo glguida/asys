@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+import { program } from '../src/program.mjs';
+import { agent } from '../src/agent.mjs';
+
+program(agent).catch(error => { console.error(error.message); process.exitCode = 1; });
