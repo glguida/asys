@@ -1,13 +1,13 @@
 # asys-human-interface
 
-Connect many workers' existing `asys.human.v1.Human` outputs to one host handler.
-The component subscribes to `WatchAttention`, retrieves each question with
-`GetTask`, and transports the existing Human operations over a runtime host
-channel. Workers continue owning claims, candidate checks, form validation, and
-decisions. The component needs no access to workers' job directories.
+The Human service receives questions from workers and presents them in a host
+terminal. It owns the request queue, claims, candidate checks, form validation,
+and answers. Workers call its typed `asys.human.v1.Human` interface; the terminal
+uses the service's runtime host channel. No worker job directories are shared
+with the service.
 
 ```text
-worker Human outputs <-> asys-human-interface <-> one host channel <-> host handler
+workers.human -> @human_endpoint -> Human service <-> host channel <-> terminal
 ```
 
 ## Terminal handler
@@ -17,19 +17,32 @@ make -C asys-human-interface install
 asys-human-prompt
 ```
 
-Run it alongside `asys-bpmn run`, or another producer of human jobs. The dcomp
-system must already exist. The command discovers all outputs with the Human
-service in that system and follows new workers as they appear. To restrict it:
+Start it before a workflow that needs human decisions, in the same dcomp
+system. It exports `human` and binds `@human_endpoint`; worker environments
+with a Human input use that global by default. A second default handler refuses
+to replace an existing binding.
+
+For a handler dedicated to one workflow, use the workflow launcher:
 
 ```sh
-asys-human-prompt workers-a.human workers-b.human --claimant alice
+asys-bpmn run workflow.bpmn env/design --input request.md --human
+asys-bpmn resume RUN --human
 ```
+
+The launcher creates a handler for this run, links its workers directly to it,
+and removes it when the run ends. It leaves `@human_endpoint` unchanged. The
+terminal displays the human interface; workflow progress remains available in
+`asys logs RUN` and `asys top`.
+
+`asys-human-prompt --private --name review-desk` exports `review-desk.human`
+without assigning a global. Other launchers can select it explicitly with
+`-L human=review-desk.human`. `--claimant alice` changes the reviewer identity.
 
 Interactive terminals open a full-screen [Textual](https://textual.textualize.io/)
 application. The review has a section selector and scrollable Markdown; the
 response pane contains choices, multiline comments, and other schema fields.
 The Files tab browses the project workspace, previews text and Markdown, and
-offers Copy path and Open externally. Request counts and reconnect notices
+offers Copy path and Open externally. Request counts
 update in place while you edit. At widths below 100 columns, Review, Files and
 Response occupy separate tabs, preserving the draft when the terminal resizes.
 
@@ -43,7 +56,7 @@ Response occupy separate tabs, preserving the draft when the terminal resizes.
 | Ctrl-Q / Ctrl-C | Release the request and stop |
 
 Clicking Submit or pressing Ctrl-S is the explicit submission step. Choices start
-unselected, even when a schema declares a default. Worker validation errors stay
+unselected, even when a schema declares a default. Validation errors stay
 beside the form and retain all entered values for correction. Scroll with the
 mouse, or focus the review pane and use arrows, Page Up/Down, Home/End.
 
@@ -57,16 +70,19 @@ The [human prompt demo](../asys-bpmn/examples/human-prompt/README.md) provides a
 small workflow with parallel approval and text questions, its own environment,
 and two commands to try the queue without an inference provider.
 
-The handler owns one bridge component for its foreground session. Ctrl-C,
-Ctrl-Q, SIGTERM, or `/quit` and end of input in plain mode release its current
-claim and remove that component. Skip releases the current question for the rest of
-this session. `--once` exits after one completed answer. Other containers keep
-running. The default claimant is the host login name; `--claimant` supplies the
-name checked against task candidates. These names are trusted identities, not
-an authentication mechanism.
+The handler owns one service component for its foreground session. Ctrl-C,
+Ctrl-Q, SIGTERM, `/quit`, or end of input in plain mode removes it, which unbinds
+its global name. Waiting workers receive an RPC error; their producer decides
+how to handle the failed job. Completed answers remain in the saved service
+state. Skip releases a question and leaves it pending for the rest of this
+session. `--once` exits after one completed answer.
+
+The default claimant is the host login name; `--claimant` supplies the name
+checked against task candidates. These names are trusted identities, not an
+authentication mechanism.
 
 Questions enter a FIFO queue in notification order. Duplicate notifications
-retain their position, and identical task IDs from different worker outputs
+retain their position, and job IDs are qualified by their originating component, so different workers
 remain separate. Only the question being presented is claimed. Tasks already
 claimed elsewhere, tasks for other candidates, and tasks completed or cancelled
 while queued are skipped. The handler shows the title, prompt, context, and
@@ -78,7 +94,7 @@ In plain mode, it shows a response summary and asks `Submit response? [y/n]` bef
 answer. Choosing `n` reopens the fields, retaining the draft. Defaults in the
 schema never choose a decision automatically.
 
-Invalid field input is prompted again. The worker validates the answer against
+Invalid field input is prompted again. The human service validates the answer against
 the complete schema before recording it; rejection reopens the draft for
 correction. Disapproval is a completed decision with a false value; the workflow
 decides what that means for subsequent work.
@@ -93,15 +109,16 @@ most recently displayed request, including context, file locations and controls.
 `--dcomp-state-root` and `--runtime-root` select nondefault dcomp directories.
 `ASYS_HUMAN_INTERFACE_IMAGE` overrides the default `asys-human-interface:dev` image.
 
-Dcomp fixes inputs when creating a component. When the set of Human outputs
-changes, the launcher recreates only its bridge with the updated declarations,
-retaining the host channel, queued questions, and current worker claim. Each
-input is derived from its full worker endpoint, so changing discovery order
-cannot redirect a saved command. Task discovery itself uses worker subscriptions;
-the host only polls dcomp topology, every two seconds.
-Subscription failures are checked against that topology before the terminal
-reports them. A worker removed after its workflow completes is ordinary cleanup;
-a worker still present gets a reconnect notice.
+Workers need no discovery or rewiring when a default handler changes. Their
+link remains `@human_endpoint`, which dcomp resolves. Each human job sends one
+`Ask` RPC and waits for its answer. Cancelling the job disconnects that request
+and withdraws the unanswered question. A completed request can be retrieved
+again with the same ID and input without asking twice.
+
+After installation, `asys update` asks a running shared terminal handler to
+replace its service with the current image and keep the global binding. An
+unchanged image is left running. Private handlers are excluded. Updating a
+service interrupts unanswered requests, so finish human decisions first.
 
 ## Forms and presentation
 
@@ -109,7 +126,7 @@ Human-task input uses `form` for the answer's
 [JSON Schema](https://json-schema.org/understanding-json-schema/) and an optional
 sibling `uischema` for the [JSON Forms UI schema](https://jsonforms.io/docs/uischema/).
 These are separate descriptions of data and presentation. The component carries
-them unchanged through the existing Human interface. A graphical host can feed
+them unchanged through the Human interface. A graphical host can feed
 them to JSON Forms as its `schema` and `uischema` and submit the same result.
 JSON Forms is a framework with a documented UI schema; it is not a universal
 terminal UI standard. This host implements the terminal mapping below.
@@ -140,7 +157,7 @@ actual dcomp binds, including nested mounts. The saved document's `files` entry
 has role `workspace`, a label, `workerPath`, and, when mounted on the host,
 `path` and a `file:` URI. Named volumes or unmounted paths are explicitly marked
 as worker paths. Files are never automatically opened, copied, or modified.
-The bridge does not need access to worker job directories.
+The service does not need access to worker job directories.
 
 ### Authoring a form
 
@@ -198,7 +215,7 @@ changes to use the form renderer.
 
 The renderer follows local references such as `#/definitions/address`. Schema
 titles and descriptions are shown; full validation, including patterns and
-constraints across fields, stays at the worker. In the TUI, optional fields have
+constraints across fields, stays at the human service. In the TUI, optional fields have
 a Value options control to distinguish omission, explicit empty text, and null.
 In plain mode, blank input omits an optional field on first entry and keeps an
 existing answer when editing. `/omit` removes
@@ -219,7 +236,7 @@ extra slash, for example `//quit` to enter `/quit` as text.
 
 Schema combinations (`anyOf`, `oneOf`, `allOf`) and conditional constraints can
 validate fields declared outside their branches. For example, approval can allow
-an omitted comment while rejection requires a nonblank comment. The worker
+an omitted comment while rejection requires a nonblank comment. The human service
 validates the complete answer; a rejected answer reopens the form with its draft
 preserved. Branches that introduce additional controls are not supported.
 
@@ -231,87 +248,63 @@ ignore behavioral UI instructions or fall back to asking the user for raw JSON.
 
 ## Component and host protocol
 
-The supplied `component.dcomp` declares a single `human` input. For a custom
-composition, declare one Human input per worker and pass `--config FILE`:
-
-```json
-{"workers":[{"id":"workers-a.human","input":"alpha"},{"id":"workers-b.human","input":"beta"}]}
-```
-
-The corresponding component declaration is:
+The supplied manifest exports one Human interface:
 
 ```text
 docker asys-human-interface:dev
-input asys.human.v1.Human alpha
-input asys.human.v1.Human beta
+output asys.human.v1.Human human
 ```
 
-Link those inputs to the corresponding worker outputs. Bind a host directory
-at `/var/lib/asys-human`, or use `--root DIRECTORY`. The default channel is
-`human`; `--host-channel NAME` changes it. Only this directory crosses the host
-boundary. No network port is published and the component requires no egress.
-The enclosing directory grants access to the host handler; do not share it with
-untrusted processes. Run one component and one logical handler per channel.
+A worker environment declares `input asys.human.v1.Human human`. Launchers
+connect it to `@human_endpoint`, or a target supplied with `-L human=TARGET`.
+`Ask` carries a unique request ID, the input JSON, and metadata including the
+originating component and its workspace. It returns the answer JSON. The other
+Human methods support task presentation, claims, and validated completion.
+
+Bind service state at `/var/lib/asys-human`, or use `--root DIRECTORY`.
+The default host channel is `human`; `--host-channel NAME` changes it. No network
+port is published and the component requires no egress. Run one component and
+one logical host handler per channel. Questions and decisions are persisted in
+`tasks.sqlite` in this private service directory.
 
 Use the existing Python or JavaScript runtime `Reader` and `Writer`. Directions
 are relative to the component: the host writes `in` and reads `out`.
 
 | Direction | Event | Data |
 | --- | --- | --- |
-| Out | `ready` | `workers`: configured worker IDs |
-| Out | `attention` | `worker`, `task`: existing Human Task in protobuf JSON |
-| In | `request` | `worker`, `method`, `body`: existing Human request in protobuf JSON |
-| Out | `result` | `request`: inbound sequence, `result`: existing Human response |
+| Out | `ready` | Empty object |
+| Out | `attention` | `worker`, `task`: Human Task in protobuf JSON |
+| In | `request` | `worker`, `method`, `body`: Human request in protobuf JSON |
+| Out | `result` | `request`: inbound sequence, `result`: Human response |
 | Out | `error` | `request`: inbound sequence, `code`: Connect code name, `message` |
-| Out | `worker.unavailable` / `worker.available` | `worker`, with `message` on failure |
 
 Supported methods are `ListTasks`, `GetTask`, `ClaimTask`, `ReleaseTask`, and
 `CompleteTask`. The component subscribes to `WatchAttention` automatically.
 For example, a host writes:
 
 ```json
-{"worker":"workers-a.human","method":"ClaimTask","body":{"id":"review","claimant":"alice","claimId":"claim-1"}}
+{"worker":"workers-a","method":"ClaimTask","body":{"id":"workers-a.review","claimant":"alice","claimId":"claim-1"}}
 ```
 
 The correlated result contains a task and claim token. Complete with that token,
 a stable `completionId`, and `resultJson`, exactly as specified by the
 [existing Human interface](../asys-workers/proto/asys/human/v1/human.proto).
 Task `inputJson`, `metadataJson`, and `resultJson` remain JSON strings in this
-representation. IDs for tasks, claims, and completions retain their existing
-worker scope; route every operation using the same `worker`.
+representation. A task ID includes its originating component and job ID.
 
-Replies are published before the component advances its inbound cursor.
-Interrupted operations can replay: preserve `claimId`, `completionId`, tokens,
-and answer content on retries. Worker subscriptions reconnect independently and
-recover outstanding tasks, including claimed tasks. Attention events can repeat.
-They are hints, so fetch the latest task before acting; the current worker stream
-does not report every cancellation or completion. A channel write failure stops
-the component rather than silently discarding a question.
+Replies are published before advancing the inbound cursor. Interrupted host
+operations can replay: preserve `claimId`, `completionId`, tokens, and answer
+content on retries. Attention notifications include outstanding questions on
+subscription and new or released questions afterward. Fetch the current task
+before acting on a notification. A channel write failure stops the component.
 
-The terminal command cleans up on ordinary exits and signals. SIGKILL or host
-failure can leave a component and claim behind; `session.json` preserves their
-identities for recovery. Claims have the existing Human API's explicit-release
-semantics and do not expire automatically.
+Completed answers survive service restarts. In-flight RPCs do not: the worker
+fails and a workflow can handle the error or retry the job. SIGKILL or host
+failure can leave a component behind; `session.json` records its identity.
 
-## Development
-
-```sh
-make test-deps                    # repository root
-make -C asys-human-interface test
-make -C asys-human-interface build
-python3 asys-human-interface/tools/integration-test
-```
-
-The integration test uses isolated dcomp state and requires `asys-workers:dev`
-and the human interface image. It tests real worker RPC, dynamic attachment,
-queued approval/comment forms, text answers, explicit submission, JSON Forms
-controls and multiline input, worker validation and correction, signal cleanup,
-and retention of existing worker containers. The ordinary tests cover schema
-field rendering, edits, unsupported UI behavior, reconnects, command
-replay, validation, channel ownership, failed publication, and host installation.
-
-The generated Human definitions are reused through the small
-`@asys/human-protocol` package in `asys-workers/gen`; the bridge image does not
-install agent dependencies. The workers' `npm run generate` also restores this
-package's manifest after regenerating its definitions. Further host handlers can reuse this component and
-channel contract with their own presentation and delivery mechanisms.
+The foreground handler holds `handler.lock` for its lifetime. `asys update`
+selects live shared handlers under the asys state's `human/` directory, then
+sends `update` with an immutable image ID through `channels/control/in` in the
+handler session directory. The handler performs the dcomp lifecycle changes
+and replies on `out` with `updated` or `error`, correlated by request sequence.
+This control channel is between host processes and is not mounted in a component.

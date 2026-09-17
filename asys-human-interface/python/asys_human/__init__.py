@@ -1,1 +1,1 @@
-"""Host lifecycle and terminal handling for worker Human interfaces."""
+"""Host lifecycle and terminal handling for the Human service."""

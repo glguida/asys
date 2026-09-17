@@ -2,9 +2,14 @@ syntax = "proto3";
 
 package asys.human.v1;
 
-// Human decisions for filesystem jobs. Caller identities are supplied by trusted
+// Human decisions. Workers call Ask on their selected human service.
+// Caller identities are supplied by trusted
 // components connected through dcomp. They are not an authentication mechanism.
 service Human {
+  // Push a request and wait for its answer. The ID identifies this job's request;
+  // reuse it only with identical input. Disconnecting withdraws an unanswered
+  // request. Completed answers remain available for idempotent retrieval.
+  rpc Ask(AskRequest) returns (AskResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
   rpc ClaimTask(ClaimTaskRequest) returns (ClaimTaskResponse);
@@ -15,6 +20,13 @@ service Human {
   // are hints: IDs may repeat; use GetTask to read the current state before acting.
   rpc WatchAttention(WatchAttentionRequest) returns (stream WatchAttentionResponse);
 }
+
+message AskRequest {
+  string id = 1;
+  string input_json = 2;
+  string metadata_json = 3;
+}
+message AskResponse { string result_json = 1; }
 
 message Task {
   string id = 1;

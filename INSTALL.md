@@ -197,7 +197,8 @@ Component RPC uses dcomp interfaces; workflow jobs and results use the shared
 runtime filesystem. Dcomp handles container lifecycle and container logs.
 
 To answer human tasks, run `asys-human-prompt --system asys` in another terminal.
-It discovers Human outputs, including workers added by later workflow runs.
+It binds `@human_endpoint` for workers in this dcomp system. Alternatively, add
+`--human` to `asys-bpmn run` to answer just that run in the current terminal.
 `--claimant NAME` selects the identity used by tasks with candidate restrictions.
 Approval forms offer approve/disapprove; plain questions accept text. See the
 [human handler guide](asys-human-interface/README.md) for the answer protocol.
@@ -210,15 +211,25 @@ Update the source checkout, then run from its root:
 make install
 ```
 
-Run `asys-inference start` to rebuild and apply updated providers to an existing
-machine; its account credential volume is retained. Updates use the component
-source paths recorded in that machine's configuration.
+After installing, refresh the running shared services in the selected asys state:
+
+```sh
+asys update
+```
+
+This reapplies inference components using their saved configuration and refreshes
+the shared Human service's installed image. Account credential volumes and
+configuration are retained. Unchanged images are not restarted. `ASYS_STATE_ROOT`
+selects the installation; `asys update --root /srv/asys/host` selects it explicitly.
+Stopped services remain stopped. Workflow and worker containers, including their
+private `--human` handlers, are not restarted. Replacing a shared service can
+interrupt calls currently using it; complete pending human decisions before updating.
 
 Every subsequent start or resume uses the updated images. Workflow resumes
 automatically rebuild their environment against the installed worker base;
 environments without a Dockerfile resolve their current declared image. Keep
 the original environment directory available for resume. Running containers
-continue using their existing images until explicitly started or resumed.
+continue using their existing images until explicitly started, resumed, or updated.
 
 Saved machine configuration and run state live under the user's XDG state
 directory, normally `$HOME/.local/state/asys`. Runs and their job records use

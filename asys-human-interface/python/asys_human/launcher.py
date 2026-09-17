@@ -1,7 +1,7 @@
-"""Own a Human bridge component for the lifetime of a foreground host handler."""
+"""Export a Human service for the lifetime of a foreground terminal handler."""
 import argparse
+import fcntl
 import getpass
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,7 +14,8 @@ import uuid
 from asys.lifecycle import ComponentHost, LaunchError, Interrupted
 from asys.state import state_root
 from asys_runtime.files import write_json
-from asys_runtime.permissions import mkdir
+from asys_runtime.permissions import mkdir, shared, open_file
+from asys_runtime.channel import Reader, Writer, direction_root
 
 from .channel import Channel, RPCError
 from .forms import FormError
@@ -22,12 +23,18 @@ from .presentation import request_document
 from .prompt import FormPrompt, Quit, Skip, TextInput, text
 
 SERVICE = "asys.human.v1.Human"
-ENDPOINT = re.compile(r"[a-z][a-z0-9-]{0,62}\.[a-z][a-z0-9-]{0,62}")
+NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
+
+
+class UpdateRequested(Exception):
+    def __init__(self, event):
+        self.event = event
 
 
 def arguments(argv):
     parser = argparse.ArgumentParser(prog="asys-human-prompt", description="Answer worker human requests, one at a time.", allow_abbrev=False)
-    parser.add_argument("workers", nargs="*", metavar="COMPONENT.OUTPUT", help="Human outputs to follow (default: discover all, including new workers)")
+    parser.add_argument("--private", action="store_true", help="export only COMPONENT.human, without binding @human_endpoint")
+    parser.add_argument("--name", help="dcomp component name (default: generated)")
     parser.add_argument("--system", default="asys", help="dcomp system (default: asys)")
     parser.add_argument("--claimant", default=getpass.getuser(), help="human identity for candidate checks (default: login name)")
     parser.add_argument("--root", type=Path, default=state_root("human"),
@@ -41,21 +48,9 @@ def arguments(argv):
     args = parser.parse_intermixed_args(argv)
     if not args.claimant.strip() or len(args.claimant) > 256:
         parser.error("--claimant must be nonempty text of at most 256 characters")
-    if any(not ENDPOINT.fullmatch(worker) for worker in args.workers) or len(set(args.workers)) != len(args.workers):
-        parser.error("workers must be distinct COMPONENT.OUTPUT endpoints")
+    if args.name and not NAME.fullmatch(args.name):
+        parser.error("--name must be a dcomp component name")
     return args
-
-
-def bindings(document, selected=()):
-    available = {f"{component['name']}.{output['name']}"
-                 for component in document["components"] for output in component.get("outputs", [])
-                 if output["service"] == SERVICE}
-    if selected:
-        available.intersection_update(selected)
-    # Stable names prevent a queued command from moving to another worker when
-    # discovery order changes or an earlier worker disappears.
-    return [{"id": worker, "input": "worker-" + hashlib.sha256(worker.encode()).hexdigest()[:24]}
-            for worker in sorted(available)]
 
 
 class Launcher(ComponentHost):
@@ -64,9 +59,10 @@ class Launcher(ComponentHost):
         self.interaction = interaction
         self.active = None
         self.channel = None
-        self.attached = None
         self.topology = {}
         self.next_discovery = 0
+        self.control = None
+        self.lease = None
 
     def say(self, message):
         if self.interaction:
@@ -86,8 +82,9 @@ class Launcher(ComponentHost):
 
     def save(self):
         value = {"version": 1, "system": self.args.system, "component": self.name, "dcomp": self.dcomp,
-                 "claimant": self.args.claimant, "workers": self.attached, "active": self.active,
-                 "component_removed": not self.owned}
+                 "claimant": self.args.claimant, "endpoint": f"{self.name}.human", "active": self.active,
+                 "component_removed": not self.owned, "global": None if self.args.private else "human_endpoint",
+                 "image_ref": getattr(self, 'image_ref', None), "image": getattr(self, 'image', None)}
         path = self.directory / "session.json"
         write_json(path, value)
 
@@ -97,47 +94,73 @@ class Launcher(ComponentHost):
             raise LaunchError("The state path cannot contain a comma (dcomp mount syntax)")
         mkdir(root, parents=True, exist_ok=True)
         session = uuid.uuid4().hex
-        self.name = "human-interface-" + session[:16]
+        self.name = self.args.name or "human-interface-" + session[:16]
         self.directory = root / session
         mkdir(self.directory)
+        self.lease = os.fdopen(open_file(self.directory / 'handler.lock', os.O_CREAT | os.O_RDWR), 'a+b')
+        fcntl.flock(self.lease, fcntl.LOCK_EX)
+        self.control = Reader(direction_root(self.directory, 'control', 'in'))
+        self.control_output = Writer(direction_root(self.directory, 'control', 'out'))
         self.runtime = self.directory / "runtime"
         self.definition = self.directory / "component"
         mkdir(self.definition)
         for path in [self.runtime, self.runtime / "channels", self.runtime / "channels/human",
                      self.runtime / "channels/human/in", self.runtime / "channels/human/out"]:
-            path.mkdir()
-            path.chmod(0o777)  # Mounted beneath a host-private session directory.
+            mkdir(path)
         self.channel = Channel(self.runtime, self.args.claimant, self.say)
         self.save()
         self.say(f"Human handler state: {self.directory}")
         document = self.view()
         if document.get("operation"):
             raise LaunchError(f"dcomp system {self.args.system} has a pending operation")
-        image = os.environ.get("ASYS_HUMAN_INTERFACE_IMAGE") or "asys-human-interface:dev"
+        self.image_ref = os.environ.get("ASYS_HUMAN_INTERFACE_IMAGE") or "asys-human-interface:dev"
         try:
-            self.image = self.command(["docker", "image", "inspect", "--format", "{{.Id}}", image]).strip()
+            self.image = self.command(["docker", "image", "inspect", "--format", "{{.Id}}", self.image_ref]).strip()
         except LaunchError as error:
             raise LaunchError(f"Build the human component with make -C asys-human-interface build.\n{error}") from error
-        self.attach(bindings(document, self.args.workers))
+        if not self.args.private:
+            current = next((g for g in document.get("globals", []) if g["name"] == "human_endpoint"), {})
+            if current.get("target", {}).get("component"):
+                raise LaunchError("@human_endpoint is already bound; use --private for a separate human handler")
+        if any(c["name"] == self.name for c in document["components"]):
+            raise LaunchError(f"Component {self.name} already exists")
+        self.attach()
+        if not self.args.private:
+            self.command(self.dcomp + ["assign-global", self.args.system, "human_endpoint", f"{self.name}.human"])
+        self.say(f"Human endpoint: {'@human_endpoint' if not self.args.private else self.name + '.human'}. Ctrl-C to stop.")
         self.next_discovery = time.monotonic() + 2
 
-    def attach(self, workers):
-        if self.owned:
-            self.command(self.dcomp + ["rm-component", self.args.system, self.name])
-            self.owned = []
+    def update_component(self, event):
+        try:
+            image = self.command(['docker', 'image', 'inspect', '--format', '{{.Id}}', event['data']['image']]).strip()
+            document = self.view()
+            if self.args.private or not any(g['name'] == 'human_endpoint' and g.get('target', {}).get('component') == self.name
+                                            for g in document.get('globals', [])):
+                raise LaunchError('This handler no longer owns @human_endpoint')
+            self.say('Updating the Human service; outstanding requests will be interrupted.')
+            self.command(self.dcomp + ['rm-component', self.args.system, self.name])
+            self.owned.clear()
+            self.active = None
+            self.channel.current = None
+            self.channel.queue.clear()
+            if self.interaction:
+                self.interaction.finished('Human service updated; interrupted jobs may be retried.')
+            self.image = image
+            self.attach()
+            self.command(self.dcomp + ['assign-global', self.args.system, 'human_endpoint', f'{self.name}.human'])
+            self.control_output.send('updated', {'request': event['sequence'], 'image': image})
+        except Exception as error:
+            self.control_output.send('error', {'request': event['sequence'], 'message': str(error)})
+            raise
+
+    def attach(self):
         self.check_interrupt()
-        manifest = [f"docker {self.image}"] + [f"input {SERVICE} {worker['input']}" for worker in workers]
-        (self.definition / "component.dcomp").write_text("\n".join(manifest) + "\n")
-        (self.runtime / "workers.json").write_text(json.dumps({"workers": workers}) + "\n")
-        (self.runtime / "workers.json").chmod(0o644)
-        options = ["--bind", f"{self.runtime},/var/lib/asys-human,rw",
-                   "--arg=--config", "--arg=/var/lib/asys-human/workers.json"]
-        for worker in workers:
-            options += ["--link", f"{worker['input']}={worker['id']}"]
+        (self.definition / "component.dcomp").write_text(f"docker {self.image}\noutput {SERVICE} human\n")
+        gid = self.directory.stat().st_gid if shared(self.directory) else os.getgid()
+        options = ["--user", f"{os.getuid()}:{gid}", "--bind", f"{self.runtime},/var/lib/asys-human,rw"]
         self.channel.pump()
         before = self.channel.ready
         self.owned = [self.name]  # Record intent before the lifecycle operation.
-        self.attached = workers
         self.save()
         self.command(self.dcomp + ["add-component", *options, self.args.system, self.name, str(self.definition)])
         deadline = time.monotonic() + 90
@@ -153,7 +176,6 @@ class Launcher(ComponentHost):
                     self.check_component(document)
                 next_check = time.monotonic() + 1
             self.interrupted.wait(0.1)
-        self.say(f"Following {len(workers)} Human interface(s) as {self.args.claimant}. Ctrl-C to stop.")
 
     def check_component(self, document):
         component = next((item for item in document["components"] if item["name"] == self.name), None)
@@ -163,8 +185,14 @@ class Launcher(ComponentHost):
         if not cleanup:
             self.check_interrupt()
         self.channel.pump()
+        if not cleanup and self.control:
+            for event in self.control.read():
+                self.control.advance(event['sequence'])
+                if event['type'] == 'update' and event['data'].get('image') != self.image:
+                    raise UpdateRequested(event)
+                self.control_output.send('updated', {'request': event['sequence'], 'image': self.image})
         if self.interaction:
-            self.interaction.state(self.attached or [], len(self.channel.queue))
+            self.interaction.state({worker for worker, _ in self.channel.queue} | ({self.active["worker"]} if self.active else set()), len(self.channel.queue))
         if cleanup or time.monotonic() < self.next_discovery:
             return
         self.next_discovery = time.monotonic() + 2
@@ -172,12 +200,6 @@ class Launcher(ComponentHost):
         if document.get("operation"):
             return  # Another host tool is completing a lifecycle transaction.
         self.check_component(document)
-        workers = bindings(document, self.args.workers)
-        if workers != self.attached:
-            # Requests and their operation IDs survive the bridge restart. Also
-            # refresh during an RPC, so a vanished worker cannot stall discovery.
-            self.attach(workers)
-        self.channel.report_unavailable(worker["id"] for worker in workers)
 
     def call(self, method, body, cleanup=False):
         return self.channel.call(self.active["worker"], method, body, lambda: self.tick(cleanup), timeout=5 if cleanup else 30)
@@ -186,7 +208,7 @@ class Launcher(ComponentHost):
         if self.active is None:
             return
         active = self.active
-        # A signal can arrive after the worker commits a claim but before the
+        # A signal can arrive after the service commits a claim but before the
         # host receives its token. Repeat that exact claim to recover the token.
         if "token" not in active:
             claimed = self.call("ClaimTask", {"id": active["id"], "claimant": self.args.claimant, "claimId": active["claimId"]}, cleanup)
@@ -236,6 +258,7 @@ class Launcher(ComponentHost):
             self.save()
             completed = False
             try:
+                self.view()  # Resolve this worker's current workspace mount.
                 document = request_document(worker, claim["task"], self.topology)
                 temporary = self.directory / "request.tmp"
                 temporary.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
@@ -270,9 +293,9 @@ class Launcher(ComponentHost):
                 self.channel.skipped.add(key)
                 self.release()
                 if self.interaction:
-                    self.interaction.finished("Request skipped. It remains available to another handler.")
+                    self.interaction.finished("Request skipped. It remains pending.")
             except FormError as error:
-                self.say(f"Cannot render this form: {error} Leaving it pending for another handler.")
+                self.say(f"Cannot render this form: {error} Leaving it pending.")
                 self.channel.skipped.add(key)
                 self.release()
             if completed:
@@ -301,6 +324,8 @@ class Launcher(ComponentHost):
                 clean = False
         clean = self.cleanup_components("component.log") and clean
         self.save()
+        if self.lease:
+            self.lease.close()
         return clean
 
 
@@ -308,7 +333,12 @@ def run_handler(launcher):
     code = 0
     try:
         launcher.setup()
-        launcher.execute()
+        while True:
+            try:
+                launcher.execute()
+                break
+            except UpdateRequested as request:
+                launcher.update_component(request.event)
     except Interrupted:
         code = 130
     except (Quit, EOFError):

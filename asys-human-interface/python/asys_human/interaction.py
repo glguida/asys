@@ -34,7 +34,7 @@ class Interaction:
 
     def read(self, tick):
         while True:
-            tick()  # Discovery and RPC events continue while the human edits.
+            tick()  # Channel events continue while the human edits.
             if self.stopping.is_set():
                 raise Quit()
             try:

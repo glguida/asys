@@ -1,4 +1,4 @@
-"""Text presentation; task schemas and decisions remain owned by the worker."""
+"""Text presentation; task schemas and decisions remain owned by the Human service."""
 import math
 import os
 import select
@@ -54,7 +54,7 @@ class FormPrompt:
             self.say("Enter y or n; /skip leaves the request unanswered, /quit stops the handler.")
 
     def read(self, readline):
-        """Keep the draft for edits and for retries after worker validation."""
+        """Keep the draft for edits and for retries after service validation."""
         self.say("Use /skip to leave this request or /quit to stop. Prefix a literal slash command with another slash.")
         while True:
             self.collect(self.form.ui, readline)

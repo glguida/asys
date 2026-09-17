@@ -64,14 +64,17 @@ export class WorkflowRuntime {
       await this.continueRun(record);
       return this.getRun({ id });
     }
-    if (!TERMINAL.has(record.status)) return this.getRun({ id });
-    if (record.status !== 'failed') fail(`Cannot resume a ${record.status} run`, Code.FailedPrecondition);
     const active = this.active.get(id);
+    if (!TERMINAL.has(record.status) && active) return this.getRun({ id });
+    if (TERMINAL.has(record.status) && record.status !== 'failed') fail(`Cannot resume a ${record.status} run`, Code.FailedPrecondition);
     if (active) { await Promise.all([...active.pending]); await active.flush(); }
-    if (!record.recovery?.definition) fail(`Run ${id} has no saved failure checkpoint`, Code.FailedPrecondition);
+    // A stopped component may leave a running checkpoint before job failure is
+    // recorded. Resume that checkpoint with fresh jobs, just like a failed run.
+    const recovery = record.status === 'failed' ? record.recovery : record;
+    if (!recovery?.definition) fail(`Run ${id} has no saved failure checkpoint`, Code.FailedPrecondition);
     const compatibility = await this.checkWorkflow(record);
     if (!compatibility.compatible) fail(`Environment ${record.environment} does not define job types: ${compatibility.missingTypes.join(', ')}`, Code.FailedPrecondition);
-    const point = clone(record.recovery);
+    const point = clone(recovery);
     delete point.error;
     delete point.recovery;
     point.status = 'resuming';

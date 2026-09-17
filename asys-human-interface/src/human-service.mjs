@@ -1,45 +1,90 @@
 import { makeDirectory, prepareFile } from '../../asys-runtime/javascript/permissions.mjs';
-import { readdirSync, watch } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { Code, ConnectError } from '@connectrpc/connect';
 import Ajv from 'ajv';
-import { readJSON, writeJSON } from './files.mjs';
-import { ATTENTION_FILE } from './human-attention.mjs';
 
-const name = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const name = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u;
 const statuses = new Set(['pending', 'claimed', 'completed', 'cancelled']);
 
 export class HumanService {
   constructor(root) {
     this.root = resolve(root);
-    this.jobs = join(this.root, 'jobs');
+    makeDirectory(this.root, { recursive: true, mode: 0o700 });
+    const path = join(this.root, 'tasks.sqlite');
+    prepareFile(path);
+    this.database = new DatabaseSync(path);
+    this.database.exec('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, record TEXT NOT NULL)');
     this.subscribers = new Set();
-    const state = join(this.root, '.asys-human');
-    makeDirectory(state, { recursive: true, mode: 0o700 });
-    // Only the bridge writes human decisions. An OS-backed transaction releases
-    // ownership on process death; requests and decisions themselves are files.
-    try {
-      prepareFile(join(state, 'owner.sqlite'));
-      this.owner = new DatabaseSync(join(state, 'owner.sqlite'));
-      this.owner.exec('CREATE TABLE IF NOT EXISTS owner (id INTEGER); BEGIN EXCLUSIVE');
-      // Watch only the internal wakeup directory, never arbitrary job workspaces.
-      this.watcher = watch(state, { persistent: false }, (_event, filename) => {
-        if (filename === null || filename === ATTENTION_FILE) this.notify();
-      });
-      this.watcher.on('error', error => { this.watchError = error; this.notify(); });
-    } catch (error) {
-      this.owner?.close();
-      throw new Error(`Cannot own human-task queue: ${error.message}`, { cause: error });
+    this.waiters = new Map();
+    // In-flight RPCs do not survive a service restart. Keep their history, but
+    // do not offer questions whose worker is no longer waiting for an answer.
+    for (const id of this.ids()) {
+      const record = this.read(id);
+      if (['pending', 'claimed'].includes(record.state.status)) {
+        record.state.status = 'cancelled';
+        this.save(record);
+      }
     }
   }
   close() {
+    if (this.closed) return;
     this.closed = true;
-    this.watcher?.close();
     this.notify();
-    this.owner?.close(); this.owner = undefined;
+    this.database.close();
+  }
+  async ask({ id, inputJson, metadataJson = '{}' }, { signal } = {}) {
+    if (!name.test(id)) fail('Invalid task ID', Code.InvalidArgument);
+    let input, metadata;
+    try {
+      input = JSON.parse(inputJson);
+      metadata = JSON.parse(metadataJson || '{}');
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Human-task input must be an object');
+      if (typeof input.prompt !== 'string' || !input.prompt.trim()) throw new Error('Human-task prompt must be nonempty text');
+      if (input.title !== undefined && typeof input.title !== 'string') throw new Error('Human-task title must be text');
+      if (input.candidates !== undefined && (!Array.isArray(input.candidates) || input.candidates.some(v => typeof v !== 'string' || !v))) throw new Error('Candidates must be a list of names');
+      if (input.form !== undefined) new Ajv({ strict: true }).compile(input.form);
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Human metadata must be an object');
+    } catch (error) { fail(error.message, Code.InvalidArgument); }
+    let record = this.read(id, false);
+    const request = { input, metadata };
+    if (record && !isDeepStrictEqual(record.request, request)) fail('Task ID already has different input', Code.AlreadyExists);
+    if (!record) {
+      record = { id, request, state: { status: 'pending', createdAt: new Date().toISOString() } };
+      this.save(record);
+    }
+    let wake;
+    const changed = () => wake?.();
+    this.subscribers.add(changed);
+    signal?.addEventListener('abort', changed, { once: true });
+    this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1);
+    try {
+      for (;;) {
+        signal?.throwIfAborted();
+        if (this.closed) fail('Human service stopped', Code.Unavailable);
+        record = this.read(id);
+        if (record.state.status === 'completed') return { resultJson: JSON.stringify(record.state.result) };
+        if (record.state.status === 'cancelled') fail('Human request was cancelled', Code.FailedPrecondition);
+        await new Promise(resolve => { wake = resolve; });
+      }
+    } finally {
+      this.subscribers.delete(changed);
+      signal?.removeEventListener('abort', changed);
+      const remaining = this.waiters.get(id) - 1;
+      if (remaining) this.waiters.set(id, remaining);
+      else {
+        this.waiters.delete(id);
+        if (!this.closed) {
+          record = this.read(id);
+          if (['pending', 'claimed'].includes(record.state.status)) {
+            record.state.status = 'cancelled';
+            this.save(record);
+          }
+        }
+      }
+    }
   }
   notify() { for (const wake of this.subscribers) wake(); }
   async *watchAttention(_request, { signal } = {}) {
@@ -52,9 +97,7 @@ export class HumanService {
     try {
       for (;;) {
         signal?.throwIfAborted();
-        if (this.closed || this.watchError) fail(this.watchError
-          ? `Human attention watcher failed: ${this.watchError.message}`
-          : 'Human service stopped', Code.Unavailable);
+        if (this.closed) fail('Human service stopped', Code.Unavailable);
         if (!dirty) { await new Promise(resolve => { resume = resolve; }); continue; }
         dirty = false;
         const outstanding = new Set();
@@ -77,12 +120,7 @@ export class HumanService {
       signal?.removeEventListener('abort', wake);
     }
   }
-  ids() {
-    let entries;
-    try { entries = readdirSync(this.jobs, { withFileTypes: true }); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; entries = []; }
-    return entries.filter(e => e.isDirectory() && name.test(e.name)).map(e => e.name).sort();
-  }
+  ids() { return this.database.prepare('SELECT id FROM tasks ORDER BY id').all().map(row => row.id); }
   listTasks({ status = '', afterId = '', limit = 100 } = {}) {
     if (status && !statuses.has(status)) fail('Unknown human-task status', Code.InvalidArgument);
     limit ||= 100;
@@ -149,38 +187,25 @@ export class HumanService {
   }
   read(id, required = true) {
     if (!name.test(id)) fail('Invalid task ID', Code.InvalidArgument);
-    const submitted = readJSON(join(this.jobs, id, 'request.json'), null);
-    if (!submitted) { if (required) fail('Human task not found', Code.NotFound); return null; }
-    const execution = resolve(this.root, submitted.directory);
-    const workspace = resolve(this.root, submitted.workspace);
-    const directory = join(execution, 'human');
-    const request = readJSON(join(directory, 'request.json'), null);
-    if (!request) { if (required) fail('Human task not found', Code.NotFound); return null; }
-    const job = readJSON(join(this.jobs, id, 'state.json'));
-    const metadata = submitted.metadata;
-    const path = join(directory, 'state.json');
-    const state = readJSON(path, { status: 'pending', createdAt: job.submitted_at, updatedAt: job.updated_at });
-    return { id, request, job, metadata, execution, workspace, state, path };
+    const row = this.database.prepare('SELECT record FROM tasks WHERE id = ?').get(id);
+    if (!row) { if (required) fail('Human task not found', Code.NotFound); return null; }
+    return JSON.parse(row.record);
   }
   active(record) {
-    if (['failed', 'cancelled', 'done', 'interrupted'].includes(record.job.status)) {
-      fail('The job is no longer waiting for a decision', Code.FailedPrecondition);
-    }
+    if (record.state.status === 'cancelled') fail('The job is no longer waiting for a decision', Code.FailedPrecondition);
   }
   token(record, token) {
     if (!token || token !== record.state.token) fail('A current claim token is required', Code.PermissionDenied);
   }
   save(record) {
     record.state.updatedAt = new Date().toISOString();
-    writeJSON(record.path, record.state);
+    this.database.prepare('INSERT INTO tasks (id, record) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET record = excluded.record').run(record.id, JSON.stringify(record));
     this.notify();
   }
-  view({ id, request, job, metadata, execution, workspace, state }) {
-    const cancelled = ['failed', 'cancelled', 'interrupted'].includes(job.status);
-    const files = { directory: execution, workspace, result: join(execution, 'result.json') };
-    return { id, status: cancelled ? 'cancelled' : state.status, inputJson: JSON.stringify(request.input),
+  view({ id, request, state }) {
+    return { id, status: state.status, inputJson: JSON.stringify(request.input),
       resultJson: state.status === 'completed' ? JSON.stringify(state.result) : '', claimant: state.claimant ?? '',
-      createdAt: state.createdAt, updatedAt: state.updatedAt, metadataJson: JSON.stringify({ ...metadata, files }) };
+      createdAt: state.createdAt, updatedAt: state.updatedAt, metadataJson: JSON.stringify(request.metadata) };
   }
 }
 

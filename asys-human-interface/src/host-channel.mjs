@@ -1,16 +1,15 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
-import { fromJson, toJson } from '@bufbuild/protobuf';
+import { create, fromJson, toJson } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { Human, TaskSchema } from '@asys/human-protocol';
 import { Reader, Writer, directionRoot } from '../../asys-runtime/javascript/channel.mjs';
 
-const methods = new Map(Human.methods.filter(method => method.methodKind === 'unary').map(method => [method.name, method]));
+const methods = new Map(Human.methods.filter(method => method.methodKind === 'unary' && method.localName !== 'ask').map(method => [method.name, method]));
 
-// Workers own tasks, claims and decisions. This component owns only transport:
-// one subscription per Human input and one durable channel for the host.
-export async function serveHostChannel(workers, { root, name = 'human', signal, retryMs = 250, timeoutMs = 5000, onReady } = {}) {
+// The human service owns requests and decisions. Its terminal uses this durable
+// host channel; workers call the exported Human interface.
+export async function serveHostChannel(service, { root, name = 'human', signal, onReady } = {}) {
   const input = await new Reader(directionRoot(root, name, 'in')).ready();
   const output = await new Writer(directionRoot(root, name, 'out')).ready();
   const owner = new DatabaseSync(join(input.directory, '..', '.owner.sqlite'));
@@ -24,30 +23,12 @@ export async function serveHostChannel(workers, { root, name = 'human', signal, 
     void pending.catch(error => failed.abort(error));
     return pending;
   };
-  const context = () => ({ signal: stopping, timeoutMs });
+  const context = () => ({ signal: stopping });
 
-  async function watch(worker, client) {
-    let unavailable = false, delay = retryMs;
-    while (!stopping.aborted) {
-      try {
-        for await (const { taskId } of client.watchAttention({}, { signal: stopping })) {
-          let task;
-          try { ({ task } = await client.getTask({ id: taskId }, context())); }
-          catch (error) { if (error.code === Code.NotFound) continue; throw error; }
-          if (unavailable) await send('worker.available', { worker });
-          unavailable = false; delay = retryMs;
-          if (task && ['pending', 'claimed'].includes(task.status)) {
-            await send('attention', { worker, task: toJson(TaskSchema, task) });
-          }
-        }
-        if (!stopping.aborted) throw new ConnectError('Human subscription ended', Code.Unavailable);
-      } catch (error) {
-        if (stopping.aborted) return;
-        if (!unavailable) await send('worker.unavailable', { worker, message: error.message });
-        unavailable = true;
-        await setTimeout(delay, undefined, { signal: stopping });
-        delay = Math.min(delay * 2, 5000);
-      }
+  async function watch() {
+    for await (const { taskId } of service.watchAttention({}, context())) {
+      const { task } = service.getTask({ id: taskId });
+      await send('attention', { worker: JSON.parse(task.metadataJson).component ?? '', task: toJson(TaskSchema, create(TaskSchema, task)) });
     }
   }
 
@@ -55,25 +36,21 @@ export async function serveHostChannel(workers, { root, name = 'human', signal, 
     const data = event.data;
     if (event.type !== 'request') throw new ConnectError('Expected a request event', Code.InvalidArgument);
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new ConnectError('Request data must be an object', Code.InvalidArgument);
-    const client = workers.get(data.worker);
-    if (!client) throw new ConnectError('Unknown worker Human interface', Code.NotFound);
     const method = methods.get(data.method);
     if (!method) throw new ConnectError('Unknown Human method (attention is subscribed automatically)', Code.Unimplemented);
     let body;
     try { body = fromJson(method.input, data.body ?? {}); }
     catch (error) { throw new ConnectError(error.message, Code.InvalidArgument); }
-    return toJson(method.output, await client[method.localName](body, context()));
+    return toJson(method.output, create(method.output, await service[method.localName](body, context())));
   }
 
   let subscriptions = [];
   try {
-    await send('ready', { workers: [...workers.keys()] });
+    await send('ready', {});
     onReady?.();
-    subscriptions = [...workers].map(([worker, client]) => {
-      const running = watch(worker, client);
-      void running.catch(error => { if (!stopping.aborted) failed.abort(error); });
-      return running;
-    });
+    const watching = watch();
+    void watching.catch(error => { if (!stopping.aborted) failed.abort(error); });
+    subscriptions = [watching];
     for await (const event of input.follow(undefined, { signal: stopping })) {
       let reply;
       try { reply = { type: 'result', data: { request: event.sequence, result: await request(event) } }; }

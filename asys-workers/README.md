@@ -189,36 +189,23 @@ optional. They do not need Pi or the agent completion format.
 
 `asys-human` accepts an object with required `prompt` and optional `title`,
 `context`, `candidates`, `form` (JSON Schema draft-07), and `uischema` (JSON Forms).
-The completed human answer becomes its job result. The program waits on files
-under `JOB/human/`; the Human service inside the same workers component reads
-and writes those files.
+The completed human answer becomes its job result.
 
-An environment declaring a `human` output starts that service. A frontend
-component connects through dcomp and subscribes to `WatchAttention`. A new
-question or released claim pushes a task ID; the frontend fetches it through
-`GetTask`, presents it, claims it with `ClaimTask`, and submits the answer through
-`CompleteTask`. `ReleaseTask` returns a claim to the board. Stable claim and
-completion IDs make retries idempotent. Claims and decisions survive service
-restarts. A subscription begins with outstanding tasks so reconnecting does not
-lose questions. Cancellation withdraws the task and rejects late answers.
+The environment declares `input asys.human.v1.Human human`. Launchers connect
+it to `@human_endpoint` by default; `-L human=COMPONENT.OUTPUT` selects a specific
+service. `asys-human` calls `Ask` through this dcomp input and waits for the answer.
+It does not run a server or share job files with the Human service. Cancellation
+withdraws the request; a service or transport failure fails the job.
 
-`Task.metadataJson` preserves caller metadata and adds `files`:
+The request metadata preserves caller metadata and includes the originating
+`component`, `job_id`, and `files.workspace` (the worker's actual workspace path).
+The terminal resolves that path through dcomp bind metadata to show the host
+project directory. Job records and scratch files are not review locations.
 
-```json
-{
-  "directory": "/var/lib/asys/jobs/review",
-  "workspace": "/var/lib/asys/workspace",
-  "result": "/var/lib/asys/jobs/review/result.json"
-}
-```
-
-These are worker paths. Host frontends resolve them through dcomp bind metadata.
-Explicit attachments in the question can be relative to the workspace. This
-metadata advertises locations; human questions and answers still cross the
-component boundary through the typed Human interface.
-
-[asys-human-interface](../asys-human-interface/README.md) provides the frontend
-component and host terminal tools. It runs independently of the workflow launcher.
+[`asys-human-prompt`](../asys-human-interface/README.md) provides the service and
+terminal. Start it to bind `@human_endpoint`, or use `asys-bpmn run --human` to
+create a handler dedicated to that run. The service validates the answer against
+the task's JSON Schema before returning it to the worker.
 
 ## Development
 

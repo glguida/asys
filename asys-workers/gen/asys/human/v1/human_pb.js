@@ -8,101 +8,116 @@ import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2
  * Describes the file asys/human/v1/human.proto.
  */
 export const file_asys_human_v1_human = /*@__PURE__*/
-  fileDesc("Chlhc3lzL2h1bWFuL3YxL2h1bWFuLnByb3RvEg1hc3lzLmh1bWFuLnYxIpwBCgRUYXNrEgoKAmlkGAEgASgJEg4KBnN0YXR1cxgCIAEoCRISCgppbnB1dF9qc29uGAMgASgJEhMKC3Jlc3VsdF9qc29uGAQgASgJEhAKCGNsYWltYW50GAUgASgJEhIKCmNyZWF0ZWRfYXQYBiABKAkSEgoKdXBkYXRlZF9hdBgHIAEoCRIVCg1tZXRhZGF0YV9qc29uGAggASgJIkMKEExpc3RUYXNrc1JlcXVlc3QSDgoGc3RhdHVzGAEgASgJEhAKCGFmdGVyX2lkGAIgASgJEg0KBWxpbWl0GAMgASgNIk4KEUxpc3RUYXNrc1Jlc3BvbnNlEiIKBXRhc2tzGAEgAygLMhMuYXN5cy5odW1hbi52MS5UYXNrEhUKDW5leHRfYWZ0ZXJfaWQYAiABKAkiHAoOR2V0VGFza1JlcXVlc3QSCgoCaWQYASABKAkiNAoPR2V0VGFza1Jlc3BvbnNlEiEKBHRhc2sYASABKAsyEy5hc3lzLmh1bWFuLnYxLlRhc2siQgoQQ2xhaW1UYXNrUmVxdWVzdBIKCgJpZBgBIAEoCRIQCghjbGFpbWFudBgCIAEoCRIQCghjbGFpbV9pZBgDIAEoCSJFChFDbGFpbVRhc2tSZXNwb25zZRIhCgR0YXNrGAEgASgLMhMuYXN5cy5odW1hbi52MS5UYXNrEg0KBXRva2VuGAIgASgJIi8KElJlbGVhc2VUYXNrUmVxdWVzdBIKCgJpZBgBIAEoCRINCgV0b2tlbhgCIAEoCSI4ChNSZWxlYXNlVGFza1Jlc3BvbnNlEiEKBHRhc2sYASABKAsyEy5hc3lzLmh1bWFuLnYxLlRhc2siXAoTQ29tcGxldGVUYXNrUmVxdWVzdBIKCgJpZBgBIAEoCRINCgV0b2tlbhgCIAEoCRIVCg1jb21wbGV0aW9uX2lkGAMgASgJEhMKC3Jlc3VsdF9qc29uGAQgASgJIjkKFENvbXBsZXRlVGFza1Jlc3BvbnNlEiEKBHRhc2sYASABKAsyEy5hc3lzLmh1bWFuLnYxLlRhc2siFwoVV2F0Y2hBdHRlbnRpb25SZXF1ZXN0IikKFldhdGNoQXR0ZW50aW9uUmVzcG9uc2USDwoHdGFza19pZBgBIAEoCTKBBAoFSHVtYW4STgoJTGlzdFRhc2tzEh8uYXN5cy5odW1hbi52MS5MaXN0VGFza3NSZXF1ZXN0GiAuYXN5cy5odW1hbi52MS5MaXN0VGFza3NSZXNwb25zZRJICgdHZXRUYXNrEh0uYXN5cy5odW1hbi52MS5HZXRUYXNrUmVxdWVzdBoeLmFzeXMuaHVtYW4udjEuR2V0VGFza1Jlc3BvbnNlEk4KCUNsYWltVGFzaxIfLmFzeXMuaHVtYW4udjEuQ2xhaW1UYXNrUmVxdWVzdBogLmFzeXMuaHVtYW4udjEuQ2xhaW1UYXNrUmVzcG9uc2USVAoLUmVsZWFzZVRhc2sSIS5hc3lzLmh1bWFuLnYxLlJlbGVhc2VUYXNrUmVxdWVzdBoiLmFzeXMuaHVtYW4udjEuUmVsZWFzZVRhc2tSZXNwb25zZRJXCgxDb21wbGV0ZVRhc2sSIi5hc3lzLmh1bWFuLnYxLkNvbXBsZXRlVGFza1JlcXVlc3QaIy5hc3lzLmh1bWFuLnYxLkNvbXBsZXRlVGFza1Jlc3BvbnNlEl8KDldhdGNoQXR0ZW50aW9uEiQuYXN5cy5odW1hbi52MS5XYXRjaEF0dGVudGlvblJlcXVlc3QaJS5hc3lzLmh1bWFuLnYxLldhdGNoQXR0ZW50aW9uUmVzcG9uc2UwAWIGcHJvdG8z");
+  fileDesc("Chlhc3lzL2h1bWFuL3YxL2h1bWFuLnByb3RvEg1hc3lzLmh1bWFuLnYxIkMKCkFza1JlcXVlc3QSCgoCaWQYASABKAkSEgoKaW5wdXRfanNvbhgCIAEoCRIVCg1tZXRhZGF0YV9qc29uGAMgASgJIiIKC0Fza1Jlc3BvbnNlEhMKC3Jlc3VsdF9qc29uGAEgASgJIpwBCgRUYXNrEgoKAmlkGAEgASgJEg4KBnN0YXR1cxgCIAEoCRISCgppbnB1dF9qc29uGAMgASgJEhMKC3Jlc3VsdF9qc29uGAQgASgJEhAKCGNsYWltYW50GAUgASgJEhIKCmNyZWF0ZWRfYXQYBiABKAkSEgoKdXBkYXRlZF9hdBgHIAEoCRIVCg1tZXRhZGF0YV9qc29uGAggASgJIkMKEExpc3RUYXNrc1JlcXVlc3QSDgoGc3RhdHVzGAEgASgJEhAKCGFmdGVyX2lkGAIgASgJEg0KBWxpbWl0GAMgASgNIk4KEUxpc3RUYXNrc1Jlc3BvbnNlEiIKBXRhc2tzGAEgAygLMhMuYXN5cy5odW1hbi52MS5UYXNrEhUKDW5leHRfYWZ0ZXJfaWQYAiABKAkiHAoOR2V0VGFza1JlcXVlc3QSCgoCaWQYASABKAkiNAoPR2V0VGFza1Jlc3BvbnNlEiEKBHRhc2sYASABKAsyEy5hc3lzLmh1bWFuLnYxLlRhc2siQgoQQ2xhaW1UYXNrUmVxdWVzdBIKCgJpZBgBIAEoCRIQCghjbGFpbWFudBgCIAEoCRIQCghjbGFpbV9pZBgDIAEoCSJFChFDbGFpbVRhc2tSZXNwb25zZRIhCgR0YXNrGAEgASgLMhMuYXN5cy5odW1hbi52MS5UYXNrEg0KBXRva2VuGAIgASgJIi8KElJlbGVhc2VUYXNrUmVxdWVzdBIKCgJpZBgBIAEoCRINCgV0b2tlbhgCIAEoCSI4ChNSZWxlYXNlVGFza1Jlc3BvbnNlEiEKBHRhc2sYASABKAsyEy5hc3lzLmh1bWFuLnYxLlRhc2siXAoTQ29tcGxldGVUYXNrUmVxdWVzdBIKCgJpZBgBIAEoCRINCgV0b2tlbhgCIAEoCRIVCg1jb21wbGV0aW9uX2lkGAMgASgJEhMKC3Jlc3VsdF9qc29uGAQgASgJIjkKFENvbXBsZXRlVGFza1Jlc3BvbnNlEiEKBHRhc2sYASABKAsyEy5hc3lzLmh1bWFuLnYxLlRhc2siFwoVV2F0Y2hBdHRlbnRpb25SZXF1ZXN0IikKFldhdGNoQXR0ZW50aW9uUmVzcG9uc2USDwoHdGFza19pZBgBIAEoCTK/BAoFSHVtYW4SPAoDQXNrEhkuYXN5cy5odW1hbi52MS5Bc2tSZXF1ZXN0GhouYXN5cy5odW1hbi52MS5Bc2tSZXNwb25zZRJOCglMaXN0VGFza3MSHy5hc3lzLmh1bWFuLnYxLkxpc3RUYXNrc1JlcXVlc3QaIC5hc3lzLmh1bWFuLnYxLkxpc3RUYXNrc1Jlc3BvbnNlEkgKB0dldFRhc2sSHS5hc3lzLmh1bWFuLnYxLkdldFRhc2tSZXF1ZXN0Gh4uYXN5cy5odW1hbi52MS5HZXRUYXNrUmVzcG9uc2USTgoJQ2xhaW1UYXNrEh8uYXN5cy5odW1hbi52MS5DbGFpbVRhc2tSZXF1ZXN0GiAuYXN5cy5odW1hbi52MS5DbGFpbVRhc2tSZXNwb25zZRJUCgtSZWxlYXNlVGFzaxIhLmFzeXMuaHVtYW4udjEuUmVsZWFzZVRhc2tSZXF1ZXN0GiIuYXN5cy5odW1hbi52MS5SZWxlYXNlVGFza1Jlc3BvbnNlElcKDENvbXBsZXRlVGFzaxIiLmFzeXMuaHVtYW4udjEuQ29tcGxldGVUYXNrUmVxdWVzdBojLmFzeXMuaHVtYW4udjEuQ29tcGxldGVUYXNrUmVzcG9uc2USXwoOV2F0Y2hBdHRlbnRpb24SJC5hc3lzLmh1bWFuLnYxLldhdGNoQXR0ZW50aW9uUmVxdWVzdBolLmFzeXMuaHVtYW4udjEuV2F0Y2hBdHRlbnRpb25SZXNwb25zZTABYgZwcm90bzM");
+
+/**
+ * Describes the message asys.human.v1.AskRequest.
+ * Use `create(AskRequestSchema)` to create a new message.
+ */
+export const AskRequestSchema = /*@__PURE__*/
+  messageDesc(file_asys_human_v1_human, 0);
+
+/**
+ * Describes the message asys.human.v1.AskResponse.
+ * Use `create(AskResponseSchema)` to create a new message.
+ */
+export const AskResponseSchema = /*@__PURE__*/
+  messageDesc(file_asys_human_v1_human, 1);
 
 /**
  * Describes the message asys.human.v1.Task.
  * Use `create(TaskSchema)` to create a new message.
  */
 export const TaskSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 0);
+  messageDesc(file_asys_human_v1_human, 2);
 
 /**
  * Describes the message asys.human.v1.ListTasksRequest.
  * Use `create(ListTasksRequestSchema)` to create a new message.
  */
 export const ListTasksRequestSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 1);
+  messageDesc(file_asys_human_v1_human, 3);
 
 /**
  * Describes the message asys.human.v1.ListTasksResponse.
  * Use `create(ListTasksResponseSchema)` to create a new message.
  */
 export const ListTasksResponseSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 2);
+  messageDesc(file_asys_human_v1_human, 4);
 
 /**
  * Describes the message asys.human.v1.GetTaskRequest.
  * Use `create(GetTaskRequestSchema)` to create a new message.
  */
 export const GetTaskRequestSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 3);
+  messageDesc(file_asys_human_v1_human, 5);
 
 /**
  * Describes the message asys.human.v1.GetTaskResponse.
  * Use `create(GetTaskResponseSchema)` to create a new message.
  */
 export const GetTaskResponseSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 4);
+  messageDesc(file_asys_human_v1_human, 6);
 
 /**
  * Describes the message asys.human.v1.ClaimTaskRequest.
  * Use `create(ClaimTaskRequestSchema)` to create a new message.
  */
 export const ClaimTaskRequestSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 5);
+  messageDesc(file_asys_human_v1_human, 7);
 
 /**
  * Describes the message asys.human.v1.ClaimTaskResponse.
  * Use `create(ClaimTaskResponseSchema)` to create a new message.
  */
 export const ClaimTaskResponseSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 6);
+  messageDesc(file_asys_human_v1_human, 8);
 
 /**
  * Describes the message asys.human.v1.ReleaseTaskRequest.
  * Use `create(ReleaseTaskRequestSchema)` to create a new message.
  */
 export const ReleaseTaskRequestSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 7);
+  messageDesc(file_asys_human_v1_human, 9);
 
 /**
  * Describes the message asys.human.v1.ReleaseTaskResponse.
  * Use `create(ReleaseTaskResponseSchema)` to create a new message.
  */
 export const ReleaseTaskResponseSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 8);
+  messageDesc(file_asys_human_v1_human, 10);
 
 /**
  * Describes the message asys.human.v1.CompleteTaskRequest.
  * Use `create(CompleteTaskRequestSchema)` to create a new message.
  */
 export const CompleteTaskRequestSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 9);
+  messageDesc(file_asys_human_v1_human, 11);
 
 /**
  * Describes the message asys.human.v1.CompleteTaskResponse.
  * Use `create(CompleteTaskResponseSchema)` to create a new message.
  */
 export const CompleteTaskResponseSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 10);
+  messageDesc(file_asys_human_v1_human, 12);
 
 /**
  * Describes the message asys.human.v1.WatchAttentionRequest.
  * Use `create(WatchAttentionRequestSchema)` to create a new message.
  */
 export const WatchAttentionRequestSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 11);
+  messageDesc(file_asys_human_v1_human, 13);
 
 /**
  * Describes the message asys.human.v1.WatchAttentionResponse.
  * Use `create(WatchAttentionResponseSchema)` to create a new message.
  */
 export const WatchAttentionResponseSchema = /*@__PURE__*/
-  messageDesc(file_asys_human_v1_human, 12);
+  messageDesc(file_asys_human_v1_human, 14);
 
 /**
- * Human decisions for filesystem jobs. Caller identities are supplied by trusted
+ * Human decisions. Workers call Ask on their selected human service.
+ * Caller identities are supplied by trusted
  * components connected through dcomp. They are not an authentication mechanism.
  *
  * @generated from service asys.human.v1.Human

@@ -67,6 +67,33 @@ for (const hasCheckpoint of [true, false]) {
   });
 }
 
+test('resume retries an interrupted stage when the engine never recorded its failure', async t => {
+  const f = await fixture(t);
+  const release = join(f.root, 'release');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: workflow(`${programTask('before')}
+    ${programTask('interrupted', `, wait: &quot;${release}&quot;`)}${programTask('after')}
+    ${flow('one', 'before', 'interrupted')}${flow('two', 'interrupted', 'after')}`) });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId });
+  const job = await until(async () => {
+    const job = Object.values(f.runtime.record('run').jobs).find(job => job.activityId === 'interrupted');
+    return job?.status === 'submitted' && (await f.queue.state(job.id)).status === 'running' && job;
+  });
+  const before = Object.values(f.runtime.record('run').jobs).find(job => job.activityId === 'before');
+  await f.runtime.close();
+  f.runtime = new WorkflowRuntime({ store: new Store(f.state), environments: f.environments });
+  assert.equal(f.runtime.record('run').recovery, undefined);
+  await f.queue.cancel(job.id);
+  await f.queue.wait(job.id);
+  await writeFile(release, 'ready');
+  await f.runtime.resumeRun({ id: 'run' });
+  await finished(f);
+  const jobs = Object.fromEntries(Object.values(f.runtime.record('run').jobs).map(job => [job.activityId, job]));
+  assert.equal(jobs.before.id, before.id);
+  assert.notEqual(jobs.interrupted.id, job.id);
+  assert.equal(jobs.interrupted.metadata.retry_of, job.id);
+  assert.equal((await f.queue.state(job.id)).status, 'cancelled');
+});
+
 test('resume reruns the failed agent stage without rerunning its completed predecessor', async t => {
   const f = await fixture(t);
   const requests = [];

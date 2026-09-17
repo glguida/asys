@@ -59,8 +59,8 @@ They are separate containers. Each selected environment has its own queue. One
 workflow run uses one environment, including subprocesses and selected actions.
 The same workflow can run in several environments as separate runs.
 
-Pi inference uses the environment's dcomp Provider input. Human-facing components
-use its Human output. The host launcher uses a runtime filesystem channel to
+Pi inference uses the environment's dcomp Provider input. Human jobs use its
+Human input, linked to `@human_endpoint` or a selected handler. The host launcher uses a runtime filesystem channel to
 start the workflow and receive events. Applications do not open another
 component's private RPC sockets.
 
@@ -397,17 +397,18 @@ A human task uses a program too. The supplied `human` program accepts:
 </bpmn:userTask>
 ```
 
-Inside the environment, that program writes its request and waits. The Human
-service in the same container publishes attention notifications and serves
-questions over its dcomp output. A human-facing component subscribes to
-`WatchAttention`, fetches and claims the task, then submits a decision. The
-decision becomes the job result, for example `approval.approved`.
+The program calls `Ask` through the environment's Human input and waits for an
+answer. The Human service queues the question, presents it through its terminal
+handler, and validates the submitted result. That answer becomes the job result,
+for example `approval.approved`.
 
-The launcher has no human-task frontend. A task waits until an application
-connected to the Human interface answers it. The interface carries questions and
-decisions, not a general artifact download service. File previews need an
-explicit delivery mechanism; a container path in a question is not automatically
-accessible to the frontend.
+Start `asys-human-prompt` in another terminal to bind `@human_endpoint`, or add
+`--human` to `asys-bpmn run` for a handler connected only to this run. The
+worker environment declares `input asys.human.v1.Human human` in its manifest.
+The terminal shows the actual workspace, mapped from the worker's dcomp binds;
+it does not use job scratch directories as review locations. Cancelling a human
+job withdraws its request. An unavailable service fails the job and follows the
+workflow's ordinary error handling.
 
 Completing a human task with `approved: false` successfully executes the question.
 Add a gateway afterward to proceed or return to revision.

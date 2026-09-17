@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,8 @@ def main():
         dcomp = [os.environ.get("DCOMP_BINARY", "dcomp"), "--state-root", str(temp / "dcomp")]
         log = temp / "commands.log"
         processes = []
+        current_handler_root = None
+        human_image = 'asys-human-update-test:' + uuid.uuid4().hex[:10]
 
         def run(command, *args):
             result = subprocess.run(command + list(args), capture_output=True, text=True, timeout=180)
@@ -61,7 +64,7 @@ def main():
             definition = temp / name
             definition.mkdir()
             worker_image = os.environ.get("ASYS_WORKERS_IMAGE", "asys-workers:dev")
-            (definition / "component.dcomp").write_text(f"docker {worker_image}\noutput asys.human.v1.Human human\n")
+            (definition / "component.dcomp").write_text(f"docker {worker_image}\ninput asys.human.v1.Human human\n")
             (definition / "workers.json").write_text(json.dumps({"version": 1, "name": name,
                 "types": {"human": {"command": ["/opt/asys/asys-workers/tools/asys-human"]}}}))
             state = temp / f"{name}-state"
@@ -75,16 +78,19 @@ def main():
                 "--bind", f"{definition},/opt/asys/environment,ro",
                 "--bind", f"{runtime},/var/lib/asys/runtime,rw",
                 "--bind", f"{jobs},/var/lib/asys/jobs,rw",
-                "--bind", f"{workspace},/var/lib/asys/workspace,rw", system, name, str(definition))
+                "--bind", f"{workspace},/var/lib/asys/workspace,rw", "--link", "human=@human_endpoint", system, name, str(definition))
             # Store the same relative workspace reference used by real launchers.
             return HumanQueue(runtime / "environments" / name, jobs, state / "workspace")
 
         def launch(label, extra=()):
+            nonlocal current_handler_root
+            current_handler_root = temp / label / 'human'
             output = temp / f"{label}.log"
             with output.open("w") as stream:
                 process = subprocess.Popen([sys.executable, str(ROOT / "tools/asys-human-prompt"), "--system", system,
-                    "--dcomp-state-root", str(temp / "dcomp"), "--root", str(temp / label), "--claimant", "alice", *extra],
-                    stdin=subprocess.PIPE, stdout=stream, stderr=stream, text=True)
+                    "--dcomp-state-root", str(temp / "dcomp"), "--root", str(current_handler_root), "--claimant", "alice", *extra],
+                    stdin=subprocess.PIPE, stdout=stream, stderr=stream, text=True,
+                    env={**os.environ, 'ASYS_HUMAN_INTERFACE_IMAGE': human_image})
             processes.append(process)
             def contains(needle):
                 if process.poll() is not None:
@@ -93,21 +99,29 @@ def main():
             return process, output, contains
 
         def human_state(queue, id):
-            path = queue.paths(id)["directory"] / "human/state.json"
-            return json.loads(path.read_text()) if path.exists() else {"status": "pending"}
+            paths = list(current_handler_root.glob('*/runtime/tasks.sqlite'))
+            if not paths:
+                return {'status': 'pending'}
+            with sqlite3.connect(paths[0]) as database:
+                row = database.execute('SELECT record FROM tasks WHERE id = ?', (f'{queue.root.name}.{id}',)).fetchone()
+            return json.loads(row[0])['state'] if row else {'status': 'pending'}
 
         try:
+            run(['docker'], 'tag', 'asys-human-interface:dev', human_image)
+            empty = temp / 'system.dcomp'
+            empty.write_text(f'system {system}\n')
+            run(dcomp, 'up', str(empty))
+            first, first_log, first_contains = launch("first")
+            until(lambda: first_contains("Human endpoint: @human_endpoint"))
             alpha = add_worker("alpha")
             alpha_id = components()["alpha"]["status"]["container_id"]
-            first, first_log, first_contains = launch("first")
-            until(lambda: first_contains("Following 1 Human interface"))
             alpha.submit("human", "review", input={"title": "First question", "prompt": "Approve A?", "candidates": ["alice"],
                 "files": [{"label": "Missing job output", "path": "/var/lib/asys/jobs/review/output/board.kicad_pcb"}],
                 "context": "Full report A", "form": {"type": "object", "properties": {"approved": {"type": "boolean"}, "comments": {"type": "string"}},
                     "required": ["approved"], "additionalProperties": False}}, metadata={"environment": "alpha"})
             until(lambda: first_contains("1. Approve"))
             assert "Full report A" in first_log.read_text()
-            document = json.loads(next((temp / "first").glob("*/request.json")).read_text())
+            document = json.loads(next((temp / "first/human").glob("*/request.json")).read_text())
             files = {entry["role"]: entry for entry in document["files"]}
             assert set(files) == {"workspace"}, files
             assert files["workspace"]["path"] == str(alpha.workspace.resolve())
@@ -119,7 +133,6 @@ def main():
             assert document["uischema"]["elements"][0] == {"type": "Label", "text": "First question"}
             beta = add_worker("beta")
             beta.submit("human", "review", input={"title": "Second question", "prompt": "Approve B?", "form": {"type": "boolean"}})
-            until(lambda: first_contains("Following 2 Human interface"))
             assert "Approve B?" not in first_log.read_text(), "only one question is presented at a time"
             assert human_state(beta, "review")["status"] == "pending", "queued work must remain unclaimed"
             assert human_state(alpha, "review")["status"] == "claimed", "refresh preserves the current worker claim"
@@ -132,30 +145,91 @@ def main():
             first.stdin.write("disapprove\ny\n"); first.stdin.flush()
             assert alpha.wait("review", timeout=10)["result"] == {"approved": True, "comments": "Looks good."}
             assert beta.wait("review", timeout=10)["result"] is False
+
+            # A workflow-local terminal must not touch the shared global binding
+            # or offer its question to this handler.
+            global_before = json.loads(run(dcomp, 'view', '--json', system))['globals']
+            private_workflow = temp / 'private.bpmn'
+            private_workflow.write_text('''<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+              xmlns:asys="urn:asys:workflow:1" targetNamespace="urn:test">
+              <bpmn:process id="private" isExecutable="true"><bpmn:userTask id="approval">
+                <bpmn:extensionElements><asys:job type="human" input='= {prompt: "Private request?", form: {type: "boolean"}}'/></bpmn:extensionElements>
+              </bpmn:userTask></bpmn:process></bpmn:definitions>''')
+            private_log = temp / 'private.log'
+            with private_log.open('w') as output:
+                private = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
+                    str(private_workflow), str(ROOT.parent / 'asys-bpmn/examples/human-prompt/env/human'), '--human',
+                    '--root', str(temp / 'runs'), '--workspace', str(beta.workspace.resolve()),
+                    '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
+                    stdin=subprocess.PIPE, stdout=output, stderr=output, text=True)
+            processes.append(private)
+            def private_ready():
+                assert private.poll() is None, private_log.read_text()
+                return 'Private request?' in private_log.read_text()
+            until(private_ready, timeout=120)
+            assert 'Private request?' not in first_log.read_text()
+            assert json.loads(run(dcomp, 'view', '--json', system))['globals'] == global_before
+            private.stdin.write('approve\ny\n'); private.stdin.flush()
+            assert private.wait(timeout=60) == 0, private_log.read_text()
+            record = json.loads(next((temp / 'runs').glob('*/run.json')).read_text())
+            assert record['status'] == 'completed' and record['components_removed'], record
+            assert record['links']['human'] == record['components']['human'] + '.human'
+            assert not (set(record['components'].values()) & set(components()))
+            assert json.loads(run(dcomp, 'view', '--json', system))['globals'] == global_before
+            print('PASS: --human answers only its workflow, preserves @human_endpoint, and removes its handler on completion', flush=True)
+
+            # Install a changed service image, then refresh through its owning
+            # terminal. Worker identities and the global name must stay intact.
+            upgrade = temp / 'upgrade'
+            upgrade.mkdir()
+            (upgrade / 'Dockerfile').write_text('FROM asys-human-interface:dev\nLABEL asys.update.test=changed\n')
+            run(['docker'], 'build', '-t', human_image, str(upgrade))
+            old_components = components()
+            shared = next(name for name in old_components if name.startswith('human-interface-'))
+            update = [sys.executable, str(ROOT.parent / 'tools/asys'), 'update', '--root', str(temp / 'first')]
+            run(update)
+            refreshed = components()
+            assert refreshed[shared]['status']['container_id'] != old_components[shared]['status']['container_id']
+            for name in ('alpha', 'beta'):
+                assert refreshed[name]['status']['container_id'] == old_components[name]['status']['container_id']
+            assert json.loads(run(dcomp, 'view', '--json', system))['globals'] == global_before
+            run(update)
+            assert components()[shared]['status']['container_id'] == refreshed[shared]['status']['container_id']
+            alpha.submit('human', 'updated', input={'prompt': 'Question after update?', 'form': {'type': 'boolean'}})
+            until(lambda: first_contains('Question after update?'))
+            first.stdin.write('approve\ny\n'); first.stdin.flush()
+            assert alpha.wait('updated', timeout=10)['result'] is True
+            print('PASS: asys update refreshes the shared Human image through its owner and leaves workers and current images alone', flush=True)
+
             first.stdin.close()
             assert first.wait(timeout=30) == 0, first_log.read_text()
             current = components()
             assert set(current) == {"alpha", "beta"}
             assert current["alpha"]["status"]["container_id"] == alpha_id
             before = {name: item["status"]["container_id"] for name, item in current.items()}
-            print("PASS: one component discovers new workers, queues colliding IDs, and records approve/disapprove through Human RPC", flush=True)
+            print("PASS: workers use @human_endpoint; one service queues colliding job IDs and records approve/disapprove through Human RPC", flush=True)
 
-            alpha.submit("human", "text", input={"prompt": "Explain the decision?"})
             second, second_log, second_contains = launch("interrupt")
+            until(lambda: second_contains("Human endpoint: @human_endpoint"))
+            alpha.submit("human", "text", input={"prompt": "Explain the decision?"})
             until(lambda: second_contains("Answer: "))
             second.send_signal(signal.SIGTERM)
             assert second.wait(timeout=30) == 130, second_log.read_text()
-            assert human_state(alpha, "text")["status"] == "pending"
+            assert alpha.wait("text", timeout=10)["status"] == "failed"
             assert set(components()) == {"alpha", "beta"}
-            third, third_log, third_contains = launch("resume", ["--once", "alpha.human"])
+            third, third_log, third_contains = launch("retry", ["--once"])
+            until(lambda: third_contains("Human endpoint: @human_endpoint"))
+            alpha.submit("human", "text-retry", input={"prompt": "Explain the decision?"})
+            until(lambda: third_contains("Answer: "))
             third.stdin.write("The report needs revision.\ny\n"); third.stdin.flush()
             assert third.wait(timeout=30) == 0, third_log.read_text()
-            assert alpha.wait("text", timeout=10)["result"] == "The report needs revision."
+            assert alpha.wait("text-retry", timeout=10)["result"] == "The report needs revision."
             assert {name: item["status"]["container_id"] for name, item in components().items()} == before
-            print("PASS: interrupt releases the current claim; another invocation answers it and removes only its own component", flush=True)
+            print("PASS: stopping the human service fails a waiting job; a fresh job uses the replacement global binding", flush=True)
 
-            alpha.submit("human", "cancel-me", input={"prompt": "This question will be cancelled"})
             fourth, fourth_log, fourth_contains = launch("cancellation")
+            until(lambda: fourth_contains("Human endpoint: @human_endpoint"))
+            alpha.submit("human", "cancel-me", input={"prompt": "This question will be cancelled"})
             until(lambda: fourth_contains("Answer: "))
             alpha.cancel("cancel-me")
             assert alpha.wait("cancel-me", timeout=10)["status"] == "cancelled"
@@ -223,7 +297,7 @@ def main():
             from textual.widgets import DirectoryTree, RadioButton, Static
             from asys_human.tui_files import FilesView
 
-            beta.submit("human", "tui-reject", input=approval)
+            current_handler_root = temp / "tui"
             interaction = Interaction()
             launcher = Launcher(arguments(["--system", system, "--dcomp-state-root", str(temp / "dcomp"),
                 "--root", str(temp / "tui"), "--claimant", "alice"]), interaction)
@@ -239,7 +313,9 @@ def main():
                             await pilot.pause(0.05)
                         raise AssertionError("Timed out waiting for the terminal handler")
 
-                    await wait_for(lambda: app.document and app.document["task"] == "tui-reject" and not app.submitting)
+                    await wait_for(lambda: launcher.channel and launcher.channel.ready and any(g['name'] == 'human_endpoint' and g.get('target', {}).get('component') == launcher.name for g in launcher.topology.get('globals', [])))
+                    beta.submit("human", "tui-reject", input=approval)
+                    await wait_for(lambda: app.document and app.document["task"] == "beta.tui-reject" and not app.submitting)
                     await pilot.press("f3")
                     files = app.query_one(FilesView)
                     assert files.location == beta.workspace.resolve()
@@ -257,7 +333,7 @@ def main():
                     assert beta.wait("tui-reject", timeout=10)["result"] == {
                         "approved": False, "comments": "Rotate the connector.\nKeep its pads inside the board."}
                     beta.submit("human", "tui-release", input={"prompt": "Leave this request pending"})
-                    await wait_for(lambda: app.document and app.document["task"] == "tui-release" and not app.submitting)
+                    await wait_for(lambda: app.document and app.document["task"] == "beta.tui-release" and not app.submitting)
                     assert human_state(beta, "tui-release")["status"] == "claimed"
                     await pilot.press("ctrl+q")
                     await wait_for(lambda: not app.backend.is_alive())
@@ -268,7 +344,7 @@ def main():
                 interaction.stopping.set()
                 if app.backend:
                     app.backend.join(timeout=60)
-            assert human_state(beta, "tui-release")["status"] == "pending"
+            assert beta.wait("tui-release", timeout=10)["status"] == "failed"
             assert not launcher.owned and launcher.active is None
             assert {name: item["status"]["container_id"] for name, item in components().items()} == before
             print("PASS: full-screen TUI submits the actual PCB form, preserves worker-validation retries, follows the queue, and releases its claim on quit", flush=True)
@@ -291,6 +367,7 @@ def main():
                 if process.stdin and not process.stdin.closed:
                     process.stdin.close()
             subprocess.run(dcomp + ["down", system], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            subprocess.run(['docker', 'image', 'rm', human_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
 
 
 if __name__ == "__main__":

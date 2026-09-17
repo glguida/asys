@@ -11,6 +11,48 @@ import type { Message } from "@bufbuild/protobuf";
 export declare const file_asys_human_v1_human: GenFile;
 
 /**
+ * @generated from message asys.human.v1.AskRequest
+ */
+export declare type AskRequest = Message<"asys.human.v1.AskRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string input_json = 2;
+   */
+  inputJson: string;
+
+  /**
+   * @generated from field: string metadata_json = 3;
+   */
+  metadataJson: string;
+};
+
+/**
+ * Describes the message asys.human.v1.AskRequest.
+ * Use `create(AskRequestSchema)` to create a new message.
+ */
+export declare const AskRequestSchema: GenMessage<AskRequest>;
+
+/**
+ * @generated from message asys.human.v1.AskResponse
+ */
+export declare type AskResponse = Message<"asys.human.v1.AskResponse"> & {
+  /**
+   * @generated from field: string result_json = 1;
+   */
+  resultJson: string;
+};
+
+/**
+ * Describes the message asys.human.v1.AskResponse.
+ * Use `create(AskResponseSchema)` to create a new message.
+ */
+export declare const AskResponseSchema: GenMessage<AskResponse>;
+
+/**
  * @generated from message asys.human.v1.Task
  */
 export declare type Task = Message<"asys.human.v1.Task"> & {
@@ -304,12 +346,25 @@ export declare type WatchAttentionResponse = Message<"asys.human.v1.WatchAttenti
 export declare const WatchAttentionResponseSchema: GenMessage<WatchAttentionResponse>;
 
 /**
- * Human decisions for filesystem jobs. Caller identities are supplied by trusted
+ * Human decisions. Workers call Ask on their selected human service.
+ * Caller identities are supplied by trusted
  * components connected through dcomp. They are not an authentication mechanism.
  *
  * @generated from service asys.human.v1.Human
  */
 export declare const Human: GenService<{
+  /**
+   * Push a request and wait for its answer. The ID identifies this job's request;
+   * reuse it only with identical input. Disconnecting withdraws an unanswered
+   * request. Completed answers remain available for idempotent retrieval.
+   *
+   * @generated from rpc asys.human.v1.Human.Ask
+   */
+  ask: {
+    methodKind: "unary";
+    input: typeof AskRequestSchema;
+    output: typeof AskResponseSchema;
+  },
   /**
    * @generated from rpc asys.human.v1.Human.ListTasks
    */

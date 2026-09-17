@@ -12,6 +12,7 @@ from asys_runtime.permissions import mkdir, shared
 from .lifecycle import ComponentHost, LaunchError
 
 PROVIDER = 'cyclo.provider.v1.Provider'
+HUMAN = 'asys.human.v1.Human'
 
 
 def execution_options(parser):
@@ -67,6 +68,8 @@ class EnvironmentHost(ComponentHost):
             component = self.document('view', '--json', str(system))['components'][0]
         inputs = {entry['name']: entry['service'] for entry in component['inputs']}
         resolved = {'inference': '@inference_endpoint'} if inputs.get('inference') == PROVIDER else {}
+        if inputs.get('human') == HUMAN:
+            resolved['human'] = '@human_endpoint'
         explicit = set()
         for link in links:
             source, separator, target = link.partition('=')

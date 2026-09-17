@@ -139,7 +139,7 @@ class HumanApp(App):
                 with Vertical(id="review"):
                     yield Select([], prompt="Review sections", id="section")
                     with VerticalScroll(id="review-scroll", can_focus=True):
-                        yield Markdown("Waiting for a human request.\n\nNew workers and pending requests are discovered automatically.", id="review-body", open_links=False)
+                        yield Markdown("Waiting for a human request.\n\nWorkers send requests through the Human endpoint.", id="review-body", open_links=False)
                 yield Vertical(id="files")
             with Vertical(id="answer"):
                 yield Static("", id="answer-error", markup=False)

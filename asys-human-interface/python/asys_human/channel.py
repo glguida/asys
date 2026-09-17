@@ -24,8 +24,6 @@ class Channel:
         self.waiting = None
         self.reply = None
         self.ready = 0
-        self.unavailable = {}
-        self.reported_unavailable = set()
 
     def pump(self):
         events = self.output.read()
@@ -33,8 +31,6 @@ class Channel:
             data = event["data"]
             if event["type"] == "ready":
                 self.ready = event["sequence"]
-                self.unavailable.clear()  # The new bridge opens fresh subscriptions.
-                self.reported_unavailable.intersection_update(data["workers"])
             elif event["type"] == "attention":
                 task = data["task"]
                 key = (data["worker"], task["id"])
@@ -46,28 +42,9 @@ class Channel:
                     self.queue.pop(key, None)
             elif event["type"] in {"result", "error"} and data["request"] == self.waiting and self.reply is None:
                 self.reply = event
-            elif event["type"] == "worker.unavailable":
-                self.unavailable[data["worker"]] = data["message"]
-            elif event["type"] == "worker.available":
-                self.unavailable.pop(data["worker"], None)
-                self.reported_unavailable.discard(data["worker"])
             self.output.advance(event["sequence"])
         if events:
             self.output.prune()
-
-    def report_unavailable(self, workers):
-        """Report outages only after the launcher has refreshed dcomp topology.
-
-        Removing a finished workflow closes its worker subscriptions before
-        discovery notices the removal. That close is ordinary lifecycle activity.
-        """
-        current = set(workers)
-        self.unavailable = {worker: message for worker, message in self.unavailable.items() if worker in current}
-        self.reported_unavailable.intersection_update(current)
-        for worker in self.unavailable:
-            if worker not in self.reported_unavailable:
-                self.notify(f"Waiting for {worker} to reconnect.")
-                self.reported_unavailable.add(worker)
 
     def call(self, worker, method, body, poll, timeout=30):
         """Retry transport failures with the caller's unchanged operation IDs."""

@@ -109,6 +109,8 @@ def main():
             for directory in (jobs, workspace):
                 directory.mkdir()
                 directory.chmod(0o777)
+            human_state = temp / "human"
+            human_state.mkdir()
             system_file = temp / "system.dcomp"
             system_file.write_text(f"""system {system}
 component provider {fixture}
@@ -116,15 +118,19 @@ component workers {agent_environment}
 component dummy {ROOT / 'examples/hello/env/dummy'}
 component workflow {engine}
 component client {client}
+component human {WORKSPACE / 'asys-human-interface'}
 user provider {os.getuid()}:{os.getgid()}
 user workers {os.getuid()}:{os.getgid()}
 user dummy {os.getuid()}:{os.getgid()}
 user workflow {os.getuid()}:{os.getgid()}
 user client {os.getuid()}:{os.getgid()}
+user human {os.getuid()}:{os.getgid()}
 global inference_endpoint cyclo.provider.v1.Provider provider.provider
 link workers.inference @inference_endpoint
 link client.workflow workflow.workflow
-link client.human workers.human
+global human_endpoint asys.human.v1.Human human.human
+link workers.human @human_endpoint
+link client.human @human_endpoint
 bind workers {queue} /var/lib/asys/runtime rw
 bind workers {jobs} /var/lib/asys/jobs rw
 bind workers {workspace} /var/lib/asys/workspace rw
@@ -136,6 +142,7 @@ bind workflow {jobs} /var/lib/asys/jobs rw
 bind workflow {workspace} /var/lib/asys/workspace rw
 bind workflow {state} /var/lib/asys-bpmn rw
 bind client {host.root} /run/asys-test rw
+bind human {human_state} /var/lib/asys-human rw
 """)
             run(dcomp, "up", str(system_file))
             client_id = run(["docker"], "ps", "-q", "--filter", f"label=io.dcomp.system={system}", "--filter", "label=io.dcomp.component=client").strip()

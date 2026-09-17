@@ -192,6 +192,24 @@ class Resume(unittest.TestCase):
         result = json.loads((self.directory / "result.json").read_text())
         self.assertEqual(result, {"runId": "abc123", "status": "completed", "output": {"work": 42}, "workflowId": "saved"})
 
+    def test_component_failure_cleanup_does_not_cancel_the_workflow(self):
+        self.setup()
+        self.launcher.active = True
+        self.launcher.save_record = True
+        self.launcher.outbound = module['Reader'](self.directory / 'runtime/channels/workflow/out')
+        with patch.object(self.launcher, 'cleanup_components', return_value=True), \
+                patch.object(module['Writer'], 'send') as send:
+            self.launcher.close()
+        send.assert_not_called()
+        self.assertEqual(json.loads(self.path.read_text())['status'], 'failed')
+
+    def test_resume_starts_engine_without_recovering_old_jobs_before_the_resume_request(self):
+        self.setup()
+        with patch.object(self.launcher, 'start_workers'), patch.object(self.launcher, 'add') as add, \
+                patch.object(self.launcher, 'wait_ready'):
+            self.launcher.start_components()
+        self.assertIn('--arg=--await-resume', add.call_args.args[2])
+
 
 if __name__ == "__main__":
     unittest.main()

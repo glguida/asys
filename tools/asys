@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Initialize asys state and inspect runs, jobs, logs, and transcripts."""
+"""Initialize asys state, update shared services, and inspect runs and jobs."""
 import argparse
 from pathlib import Path
+import subprocess
 import sys
 
 executable = Path(__file__).resolve()
+if (executable.parents[1] / 'asys-runtime').is_dir():
+    sys.path.insert(0, str(executable.parents[1] / 'asys-runtime'))
 for directory in (executable.parents[1] / "share/asys/python", executable.parents[1] / "python"):
     if (directory / "asys/runs.py").is_file():
         sys.path.insert(0, str(directory))
@@ -12,7 +15,8 @@ for directory in (executable.parents[1] / "share/asys/python", executable.parent
 try:
     from asys.runs import default_root, logs, status
     from asys.monitor import top
-    from asys.state import initialize
+    from asys.state import initialize, state_root
+    from asys.update import update
 except ImportError as error:
     raise SystemExit(f"asys needs its installed Python package: {error}")
 
@@ -23,6 +27,7 @@ def arguments(argv):
                         help="saved run directory or root (default: XDG state directory/asys/runs)")
     global_args, remaining = common.parse_known_args(argv)
     commands = {"init": "Initialize state: DIR [--dcomp DIR] [--group GROUP]",
+                "update": "Refresh running shared services from the installed images",
                 "ps": "List saved runs", "status": "Show a run's jobs and errors",
                 "logs": "Show saved run output; JOB selects worker output", "top": "Monitor runs, jobs, and transcripts"}
     if not remaining or remaining[0] in {"-h", "--help"}:
@@ -33,10 +38,14 @@ def arguments(argv):
         raise SystemExit(0)
     command = remaining.pop(0)
     if command not in commands:
-        common.error(f"unknown command {command!r}; choose init, ps, status, logs, or top")
-    parser = argparse.ArgumentParser(prog=f"asys {command}", parents=[] if command == "init" else [common],
+        common.error(f"unknown command {command!r}; choose init, update, ps, status, logs, or top")
+    parser = argparse.ArgumentParser(prog=f"asys {command}", parents=[] if command in {"init", "update"} else [common],
                                      description=commands[command], allow_abbrev=False)
     parser.set_defaults(command=command, root=global_args.root or default_root(), run=None)
+    if command == "update":
+        parser.set_defaults(root=global_args.root or state_root())
+        parser.add_argument('--root', type=Path, metavar='DIRECTORY', help='asys state base (default: ASYS_STATE_ROOT or the local state directory)')
+        return parser.parse_intermixed_args(remaining)
     if command == "init":
         if global_args.root is not None:
             parser.error("init takes its state directory as DIR, without --root")
@@ -68,11 +77,11 @@ def arguments(argv):
 def main(argv=None):
     args = arguments(sys.argv[1:] if argv is None else argv)
     try:
-        {"init": initialize, "ps": status, "status": status, "logs": logs, "top": top}[args.command](args)
+        {"init": initialize, "update": update, "ps": status, "status": status, "logs": logs, "top": top}[args.command](args)
         return 0
     except (KeyboardInterrupt, BrokenPipeError):
         return 0
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 

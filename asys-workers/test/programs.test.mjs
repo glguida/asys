@@ -9,9 +9,8 @@ import { createServer } from 'node:http';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import { Provider } from '@cyclo/provider/contract';
 import { PreparedQueue as Queue } from '../../asys-runtime/test/fixtures.mjs';
-import { HumanService } from '../src/human-service.mjs';
-import { humanServer } from '../src/human-server.mjs';
-import { humanClient } from '../src/client.mjs';
+import { HumanService } from '../../asys-human-interface/src/human-service.mjs';
+import { humanServer } from '../../asys-human-interface/src/human-server.mjs';
 import { assistant, model } from './helpers.mjs';
 
 const executor = fileURLToPath(new URL('../../asys-runtime/tools/asys-runtime', import.meta.url));
@@ -338,139 +337,25 @@ for (const content of ['{invalid', 'null', '{"exception":""}', '{"exception":fal
   });
 }
 
-test('human claims and decisions survive service restarts through the Human API', { timeout: 15000 }, async t => {
+test('human jobs call their dcomp input and publish the answer into their own result file', async t => {
   const f = await fixture(t);
-  f.start();
-  let service = new HumanService(f.queue.root);
+  const service = new HumanService(join(f.root, 'human-service'));
   t.after(() => service.close());
-  let server = humanServer(service);
-  const target = await listen(t, server, join(f.root, 'human.sock'));
-  const client = humanClient('human', { DCOMP_IN_HUMAN: target });
-  const stopWatching = new AbortController();
-  t.after(() => stopWatching.abort());
-  const attention = client.watchAttention({}, { signal: stopWatching.signal })[Symbol.asyncIterator]();
-  const announced = attention.next();
-  const input = { title: 'Review', prompt: 'Approve this change?', candidates: ['alice'], form: {
-    type: 'object', properties: { approved: { type: 'boolean' } }, required: ['approved'], additionalProperties: false,
-  } };
-  await f.queue.submit('human', 'approval', { input, metadata: { subject: 'change' } });
-  assert.equal((await announced).value.taskId, 'approval');
-  stopWatching.abort();
-  await assert.rejects(attention.next(), /cancel|abort/iu);
-  assert.throws(() => new HumanService(f.queue.root), /Cannot own human-task queue/);
-  await assert.rejects(client.claimTask({ id: 'approval', claimant: 'bob', claimId: 'c0' }), /candidate/);
-  const first = await client.claimTask({ id: 'approval', claimant: 'alice', claimId: 'c1' });
-  assert.equal((await client.claimTask({ id: 'approval', claimant: 'alice', claimId: 'c1' })).token, first.token);
-  await client.releaseTask({ id: 'approval', token: first.token });
-  const claimed = await client.claimTask({ id: 'approval', claimant: 'alice', claimId: 'c2' });
-  assert.notEqual(claimed.token, first.token);
-  await assert.rejects(client.completeTask({ id: 'approval', token: claimed.token, completionId: 'd1', resultJson: '{}' }), /form/);
-  server.closeConnections();
-  await new Promise(resolve => server.close(resolve));
-  service.close();
-  service = new HumanService(f.queue.root);
-  server = humanServer(service);
-  await listen(t, server, join(f.root, 'human.sock'));
-  assert.equal((await f.queue.state('approval')).status, 'running');
-  const stopReconnected = new AbortController();
-  t.after(() => stopReconnected.abort());
-  const reconnected = client.watchAttention({}, { signal: stopReconnected.signal })[Symbol.asyncIterator]();
-  assert.equal((await reconnected.next()).value.taskId, 'approval');
-  stopReconnected.abort();
-  await assert.rejects(reconnected.next(), /cancel|abort/iu);
-  const completion = { id: 'approval', token: claimed.token, completionId: 'd1', resultJson: '{"approved":true}' };
-  assert.equal((await client.completeTask(completion)).task.status, 'completed');
-  const state = await f.queue.wait('approval', { timeoutMs: 10000 });
-  assert.equal(state.status, 'done', state.error);
-  assert.equal(state.attempt, undefined);
-  assert.deepEqual(state.result, { approved: true });
-  assert.equal((await client.completeTask(completion)).task.status, 'completed');
-  await assert.rejects(client.completeTask({ ...completion, resultJson: '{"approved":false}' }), /different completion/);
-});
-
-test('Human attention pushes to subscribers, repeats released work, and snapshots outstanding work on reconnect', { timeout: 15000 }, async t => {
-  const f = await fixture(t);
-  f.start();
-  const service = new HumanService(f.queue.root);
-  t.after(() => service.close());
-  const server = humanServer(service);
-  const target = await listen(t, server, join(f.root, 'attention.sock'));
-  const client = humanClient('human', { DCOMP_IN_HUMAN: target });
-  const controllers = [];
-  t.after(() => controllers.forEach(controller => controller.abort()));
-  function subscribe() {
-    const controller = new AbortController();
-    controllers.push(controller);
-    const stream = client.watchAttention({}, {
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
-    })[Symbol.asyncIterator]();
-    return { stream, controller };
-  }
-  const first = subscribe(), second = subscribe();
-  let next = first.stream.next();
-  const other = second.stream.next();
-  // Ensure both RPCs are already waiting before a new job publishes its request.
-  await until(() => service.subscribers.size === 2);
-  await f.queue.submit('human', 'first', { input: { prompt: 'First question?' } });
-  assert.equal((await next).value.taskId, 'first');
-  assert.equal((await other).value.taskId, 'first');
-  assert.equal(JSON.parse((await client.getTask({ id: 'first' })).task.inputJson).prompt, 'First question?');
-
-  const disconnected = second.stream.next();
-  second.controller.abort();
-  await assert.rejects(disconnected, /cancel|abort/iu);
-  await until(() => service.subscribers.size === 1);
-
-  next = first.stream.next();
-  const claimed = await client.claimTask({ id: 'first', claimant: 'alice', claimId: 'first-claim' });
-  await client.releaseTask({ id: 'first', token: claimed.token });
-  assert.equal((await next).value.taskId, 'first', 'released work needs attention again');
-  const reclaimed = await client.claimTask({ id: 'first', claimant: 'alice', claimId: 'second-claim' });
-  await client.completeTask({ id: 'first', token: reclaimed.token, completionId: 'decision', resultJson: 'true' });
-  assert.equal((await f.queue.wait('first', { timeoutMs: 5000 })).status, 'done');
-
-  next = first.stream.next();
-  await f.queue.submit('human', 'second', { input: { prompt: 'Second question?' } });
-  assert.equal((await next).value.taskId, 'second', 'claiming and completing must not repeat attention');
-  await client.claimTask({ id: 'second', claimant: 'alice', claimId: 'third-claim' });
-  first.controller.abort();
-  await assert.rejects(first.stream.next(), /cancel|abort/iu);
-  await until(() => service.subscribers.size === 0);
-
-  await f.queue.submit('human', 'third', { input: { prompt: 'Created while disconnected?' } });
-  // Subscription races with publication: either the snapshot or the wakeup must deliver it.
-  const reconnected = subscribe();
-  const outstanding = [(await reconnected.stream.next()).value.taskId, (await reconnected.stream.next()).value.taskId];
-  assert.deepEqual(outstanding.sort(), ['second', 'third'], 'reconnect includes claimed and new work, but excludes completed work');
-  const stopped = reconnected.stream.next();
-  service.close();
-  await assert.rejects(stopped, /Human service stopped/);
-  assert.equal(service.subscribers.size, 0);
-});
-
-test('Human metadata exposes caller-prepared job storage and workspace', async t => {
-  const f = await fixture(t);
-  f.start();
-  const service = new HumanService(f.queue.root);
-  t.after(() => service.close());
-  const target = await listen(t, humanServer(service), join(f.root, 'files.sock'));
-  const client = humanClient('human', { DCOMP_IN_HUMAN: target });
-  await mkdir(f.queue.workspace('review-files'), { recursive: true });
-  await writeFile(join(f.queue.workspace('review-files'), 'board.kicad_pcb'), '(kicad_pcb)');
-  await f.queue.submit('human', 'review-files', { input: { prompt: 'Review the board' }, metadata: { purpose: 'PCB review' } });
-  await until(() => service.listTasks().tasks.length);
-  const metadata = JSON.parse((await client.getTask({ id: 'review-files' })).task.metadataJson);
+  const target = await listen(t, humanServer(service), join(f.root, 'human.sock'));
+  f.start({ DCOMP_IN_HUMAN: target, DCOMP_COMPONENT_NAME: 'workers' });
+  await f.queue.submit('human', 'approval', { input: { prompt: 'Review the board', form: { type: 'boolean' } }, metadata: { purpose: 'PCB review' } });
+  const task = await until(() => service.listTasks().tasks[0]);
+  assert.equal(task.id, 'workers.approval');
+  const metadata = JSON.parse(task.metadataJson);
+  assert.equal(metadata.component, 'workers');
   assert.equal(metadata.purpose, 'PCB review');
-  const { files } = metadata;
-  assert.equal(files.directory, f.queue.executionDirectory('review-files'));
-  assert.equal(files.workspace, f.queue.workspace('review-files'));
-  assert.equal(files.result, join(files.directory, 'result.json'));
-  assert.equal(await readFile(join(files.workspace, 'board.kicad_pcb'), 'utf8'), '(kicad_pcb)');
-  await writeFile(join(files.directory, 'report.md'), 'Move the connector.');
-  const { token } = await client.claimTask({ id: 'review-files', claimant: 'alice', claimId: 'claim-files' });
-  await client.completeTask({ id: 'review-files', token, completionId: 'reviewed-files', resultJson: '{"approved":false}' });
-  assert.equal((await f.queue.wait('review-files', { timeoutMs: 5000 })).status, 'done');
-  assert.deepEqual(JSON.parse(await readFile(files.result, 'utf8')), { approved: false });
+  assert.deepEqual(metadata.files, { workspace: f.queue.workspace('approval') });
+  const { token } = service.claimTask({ id: task.id, claimant: 'alice', claimId: 'claim' });
+  service.completeTask({ id: task.id, token, completionId: 'answer', resultJson: 'false' });
+  const outcome = await f.queue.wait('approval', { timeoutMs: 5000 });
+  assert.equal(outcome.status, 'done', outcome.error);
+  assert.equal(outcome.result, false);
+  assert.equal(JSON.parse(await readFile(join(f.queue.executionDirectory('approval'), 'result.json'), 'utf8')), false);
 });
 
 test('program jobs execute a supplied command, preserve input, and propagate failures', async t => {
@@ -489,14 +374,15 @@ test('program jobs execute a supplied command, preserve input, and propagate fai
 
 test('cancelling a job withdraws its human decision and rejects late completion', async t => {
   const f = await fixture(t);
-  f.start();
-  const service = new HumanService(f.queue.root);
+  const service = new HumanService(join(f.root, 'human-service'));
   t.after(() => service.close());
+  const target = await listen(t, humanServer(service), join(f.root, 'cancel.sock'));
+  f.start({ DCOMP_IN_HUMAN: target, DCOMP_COMPONENT_NAME: 'workers' });
   await f.queue.submit('human', 'cancelled', { input: { prompt: 'Wait for me' } });
-  await until(() => service.listTasks().tasks.length);
-  const { token } = service.claimTask({ id: 'cancelled', claimant: 'alice', claimId: 'claim' });
+  const task = await until(() => service.listTasks().tasks[0]);
+  const { token } = service.claimTask({ id: task.id, claimant: 'alice', claimId: 'claim' });
   await f.queue.cancel('cancelled');
   assert.equal((await f.queue.wait('cancelled', { timeoutMs: 5000 })).status, 'cancelled');
-  assert.equal(service.getTask({ id: 'cancelled' }).task.status, 'cancelled');
-  assert.throws(() => service.completeTask({ id: 'cancelled', token, completionId: 'decision', resultJson: 'true' }), /no longer waiting/);
+  await until(() => service.getTask({ id: task.id }).task.status === 'cancelled');
+  assert.throws(() => service.completeTask({ id: task.id, token, completionId: 'decision', resultJson: 'true' }), /no longer waiting/);
 });

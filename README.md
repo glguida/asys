@@ -1,4 +1,4 @@
-<img src="docs/assets/banner.svg" alt="asys — Agentic systems, composed. Version 0.1.0. MIT. Linux." width="100%">
+<img src="docs/assets/banner.svg" alt="asys — Agentic systems, composed. Version 0.1.1. MIT. Linux." width="100%">
 
 asys runs specialized agents, programs, and human tasks against real project
 files. Give one agent an assignment, or coordinate a workflow that creates,
@@ -160,8 +160,12 @@ same host state:
 asys-human-prompt --system asys
 ```
 
-It discovers workers' Human interfaces and presents their questions for a
-person to answer. See the [human handler guide](asys-human-interface/README.md).
+It binds `@human_endpoint`, which workers use for human requests. Add `--human`
+to `asys-bpmn run` or `resume` to answer only that run's requests in its terminal. See the [human handler guide](asys-human-interface/README.md).
+
+After installing a new version, run `asys update` to refresh shared services in
+the current asys state. Running workflow and worker containers stay in place.
+See [updating an installation](INSTALL.md#update-an-existing-installation) for details.
 
 ## 04 · Share a machine
 
@@ -235,12 +239,11 @@ The full command is `asys init DIR [--dcomp DIR] [--group GROUP]`; it creates
 | [asys-workers](asys-workers/README.md) | Define worker environments, agent memory, skills, tools, and execution behavior. |
 | [asys-runtime](asys-runtime/README.md) | Execute filesystem jobs, supervise processes, and record their outcomes. |
 | [asys-inference](asys-inference/README.md) | Build and manage the providers behind `@inference_endpoint`. |
-| [asys-human-interface](asys-human-interface/README.md) | Connect Human interfaces to a host handler for questions and decisions. |
+| [asys-human-interface](asys-human-interface/README.md) | Receive human requests at @human_endpoint and present them in a terminal. |
 
 The [workflow and environment authoring guide](asys-bpmn/AUTHORING.md) covers
 project layout, job types, prompts, workspaces, branching, parallelism, human
-decisions, and recovery. The [release notes](CHANGELOG.md) describe version
-0.1.0 and its known limitation.
+decisions, and recovery. The [release notes](CHANGELOG.md) describe the changes in each version.
 
 The [visual style guide](docs/styleguide.pdf) defines the graphic language;
 [SVG assets](docs/assets) provide its marks, rails, and section graphics.

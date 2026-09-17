@@ -12,11 +12,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   let state = '/var/lib/asys-bpmn';
   let runtimeRoot = '/var/lib/asys/runtime';
   let hostChannel;
+  let awaitResume = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--state' && argv[i + 1]) state = resolve(argv[++i]);
     else if (argv[i] === '--root' && argv[i + 1]) runtimeRoot = resolve(argv[++i]);
     else if (argv[i] === '--host-channel' && argv[i + 1]) hostChannel = argv[++i];
-    else throw new Error('Usage: workflow component [--state DIRECTORY] [--root DIRECTORY] [--host-channel NAME]');
+    else if (argv[i] === '--await-resume') awaitResume = true;
+    else throw new Error('Usage: workflow component [--state DIRECTORY] [--root DIRECTORY] [--host-channel NAME] [--await-resume]');
   }
   outputTarget('workflow', env);
   const shutdown = new AbortController();
@@ -28,7 +30,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   let runtime, server, output, channel, stopHealth;
   try {
     runtime = new WorkflowRuntime({ store: new Store(state), environments: new Environments(runtimeRoot) });
-    await runtime.recover();
+    // An explicit resume must replace unfinished jobs before execution starts.
+    if (!awaitResume) await runtime.recover();
     server = workflowServer(runtime, { signal: shutdown.signal });
     const failure = new Promise((_, reject) => server.once('error', reject));
     output = serveOutput(server, 'workflow', { env, signal: shutdown.signal });

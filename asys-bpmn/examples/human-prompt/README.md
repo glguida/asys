@@ -17,7 +17,7 @@ The demo requires the `asys-workers:dev`, `asys-bpmn:dev`, and
 repository root if they are not already available. The launcher builds this
 example's small worker environment automatically.
 
-In the first terminal, run:
+For one terminal, run `./run --human`. To use a shared handler, in the first terminal run:
 
 ```sh
 ./prompt
@@ -31,8 +31,7 @@ In a second terminal in the same directory, run:
 
 The helpers use the host tools from this checkout and keep the demo's dcomp,
 workflow, and handler state under `.asys/`. They connect to the separate
-`human-prompt-demo` system. The prompt can start before the workflow; it picks
-up the new worker automatically.
+`human-prompt-demo` system. The prompt can start before the workflow; workers connect through `@human_endpoint`.
 
 For the review, type `approve` or `disapprove` (or its displayed number), then
 enter optional comment lines and finish with `/done`. Enter `/done` immediately
@@ -59,5 +58,4 @@ rejected at the prompt and can be corrected before submission.
 
 Open [workflow.bpmn](workflow.bpmn) in a BPMN editor to see the parallel branches
 and join. The environment's [workers.json](env/human/workers.json) declares only
-the human runner, and its [component.dcomp](env/human/component.dcomp) exposes the
-existing Human interface.
+the human runner, and its [component.dcomp](env/human/component.dcomp) declares a Human input.

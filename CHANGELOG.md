@@ -1,5 +1,17 @@
 # Release notes
 
+## 0.1.1
+
+- `asys update` refreshes running inference services and the shared Human service
+  from the installed images. Workflow and worker containers remain running.
+- Resume preserves the last checkpoint when a worker or engine stops before a
+  job failure is recorded. It retries unfinished stages with fresh jobs.
+- `asys-bpmn run --human` and `resume --human` create a terminal handler connected
+  only to that run. The handler is removed when the run ends.
+- Workers send human requests to `@human_endpoint` by default.
+  `asys-human-prompt` exports and binds that service. Environment manifests now
+  declare `input asys.human.v1.Human human`.
+
 ## 0.1.0
 
 Initial release of asys for running agentic systems as dcomp components on a
@@ -23,10 +35,3 @@ Linux host with a local Docker Engine. Requires dcomp 0.3.1; see
   channel to `asys-human-prompt`.
 - Workflow and worker containers run with the invoking user's UID/GID. New
   starts and resumes use current images; running containers retain their images.
-
-### Known limitation
-
-If the host launcher detects a component failure before the BPMN engine has
-processed the job failure, cleanup can record the run as cancelled without a
-resumable failure checkpoint. Such a run cannot be resumed with
-`asys-bpmn resume`. Normal job failures use the BPMN error and resume paths.

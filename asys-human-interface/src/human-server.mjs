@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
-import { Human } from '../gen/asys/human/v1/human_pb.js';
+import { Human } from '@asys/human-protocol';
 
 export function humanServer(service, { signal } = {}) {
   const implementation = Object.fromEntries(Human.methods.map(method => [method.localName, service[method.localName].bind(service)]));

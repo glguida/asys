@@ -148,11 +148,13 @@ port is published and no token exists; the run directory's permissions are the
 authorization. The channel path is printed and saved in `run.json`, so another
 host process can send `cancel` or `message` requests, or follow the same events,
 while the command waits. Internal dcomp sockets remain component endpoints.
-Human-facing applications subscribe to `WatchAttention` on the worker component's
-Human interface, then fetch questions and submit answers through that interface.
-Run [`asys-human-prompt`](../asys-human-interface/README.md) in another terminal
-for a queued text interface. It owns a separate component that connects to the
-workers' Human outputs and exchanges questions and answers over one host channel.
+Workers send human requests through their `human` input, connected by default
+to `@human_endpoint`. Start [`asys-human-prompt`](../asys-human-interface/README.md)
+in another terminal to publish this shared service. Alternatively, add `--human`
+to `run` or `resume`: the launcher creates a terminal handler for this run and
+links its workers directly to it, leaving the shared global untouched. The
+handler closes with the run. While it owns the terminal, read workflow progress
+with `asys logs RUN` or `asys top`.
 
 The shared channel directories and their files allow different host and
 container user IDs; the enclosing run directory stays private to the host
@@ -169,10 +171,11 @@ flowchart LR
     Runtime[asys-runtime] --> Program[Program and arguments]
     Runtime --> Pi[Pi SDK program]
     Runtime --> Human[Human-task program]
-    Human <-->|internal request and decision files| Service[Human interface service]
   end
   Pi -->|Provider interface| Endpoint["@inference_endpoint"]
-  UI[Human-facing component] <-->|dcomp Human: attention and decisions| Service
+  Human -->|Human Ask| HumanEndpoint["@human_endpoint or run handler"]
+  HumanEndpoint --> Service[Human service component]
+  Service <-->|host channel| UI[Terminal handler]
 ```
 
 The workflow component owns its BPMN definitions, run checkpoints, and event log
@@ -208,10 +211,11 @@ and explicitly cancelled runs cannot be resumed.
 Installing updates leaves running containers alone; the new images take effect
 at the next start or resume.
 
-Resume requires the failure checkpoint saved before the engine handles an
-unhandled job error. It restores that control state directly. If the checkpoint
-is missing, the request is rejected without executing jobs. Engine
-versions must match the saved state.
+Resume uses the failure checkpoint saved before an unhandled job error, or
+the last execution checkpoint if a component stopped before the error was
+recorded. It creates fresh jobs for unfinished stages before execution resumes.
+Explicit cancellation is separate and cannot be resumed. Engine versions must
+match the saved state.
 
 Recovery belongs to the BPMN runner. Use `asys status`, `asys logs` and `asys top`
 to observe the same run ID while it continues.
@@ -416,8 +420,7 @@ Different input or a different environment under an existing run ID is rejected.
 
 The following code runs in a client component with a
 `asys.workflow.v1.Workflow` input named `workflow`, wired to the workflow
-component's output. Human-facing applications likewise consume the selected
-environment's Human interface through their own component input.
+component's output. Workers consume the selected Human service through their `human` input.
 
 ```js
 import { readFile } from 'node:fs/promises';

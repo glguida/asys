@@ -27,6 +27,7 @@ try:
     from asys.runs import default_root
     from asys.lifecycle import LaunchError, Interrupted
     from asys.execution import EnvironmentHost, execution_options, prepare_run
+    from asys.human import HumanHandler
     from asys_bpmn.runs import Runs, component_names, workflow_name
     from asys_bpmn.journal import WorkflowHistory, agent_notices
 except ImportError as error:
@@ -70,6 +71,7 @@ def arguments(argv):
         allow_abbrev=False,
     )
     parser.set_defaults(command=command, root=global_args.root)
+    parser.add_argument("--human", action="store_true", help="answer this run's human requests in the current terminal")
     if command == "resume":
         parser.add_argument("run", metavar="RUN", help="saved run ID, unique prefix, or state directory")
         return parser.parse_intermixed_args(remaining)
@@ -91,6 +93,8 @@ class Launcher(EnvironmentHost):
         self.record = {}
         self.lease = None
         self.save_record = args.command != "resume"
+        self.human = None
+        self.console_errors = []
 
     def say(self, message):
         if self.directory is not None:
@@ -99,7 +103,10 @@ class Launcher(EnvironmentHost):
                     print(message, file=log)
             except OSError as error:
                 print(f"Could not save run log: {error}", file=sys.stderr)
-        print(message, file=sys.stderr, flush=True)
+        if self.human is None or self.human.process is None or self.human.process.poll() is not None:
+            print(message, file=sys.stderr, flush=True)
+        elif message.startswith('error:'):
+            self.console_errors.append(message)
 
     def snapshot(self):
         if not self.save_record:
@@ -120,6 +127,8 @@ class Launcher(EnvironmentHost):
         self.xml = workflow.read_text()
         display_name = workflow_name(self.xml, workflow, args.name)
         if args.input == "-":
+            if args.human:
+                raise LaunchError('Use --input FILE with --human; the terminal is needed for human answers')
             self.say("Reading workflow request from stdin")
         self.variables = {}
         if args.input:
@@ -142,7 +151,7 @@ class Launcher(EnvironmentHost):
                        "dcomp": self.dcomp, "status": "starting", "channel": str(self.channel)}
         self.snapshot()
         self.say(f"Run {self.id}\nState: {self.directory}")
-        self.prepare_environment(environment, args.link)
+        self.prepare_environment(environment, self.human_links(args.link))
         engine_id = self.engine_image()
         (self.directory / "engine/component.dcomp").write_text(f"docker {engine_id}\noutput {SERVICE} workflow\n")
         self.snapshot()
@@ -197,14 +206,39 @@ class Launcher(EnvironmentHost):
             raise LaunchError(f"Cannot refresh environment source: {environment} is unavailable")
         if Environment(environment).name != self.record['environment']:
             raise LaunchError('The saved workflow requires the original environment name')
-        self.prepare_environment(environment, [f"{source}={target}" for source, target in self.record['links'].items()])
+        links = dict(self.record['links'])
+        previous = self.names.pop('human', None)
+        if previous and links.get('human') == f'{previous}.human':
+            del links['human']
+        self.prepare_environment(environment, self.human_links([f"{source}={target}" for source, target in links.items()]))
+
+    def human_links(self, links):
+        if not self.args.human:
+            return links
+        name = self.names['workers'].replace('-workers-', '-human-')
+        self.names['human'] = name
+        return [link for link in links if not link.startswith('human=')] + [f'human={name}.human']
+
+    def stop_human(self):
+        if self.human is None:
+            return True
+        handler, self.human = self.human, None
+        try:
+            return handler.close()
+        finally:
+            for message in self.console_errors:
+                print(message, file=sys.stderr, flush=True)
+            self.console_errors.clear()
 
     def start_components(self):
+        if self.args.human:
+            self.human = HumanHandler(self, self.names['human'])
+            self.human.start()
         self.start_workers()
         self.add("engine", "engine", self.execution_mounts() + [
             "--bind", f"{self.directory / 'workflow'},/var/lib/asys-bpmn,rw",
             "--arg=--host-channel", f"--arg={CHANNEL}",
-        ])
+        ] + (["--arg=--await-resume"] if self.args.command == "resume" else []))
         self.wait_ready()
         self.snapshot()
         self.say(f"Workflow channel: {self.channel}")
@@ -290,6 +324,8 @@ class Launcher(EnvironmentHost):
                         events_file.flush()
                         self.outbound.advance(event["sequence"])
                         run = self.finish(event)
+                        if not self.stop_human():
+                            raise LaunchError('Human handler cleanup failed')
                         if run["status"] != "completed":
                             raise LaunchError(run.get("error") or f"Workflow {run['status']}")
                         print(json.dumps(run.get("output", {}), indent=2, ensure_ascii=False))
@@ -299,6 +335,8 @@ class Launcher(EnvironmentHost):
                 if events:
                     self.outbound.advance(after)
                 if time.monotonic() >= next_health_check:
+                    if self.human:
+                        self.human.check()
                     self.check_components(self.observe()[1])
                     next_health_check = time.monotonic() + 2
                 self.interrupted.wait(0.2)
@@ -308,7 +346,10 @@ class Launcher(EnvironmentHost):
             if self.lease:
                 self.lease.close()
             return True
-        if self.active and self.outbound is not None:
+        # Only an explicit interruption cancels BPMN execution. On component
+        # failure, preserve its last checkpoint for resume, even if the engine
+        # has not yet observed the worker's failure.
+        if self.active and self.outbound is not None and self.record.get("status") == "cancelled":
             try:
                 Writer(direction_root(self.directory / "runtime", CHANNEL, "in")).send("cancel", {"id": self.id})
                 after, deadline = self.outbound.cursor, time.monotonic() + 5
@@ -324,7 +365,8 @@ class Launcher(EnvironmentHost):
                     self.say("The workflow component did not confirm the cancellation in time")
             except Exception as error:
                 self.say(f"Could not cancel through the workflow channel: {error}")
-        clean = self.cleanup_components()
+        clean = self.stop_human()
+        clean = self.cleanup_components() and clean
         self.record["components_removed"] = clean
         self.snapshot()
         if self.lease:

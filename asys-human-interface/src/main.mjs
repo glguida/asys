@@ -1,42 +1,40 @@
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { humanClient } from './client.mjs';
+import { serveOutput } from '@dcomp/component';
+import { HumanService } from './human-service.mjs';
+import { humanServer } from './human-server.mjs';
 import { serveHostChannel } from './host-channel.mjs';
-import { readJSON } from '../../asys-runtime/javascript/queue.mjs';
 import { heartbeat } from '../../asys-runtime/javascript/health.mjs';
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const { values } = parseArgs({ args: argv, options: {
     root: { type: 'string', default: '/var/lib/asys-human' },
     'host-channel': { type: 'string', default: 'human' },
-    config: { type: 'string' },
   } });
-  const config = values.config ? await readJSON(values.config) : { workers: [{ id: 'human', input: 'human' }] };
-  if (!Array.isArray(config.workers)) throw new Error('Configuration must contain a workers array');
-  const workers = new Map(), inputs = new Set();
-  for (const binding of config.workers) {
-    if (!binding || typeof binding.id !== 'string' || !binding.id || workers.has(binding.id) || inputs.has(binding.input)) {
-      throw new Error('Each worker must have a unique id and input');
-    }
-    workers.set(binding.id, humanClient(binding.input, env));
-    inputs.add(binding.input);
-  }
   const shutdown = new AbortController();
   const stop = () => shutdown.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  const service = new HumanService(values.root);
+  const server = humanServer(service, { signal: shutdown.signal });
+  const failure = new Promise((_, reject) => server.once('error', reject));
   let stopHealth;
+  const output = serveOutput(server, 'human', { env, signal: shutdown.signal });
+  const channel = serveHostChannel(service, { root: values.root, name: values['host-channel'], signal: shutdown.signal,
+    onReady() {
+      stopHealth = heartbeat('/tmp/asys-human-interface-health');
+      console.log('Human service ready');
+    },
+  });
   try {
-    await serveHostChannel(workers, { root: values.root, name: values['host-channel'], signal: shutdown.signal,
-      onReady() {
-        stopHealth = heartbeat('/tmp/asys-human-interface-health');
-        console.log(`Human interface ready (${workers.size} workers)`);
-      },
-    });
+    await Promise.race([failure, channel, output]);
   } finally {
     shutdown.abort();
     stopHealth?.();
+    server.closeConnections();
+    await Promise.allSettled([channel, output]);
+    service.close();
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
   }

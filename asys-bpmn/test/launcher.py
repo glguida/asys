@@ -144,8 +144,9 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         assert first['status'] == 'failed' and first['exit_code'] == 17, first
         print('PASS: resume automatically rebuilds against the updated base image, retaining saved workflow and job state', flush=True)
         # Cancel real running work, using only the host channel from the host. The original system's components must survive unchanged.
-        workflow_file.write_text(hello.replace('import json', 'import time\ntime.sleep(60)\nimport json'))
-        for scenario in ['interrupt', 'worker-exit']:
+        for scenario in ['interrupt', 'worker-exit', 'engine-exit']:
+            release = project / f'release-{scenario}'
+            workflow_file.write_text(hello.replace('import json', f'from pathlib import Path\nimport time\nwhile not Path({str(release.name)!r}).exists():\n    time.sleep(0.1)\nimport json'))
             existing_runs = set(cli_root.iterdir())
             egress = scenario == 'interrupt'
             configuration['egress'] = egress
@@ -210,18 +211,27 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
                         finally:
                             moved.rename(project)
                     else:
-                        run(['docker'], 'stop', component['status']['container_id'])
-                        assert process.wait(timeout=60) == 1
-                        stopped = json.loads((directory / 'run.json').read_text())
-                        result = json.loads((directory / 'result.json').read_text())
-                        assert stopped['status'] == 'failed' and stopped['components_removed'], stopped
-                        # A graceful stop can report the failed job before the
-                        # host detects the unavailable component and cancels.
-                        if stopped['error'] == 'Runtime stopped during this job':
-                            assert result['status'] == 'failed', result
+                        previous_job, = (directory / 'runtime/environments/simulation/jobs').iterdir()
+                        if scenario == 'worker-exit':
+                            # Force the host to notice first: the engine cannot
+                            # consume the worker's failure while paused.
+                            run(['docker'], 'pause', engine['status']['container_id'])
+                            run(['docker'], 'stop', component['status']['container_id'])
                         else:
-                            assert 'is unavailable' in stopped['error'], stopped
-                            assert result['status'] == 'cancelled', result
+                            run(['docker'], 'kill', engine['status']['container_id'])
+                        assert process.wait(timeout=90) == 1
+                        stopped = json.loads((directory / 'run.json').read_text())
+                        assert stopped['status'] == 'failed' and stopped['components_removed'], stopped
+                        assert all(json.loads(path.read_text())['type'] != 'cancel' for path in channel.glob('in/0*.json'))
+                        release.touch()
+                        resumed = json.loads(run(launcher, 'resume', directory.name, '--root', str(cli_root)))
+                        assert resumed['greet']['message'] == 'Hello from asys.', resumed
+                        jobs = list((directory / 'runtime/environments/simulation/jobs').iterdir())
+                        assert len(jobs) == 2 and previous_job in jobs
+                        replacement, = [job for job in jobs if job != previous_job]
+                        assert json.loads((replacement / 'request.json').read_text())['metadata']['retry_of'] == previous_job.name
+                        assert json.loads((directory / 'result.json').read_text())['status'] == 'completed'
+                        print(f'PASS: {scenario} before a BPMN failure checkpoint resumes the unfinished stage', flush=True)
                 finally:
                     if process.poll() is None:
                         process.terminate()
@@ -237,7 +247,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         assert 'program: command must be a nonempty argument list' in failed.stderr
         assert not (directory / 'components.log').exists()
         records = [json.loads((directory / 'run.json').read_text()) for directory in cli_root.iterdir()]
-        assert len(records) == 12 and all(record['components_removed'] for record in records), records
+        assert len(records) == 13 and all(record['components_removed'] for record in records), records
         after = {item['name']: item['status']['container_id'] for item in
                  json.loads(run(dcomp, 'view', '--json', system))['components']}
         assert before == after, (before, after)
