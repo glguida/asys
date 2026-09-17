@@ -25,6 +25,26 @@ class Channel:
         self.reply = None
         self.ready = 0
 
+    def attention(self, worker, task):
+        key = (worker, task['id'])
+        candidates = json.loads(task['inputJson']).get('candidates', [])
+        if (task['status'] == 'pending' and key != self.current and key not in self.skipped
+                and (not candidates or self.claimant in candidates)):
+            self.queue[key] = task
+        else:
+            self.queue.pop(key, None)
+
+    def discover(self, poll):
+        """Restore pending questions consumed by an earlier terminal session."""
+        after = ''
+        while True:
+            result = self.call('', 'ListTasks', {'status': 'pending', 'afterId': after}, poll)
+            for task in result.get('tasks', []):
+                self.attention(json.loads(task.get('metadataJson') or '{}').get('component', ''), task)
+            after = result.get('nextAfterId', '')
+            if not after:
+                return
+
     def pump(self):
         events = self.output.read()
         for event in events:
@@ -32,14 +52,7 @@ class Channel:
             if event["type"] == "ready":
                 self.ready = event["sequence"]
             elif event["type"] == "attention":
-                task = data["task"]
-                key = (data["worker"], task["id"])
-                candidates = json.loads(task["inputJson"]).get("candidates", [])
-                if (task["status"] == "pending" and key != self.current and key not in self.skipped
-                        and (not candidates or self.claimant in candidates)):
-                    self.queue[key] = task  # Updating a duplicate preserves its FIFO position.
-                else:
-                    self.queue.pop(key, None)
+                self.attention(data['worker'], data['task'])
             elif event["type"] in {"result", "error"} and data["request"] == self.waiting and self.reply is None:
                 self.reply = event
             self.output.advance(event["sequence"])

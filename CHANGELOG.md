@@ -1,5 +1,19 @@
 # Release notes
 
+## Unreleased
+
+- Keep the shared Human component running independently of terminal prompts.
+  Workflows start it when needed; prompts attach later and can disconnect or
+  reconnect without failing waiting jobs. `asys update` ensures it exists for
+  running inference installations and updates it without requiring a prompt.
+
+- Supply the workers' Human input for built-in human jobs and for `--human`,
+  even when the environment omits it or declares it as an output.
+  Ordinary runs use `@human_endpoint`;
+  private handlers are connected only to their run and leave the global unchanged.
+- Preserve Human connections across resume and report conflicting service types
+  before starting work.
+
 ## 0.1.1
 
 - `asys update` refreshes running inference services and the shared Human service

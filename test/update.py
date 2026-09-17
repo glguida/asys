@@ -17,7 +17,9 @@ class UpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / 'inference').mkdir()
-            (root / 'inference/machine.json').write_text(json.dumps({'config': {'running': True}}))
+            (root / 'inference/machine.json').write_text(json.dumps({'config': {
+                'running': True, 'system': 'selected', 'dcomp_state_root': '/selected/dcomp',
+                'runtime_root': '/selected/runtime'}}))
             leases = []
             for name, private, live in [('shared', False, True), ('private', True, True), ('stale', False, False)]:
                 directory = root / 'human' / name
@@ -31,8 +33,12 @@ class UpdateTests(unittest.TestCase):
             (root / 'runs').mkdir()
             (root / 'runs/not-a-service').write_text('untouched')
             try:
-                with patch('asys.update.subprocess.run') as run, patch('asys.update.refresh_human') as human:
+                with patch('asys.update.subprocess.run') as run, patch('asys.update.refresh_human') as human, \
+                        patch('asys.update.SharedHumanService') as service:
                     update(Namespace(root=root))
+                self.assertEqual(service.call_args.args[0].system, 'selected')
+                self.assertEqual(service.call_args.args[0].dcomp_state_root, Path('/selected/dcomp'))
+                service.return_value.ensure.assert_called_once_with()
                 self.assertEqual(run.call_args.args[0][-3:], ['--root', str(root / 'inference'), 'start'])
                 self.assertEqual(human.call_count, 1)
                 self.assertEqual(human.call_args.args[0], root / 'human/shared')

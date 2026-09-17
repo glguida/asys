@@ -10,6 +10,7 @@ import uuid
 from asys_runtime.environment import Environment
 from asys_runtime.permissions import mkdir, shared
 from .lifecycle import ComponentHost, LaunchError
+from .human_service import ensure_human
 
 PROVIDER = 'cyclo.provider.v1.Provider'
 HUMAN = 'asys.human.v1.Human'
@@ -48,7 +49,7 @@ def prepare_run(root, workspace):
 
 
 class EnvironmentHost(ComponentHost):
-    def prepare_environment(self, environment, links):
+    def prepare_environment(self, environment, links, *, human_target=None):
         descriptor = Environment(environment).descriptor
         config = json.loads((environment / 'workers.json').read_text())
         self.definition = descriptor['definition']
@@ -67,6 +68,16 @@ class EnvironmentHost(ComponentHost):
             system.write_text('system execution-preview\ncomponent environment environment\n')
             component = self.document('view', '--json', str(system))['components'][0]
         inputs = {entry['name']: entry['service'] for entry in component['inputs']}
+        human_worker = any(Path(worker['command'][0]).name == 'asys-human' for worker in config['types'].values())
+        if human_target is not None or human_worker:
+            for entry in component['inputs'] + component['outputs']:
+                if entry['name'] == 'human' and entry['service'] != HUMAN:
+                    raise LaunchError(f"Environment interface 'human' uses {entry['service']}; expected {HUMAN}")
+            # Workers call Human; the separate Human component exports it.
+            component['outputs'] = [entry for entry in component['outputs'] if entry['name'] != 'human']
+            if 'human' not in inputs:
+                component['inputs'].append({'name': 'human', 'service': HUMAN})
+                inputs['human'] = HUMAN
         resolved = {'inference': '@inference_endpoint'} if inputs.get('inference') == PROVIDER else {}
         if inputs.get('human') == HUMAN:
             resolved['human'] = '@human_endpoint'
@@ -77,6 +88,10 @@ class EnvironmentHost(ComponentHost):
                 raise LaunchError(f'Invalid or duplicate environment link {link!r}; use INPUT=TARGET for a declared input')
             explicit.add(source)
             resolved[source] = target
+        if human_target is not None:
+            resolved['human'] = human_target
+        if resolved.get('human') == '@human_endpoint':
+            ensure_human(self)
         existing = self.document('view', '--json', self.args.system)
         if existing.get('operation'):
             raise LaunchError(f'dcomp system {self.args.system} has a pending operation')

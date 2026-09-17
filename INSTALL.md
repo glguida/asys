@@ -197,7 +197,8 @@ Component RPC uses dcomp interfaces; workflow jobs and results use the shared
 runtime filesystem. Dcomp handles container lifecycle and container logs.
 
 To answer human tasks, run `asys-human-prompt --system asys` in another terminal.
-It binds `@human_endpoint` for workers in this dcomp system. Alternatively, add
+Workflows automatically start the shared service at `@human_endpoint`; the
+prompt can attach later, and closing it leaves pending jobs waiting. Alternatively, add
 `--human` to `asys-bpmn run` to answer just that run in the current terminal.
 `--claimant NAME` selects the identity used by tasks with candidate restrictions.
 Approval forms offer approve/disapprove; plain questions accept text. See the
@@ -236,7 +237,9 @@ This reapplies inference components using their saved configuration and refreshe
 the shared Human service's installed image. Account credential volumes and
 configuration are retained. Unchanged images are not restarted. `ASYS_STATE_ROOT`
 selects the installation; `asys update --root /srv/asys/host` selects it explicitly.
-Stopped services remain stopped. Workflow and worker containers, including their
+For a running inference installation, the update also starts the shared Human
+service if it is missing; no terminal is required. Stopped inference services
+remain stopped. Workflow and worker containers, including their
 private `--human` handlers, are not restarted. Replacing a shared service can
 interrupt calls currently using it; complete pending human decisions before updating.
 
@@ -254,8 +257,10 @@ does not create a machine or start an inference server automatically.
 ### Upgrade from 0.1.0
 
 Version 0.1.1 changes the direction of human requests: workers call the Human
-service through an input. For each environment that uses human tasks, replace
-`output asys.human.v1.Human human` in `component.dcomp` with:
+service through an input. The current host launcher supplies the correct input
+for the built-in `asys-human` worker and for `--human`, including environments
+that omit it or declare it as an output. New environments and custom human
+programs should declare the input in `component.dcomp`:
 
 ```text
 input asys.human.v1.Human human
@@ -268,13 +273,14 @@ After reinstalling, start it again in a terminal with the same asys state loaded
 asys-human-prompt --system asys
 ```
 
-The new handler binds `@human_endpoint`. Existing 0.1.0 handler processes require
-this one-time restart; `asys update` cannot refresh them. Subsequent shared Human
-service image updates use `asys update`.
+The shared service binds `@human_endpoint` and continues running without a
+terminal. Existing 0.1.0 handlers and foreground-owned 0.1.1 shared handlers
+require a one-time restart to adopt this lifetime. Subsequent shared Human
+service image updates use `asys update`, with or without a terminal attached.
 
-Start or resume workflows after changing their environment manifests. Environments
-with a Dockerfile rebuild automatically; running workers keep their current image
-and wiring. Use `asys-bpmn run ... --human` or `asys-bpmn resume RUN --human` for
+After reinstalling, environments with a Dockerfile rebuild automatically on
+start or resume; running workers keep their current image and wiring.
+Use `asys-bpmn run ... --human` or `asys-bpmn resume RUN --human` for
 a handler dedicated to one run instead of the shared handler. The BPMN itself
 does not need changing.
 

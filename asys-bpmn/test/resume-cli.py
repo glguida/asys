@@ -1,5 +1,6 @@
 """Resume launcher boundary: ownership, saved configuration and channel history."""
 import fcntl
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -33,10 +34,21 @@ class Resume(unittest.TestCase):
         self.launcher = module["Launcher"](args)
         self.addCleanup(self.launcher.close)
         self.source = self.source_environment()
+        self.component = {"image_ref": "workers:current", "inputs": [
+            {"service": "cyclo.provider.v1.Provider", "name": "inference"}], "outputs": []}
+        self.globals = [{"name": "custom_provider"}]
         self.commands = []
         command = patch.object(self.launcher, "command", side_effect=self.command)
         command.start()
         self.addCleanup(command.stop)
+        service = patch('asys.execution.ensure_human', side_effect=self.ensure_human)
+        service.start()
+        self.addCleanup(service.stop)
+
+    def ensure_human(self, host):
+        self.assertIs(host, self.launcher)
+        if not any(item['name'] == 'human_endpoint' for item in self.globals):
+            self.globals.append({'name': 'human_endpoint'})
 
     def command(self, command, **kwargs):
         self.commands.append(command)
@@ -51,11 +63,11 @@ class Resume(unittest.TestCase):
 
     def document(self, *command):
         if command[-1] == self.record["system"]:
-            return {"components": [], "globals": [{"name": "custom_provider"}]}
+            return {"components": [], "globals": self.globals}
         # dcomp parses the source manifest, independently of the saved digest.
         preview = Path(command[-1])
         self.assertIn("docker workers:current", (preview.parent / "environment/component.dcomp").read_text())
-        return {"components": [{"image_ref": "workers:current", "inputs": [{"service": "cyclo.provider.v1.Provider", "name": "inference"}], "outputs": []}]}
+        return {"components": [deepcopy(self.component)]}
 
     def setup(self):
         with patch.object(self.launcher, "document", side_effect=self.document), \
@@ -78,6 +90,105 @@ class Resume(unittest.TestCase):
         with self.assertRaisesRegex(module['LaunchError'], 'original environment name'):
             self.setup()
         self.assertEqual((self.directory / 'environment/component.dcomp').read_text(), 'docker sha256:saved-workers\n')
+
+    def test_private_human_adds_the_worker_input_without_changing_the_environment_source(self):
+        self.launcher.args.human = True
+        source = (self.source / 'component.dcomp').read_text()
+        self.setup()
+        self.assertEqual(self.launcher.record['links'], {
+            'inference': '@custom_provider', 'human': 'example-human-abc123.human'})
+        self.assertEqual(self.launcher.names['human'], 'example-human-abc123')
+        self.assertEqual((self.directory / 'environment/component.dcomp').read_text(),
+                         'docker sha256:updated-workers\ninput cyclo.provider.v1.Provider inference\n'
+                         'input asys.human.v1.Human human\n')
+        self.assertEqual((self.source / 'component.dcomp').read_text(), source)
+
+    def test_builtin_human_worker_adds_its_input_and_uses_the_shared_endpoint(self):
+        config = json.loads((self.source / 'workers.json').read_text())
+        config['types']['approval'] = {'command': ['/opt/asys/asys-workers/tools/asys-human']}
+        (self.source / 'workers.json').write_text(json.dumps(config))
+        self.globals.append({'name': 'human_endpoint'})
+        self.setup()
+        self.assertNotIn('human', self.launcher.names)
+        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
+        self.assertIn('input asys.human.v1.Human human\n',
+                      (self.directory / 'environment/component.dcomp').read_text())
+
+    def test_builtin_human_worker_uses_an_input_when_the_source_declares_an_output(self):
+        self.component['outputs'].append({'service': 'asys.human.v1.Human', 'name': 'human'})
+        source = 'docker workers:current\noutput asys.human.v1.Human human\n'
+        (self.source / 'component.dcomp').write_text(source)
+        config = json.loads((self.source / 'workers.json').read_text())
+        config['types']['approval'] = {'command': ['/opt/asys/asys-workers/tools/asys-human']}
+        (self.source / 'workers.json').write_text(json.dumps(config))
+        self.globals.append({'name': 'human_endpoint'})
+        self.setup()
+        manifest = (self.directory / 'environment/component.dcomp').read_text()
+        self.assertIn('input asys.human.v1.Human human\n', manifest)
+        self.assertNotIn('output asys.human.v1.Human human', manifest)
+        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
+        self.assertEqual((self.source / 'component.dcomp').read_text(), source)
+
+    def test_builtin_human_worker_ensures_the_shared_service_before_starting_components(self):
+        config = json.loads((self.source / 'workers.json').read_text())
+        config['types']['approval'] = {'command': ['/opt/asys/asys-workers/tools/asys-human']}
+        (self.source / 'workers.json').write_text(json.dumps(config))
+        self.setup()
+        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
+        self.assertTrue(any(command[:2] == ['docker', 'build'] for command in self.commands))
+
+    def test_private_human_reuses_a_declared_input_and_overrides_the_saved_global(self):
+        self.component['inputs'].append({'service': 'asys.human.v1.Human', 'name': 'human'})
+        self.record['links']['human'] = '@human_endpoint'
+        self.path.write_text(json.dumps(self.record))
+        self.launcher.args.human = True
+        self.setup()
+        self.assertEqual(self.launcher.record['links']['human'], 'example-human-abc123.human')
+        self.assertEqual((self.directory / 'environment/component.dcomp').read_text().count(
+            'input asys.human.v1.Human human'), 1)
+
+    def test_resuming_without_private_human_reconnects_to_the_shared_endpoint(self):
+        self.record['components']['human'] = 'example-human-abc123'
+        self.record['links']['human'] = 'example-human-abc123.human'
+        self.path.write_text(json.dumps(self.record))
+        self.globals.append({'name': 'human_endpoint'})
+        self.setup()
+        self.assertNotIn('human', self.launcher.names)
+        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
+        self.assertIn('input asys.human.v1.Human human\n',
+                      (self.directory / 'environment/component.dcomp').read_text())
+
+    def test_resume_keeps_a_saved_human_connection_when_the_source_has_no_input(self):
+        self.record['links']['human'] = '@human_endpoint'
+        self.path.write_text(json.dumps(self.record))
+        self.globals.append({'name': 'human_endpoint'})
+        self.setup()
+        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
+        self.assertIn('input asys.human.v1.Human human\n',
+                      (self.directory / 'environment/component.dcomp').read_text())
+
+    def test_private_human_rejects_a_conflicting_service_before_building(self):
+        self.component['inputs'].append({'service': 'other.Service', 'name': 'human'})
+        self.launcher.args.human = True
+        with self.assertRaisesRegex(module['LaunchError'], 'human.*other.Service.*asys.human.v1.Human'):
+            self.setup()
+        self.assertFalse(any(command[:2] == ['docker', 'build'] for command in self.commands))
+
+    def test_private_human_uses_a_worker_input_even_if_an_output_was_declared(self):
+        self.component['outputs'].append({'service': 'asys.human.v1.Human', 'name': 'human'})
+        self.launcher.args.human = True
+        self.setup()
+        manifest = (self.directory / 'environment/component.dcomp').read_text()
+        self.assertIn('input asys.human.v1.Human human\n', manifest)
+        self.assertNotIn('output asys.human.v1.Human human', manifest)
+        self.assertEqual(self.launcher.record['links']['human'], 'example-human-abc123.human')
+
+    def test_private_human_rejects_an_output_with_a_different_service(self):
+        self.component['outputs'].append({'service': 'other.Service', 'name': 'human'})
+        self.launcher.args.human = True
+        with self.assertRaisesRegex(module['LaunchError'], 'human.*other.Service.*asys.human.v1.Human'):
+            self.setup()
+        self.assertFalse(any(command[:2] == ['docker', 'build'] for command in self.commands))
 
     def test_missing_connections_fail_without_reading_logs_or_starting_components(self):
         del self.record["links"]

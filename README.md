@@ -160,7 +160,8 @@ same host state:
 asys-human-prompt --system asys
 ```
 
-It binds `@human_endpoint`, which workers use for human requests. Add `--human`
+Workflows automatically start the shared service at `@human_endpoint`. The
+terminal can attach later, and pending jobs keep waiting when it disconnects. Add `--human`
 to `asys-bpmn run` or `resume` to answer only that run's requests in its terminal. See the [human handler guide](asys-human-interface/README.md).
 
 After installing a new version, run `asys update` to refresh shared services in

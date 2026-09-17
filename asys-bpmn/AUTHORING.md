@@ -156,9 +156,14 @@ The `inference` input is automatically connected to `@inference_endpoint` in the
 selected dcomp system. Start that provider endpoint before running an environment
 that needs it. `-L inference=@another_endpoint` selects a different endpoint.
 
-The `human` input connects to `@human_endpoint`. Start `asys-human-prompt` to
-provide that service, or use `asys-bpmn run --human` for a handler dedicated to
-the run. `-L human=COMPONENT.human` selects a specific handler.
+The `human` input connects to `@human_endpoint`; the launcher starts the shared
+service if needed. Run `asys-human-prompt` to answer its queued requests, or use
+`asys-bpmn run --human` for a handler dedicated to the run.
+`-L human=COMPONENT.human` selects a specific handler. When a worker
+command directly runs `asys-human`, or `--human` is requested, the launcher
+configures Human as an input in the run's workers definition. It corrects an
+omitted input or an output declaration without editing the source environment.
+Custom programs that call Human need the declaration shown above.
 
 ### Put tool knowledge in skills
 

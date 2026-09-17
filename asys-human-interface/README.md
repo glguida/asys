@@ -17,10 +17,10 @@ make -C asys-human-interface install
 asys-human-prompt
 ```
 
-Start it before a workflow that needs human decisions, in the same dcomp
-system. It exports `human` and binds `@human_endpoint`; worker environments
-with a Human input use that global by default. A second default handler refuses
-to replace an existing binding.
+Workflows start the shared Human component automatically when they need
+`@human_endpoint`. Requests wait in that service until a terminal attaches;
+the prompt can start before or after the workflow. Starting the prompt also
+creates the service if needed. One terminal may attach at a time.
 
 For a handler dedicated to one workflow, use the workflow launcher:
 
@@ -29,10 +29,13 @@ asys-bpmn run workflow.bpmn env/design --input request.md --human
 asys-bpmn resume RUN --human
 ```
 
-The launcher creates a handler for this run, links its workers directly to it,
-and removes it when the run ends. It leaves `@human_endpoint` unchanged. The
-terminal displays the human interface; workflow progress remains available in
-`asys logs RUN` and `asys top`.
+The launcher starts a private Human component and a host terminal handler for
+this run. It configures the workers' Human port as an input and links it directly
+to the private component. The environment's source files and `@human_endpoint`
+are unchanged. The host handler owns the terminal while workflow progress goes
+to the run log, available through `asys logs RUN` and `asys top`. When the run
+ends, the handler removes its private component and restores the terminal
+before the workflow command prints its result.
 
 `asys-human-prompt --private --name review-desk` exports `review-desk.human`
 without assigning a global. Other launchers can select it explicitly with
@@ -70,12 +73,15 @@ The [human prompt demo](../asys-bpmn/examples/human-prompt/README.md) provides a
 small workflow with parallel approval and text questions, its own environment,
 and two commands to try the queue without an inference provider.
 
-The handler owns one service component for its foreground session. Ctrl-C,
-Ctrl-Q, SIGTERM, `/quit`, or end of input in plain mode removes it, which unbinds
-its global name. Waiting workers receive an RPC error; their producer decides
-how to handle the failed job. Completed answers remain in the saved service
-state. Skip releases a question and leaves it pending for the rest of this
-session. `--once` exits after one completed answer.
+The shared component keeps running when the terminal exits. Ctrl-C, Ctrl-Q,
+SIGTERM, `/quit`, and end of input release the current claim and detach; waiting
+jobs remain pending. Reconnecting restores pending questions and recovers an
+abandoned claim after a terminal crash. Skip leaves a question pending for a
+later terminal session. `--once` detaches after one completed answer.
+
+Private handlers (`--private`, including workflow `--human`) own their service
+for their foreground session and remove it on exit. Stopping a private service
+interrupts its unanswered requests.
 
 The default claimant is the host login name; `--claimant` supplies the name
 checked against task candidates. These names are trusted identities, not an
@@ -101,8 +107,9 @@ decides what that means for subsequent work.
 
 `--root DIRECTORY` selects the parent for saved handler sessions, defaulting to
 `$XDG_STATE_HOME/asys/human` or `$HOME/.local/state/asys/human`, or
-`$ASYS_STATE_ROOT/human` when the asys base is set. Each invocation
-prints its private directory, containing command logs, component logs, and a
+`$ASYS_STATE_ROOT/human` when the asys base is set. A shared service reuses its
+saved directory; a private handler creates a session directory. The terminal
+prints that directory, containing command logs and a
 `session.json` with its component identity and any unresolved claim or answer.
 Its `request.json` contains the complete JSON presentation of the current or
 most recently displayed request, including context, file locations and controls.
@@ -115,10 +122,11 @@ link remains `@human_endpoint`, which dcomp resolves. Each human job sends one
 and withdraws the unanswered question. A completed request can be retrieved
 again with the same ID and input without asking twice.
 
-After installation, `asys update` asks a running shared terminal handler to
-replace its service with the current image and keep the global binding. An
-unchanged image is left running. Private handlers are excluded. Updating a
-service interrupts unanswered requests, so finish human decisions first.
+After installation, `asys update` refreshes the shared service with the current
+image whether a terminal is attached or not. It also creates the service for a
+running inference installation that has none. An unchanged image is left
+running. Private handlers are excluded. Replacing the service interrupts
+unanswered requests, so finish human decisions before changing its image.
 
 Upgrading from 0.1.0 requires a one-time handler restart and a change to the
 worker environment's Human declaration; follow the
@@ -259,8 +267,14 @@ docker asys-human-interface:dev
 output asys.human.v1.Human human
 ```
 
-A worker environment declares `input asys.human.v1.Human human`. Launchers
-connect it to `@human_endpoint`, or a target supplied with `-L human=TARGET`.
+A worker environment declares `input asys.human.v1.Human human`. Host launchers
+supply this input when an environment directly runs the built-in `asys-human`
+command, or when BPMN is run or resumed with `--human`. They correct an omitted
+input or an output declaration in the run's workers definition, leaving the
+source environment unchanged. Custom programs that call Human declare the
+input explicitly. Its default connection is `@human_endpoint`;
+`-L human=TARGET` chooses another service, and `--human` selects the run's private
+component.
 `Ask` carries a unique request ID, the input JSON, and metadata including the
 originating component and its workspace. It returns the answer JSON. The other
 Human methods support task presentation, claims, and validated completion.

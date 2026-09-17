@@ -1,4 +1,4 @@
-"""Export a Human service for the lifetime of a foreground terminal handler."""
+"""Attach a terminal to the shared Human service, or own a private service."""
 import argparse
 import fcntl
 import getpass
@@ -13,6 +13,7 @@ import uuid
 
 from asys.lifecycle import ComponentHost, LaunchError, Interrupted
 from asys.state import state_root
+from asys.human_service import SharedHumanService, ensure_human
 from asys_runtime.files import write_json
 from asys_runtime.permissions import mkdir, shared, open_file
 from asys_runtime.channel import Reader, Writer, direction_root
@@ -63,6 +64,7 @@ class Launcher(ComponentHost):
         self.next_discovery = 0
         self.control = None
         self.lease = None
+        self.persistent = False
 
     def say(self, message):
         if self.interaction:
@@ -83,12 +85,16 @@ class Launcher(ComponentHost):
     def save(self):
         value = {"version": 1, "system": self.args.system, "component": self.name, "dcomp": self.dcomp,
                  "claimant": self.args.claimant, "endpoint": f"{self.name}.human", "active": self.active,
-                 "component_removed": not self.owned, "global": None if self.args.private else "human_endpoint",
+                 "component_removed": not self.owned and not self.persistent,
+                 "persistent": self.persistent, "global": None if self.args.private else "human_endpoint",
                  "image_ref": getattr(self, 'image_ref', None), "image": getattr(self, 'image', None)}
         path = self.directory / "session.json"
         write_json(path, value)
 
     def setup(self):
+        if not self.args.private:
+            self.setup_shared()
+            return
         root = self.args.root.expanduser().resolve()
         if "," in str(root):
             raise LaunchError("The state path cannot contain a comma (dcomp mount syntax)")
@@ -118,16 +124,56 @@ class Launcher(ComponentHost):
             self.image = self.command(["docker", "image", "inspect", "--format", "{{.Id}}", self.image_ref]).strip()
         except LaunchError as error:
             raise LaunchError(f"Build the human component with make -C asys-human-interface build.\n{error}") from error
-        if not self.args.private:
-            current = next((g for g in document.get("globals", []) if g["name"] == "human_endpoint"), {})
-            if current.get("target", {}).get("component"):
-                raise LaunchError("@human_endpoint is already bound; use --private for a separate human handler")
         if any(c["name"] == self.name for c in document["components"]):
             raise LaunchError(f"Component {self.name} already exists")
         self.attach()
-        if not self.args.private:
-            self.command(self.dcomp + ["assign-global", self.args.system, "human_endpoint", f"{self.name}.human"])
-        self.say(f"Human endpoint: {'@human_endpoint' if not self.args.private else self.name + '.human'}. Ctrl-C to stop.")
+        self.say(f'Human endpoint: {self.name}.human. Ctrl-C to stop.')
+        self.next_discovery = time.monotonic() + 2
+
+    def setup_shared(self):
+        component = ensure_human(self, self.args.root, name=self.args.name)
+        if self.args.name and component['name'] != self.args.name:
+            raise LaunchError(f"@human_endpoint is already provided by {component['name']}; use --private for a separate service")
+        runtime = next((Path(bind['source']) for bind in component.get('binds', [])
+                        if bind['target'] == '/var/lib/asys-human'), None)
+        if runtime is None:
+            raise LaunchError('@human_endpoint has no host channel mounted for the terminal')
+        directory = runtime.parent
+        lease = os.fdopen(open_file(directory / 'handler.lock', os.O_CREAT | os.O_RDWR), 'a+b')
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lease.close()
+            raise LaunchError('A terminal is already attached to @human_endpoint') from None
+        self.lease = lease
+        self.directory, self.runtime = directory, runtime
+        self.name = component['name']
+        self.persistent = True
+        self.channel = Channel(runtime, self.args.claimant, self.say)
+        self.control = Reader(direction_root(directory, 'control', 'in'))
+        self.control_output = Writer(direction_root(directory, 'control', 'out'))
+        state = directory / 'service.json'
+        service = json.loads(state.read_text()) if state.is_file() else {}
+        self.image_ref = service.get('image_ref', 'asys-human-interface:dev')
+        self.image = component['image_id']
+        previous = directory / 'session.json'
+        if previous.is_file():
+            saved = json.loads(previous.read_text())
+            self.active = saved.get('active')
+            if self.active:
+                self.active.setdefault('claimant', saved['claimant'])
+                try:
+                    self.release(cleanup=True)
+                except RPCError as error:
+                    if error.code not in {'FailedPrecondition', 'NotFound'}:
+                        raise
+                    self.active = None
+        self.channel.pump()
+        self.channel.discover(lambda: self.tick(cleanup=True))
+        self.save()
+        self.view()
+        self.say(f'Human handler state: {directory}')
+        self.say('Human endpoint: @human_endpoint. Ctrl-C to detach; the service keeps running.')
         self.next_discovery = time.monotonic() + 2
 
     def update_component(self, event):
@@ -138,16 +184,18 @@ class Launcher(ComponentHost):
                                             for g in document.get('globals', [])):
                 raise LaunchError('This handler no longer owns @human_endpoint')
             self.say('Updating the Human service; outstanding requests will be interrupted.')
-            self.command(self.dcomp + ['rm-component', self.args.system, self.name])
-            self.owned.clear()
+            service = SharedHumanService(self.args, directory=self.directory, dcomp=self.dcomp)
+            service.say = self.say
+            service.interrupted = self.interrupted
+            service.ensure(refresh=True)
             self.active = None
             self.channel.current = None
             self.channel.queue.clear()
             if self.interaction:
                 self.interaction.finished('Human service updated; interrupted jobs may be retried.')
             self.image = image
-            self.attach()
-            self.command(self.dcomp + ['assign-global', self.args.system, 'human_endpoint', f'{self.name}.human'])
+            self.channel.pump()
+            self.save()
             self.control_output.send('updated', {'request': event['sequence'], 'image': image})
         except Exception as error:
             self.control_output.send('error', {'request': event['sequence'], 'message': str(error)})
@@ -211,7 +259,7 @@ class Launcher(ComponentHost):
         # A signal can arrive after the service commits a claim but before the
         # host receives its token. Repeat that exact claim to recover the token.
         if "token" not in active:
-            claimed = self.call("ClaimTask", {"id": active["id"], "claimant": self.args.claimant, "claimId": active["claimId"]}, cleanup)
+            claimed = self.call("ClaimTask", {"id": active["id"], "claimant": active.get('claimant', self.args.claimant), "claimId": active["claimId"]}, cleanup)
             active["token"] = claimed["token"]
         self.call("ReleaseTask", {"id": active["id"], "token": active["token"]}, cleanup)
         self.active = None
@@ -242,7 +290,7 @@ class Launcher(ComponentHost):
             if task["status"] != "pending":
                 self.channel.current = None
                 continue
-            self.active = {"worker": worker, "id": task_id, "claimId": uuid.uuid4().hex}
+            self.active = {"worker": worker, "id": task_id, "claimId": uuid.uuid4().hex, 'claimant': self.args.claimant}
             self.save()
             try:
                 claim = self.call("ClaimTask", {"id": task_id, "claimant": self.args.claimant, "claimId": self.active["claimId"]})
@@ -312,7 +360,7 @@ class Launcher(ComponentHost):
         if self.directory is None:
             return True
         clean = True
-        if self.active and self.owned:
+        if self.active and (self.owned or self.persistent):
             try:
                 self.release(cleanup=True)
             except RPCError as error:

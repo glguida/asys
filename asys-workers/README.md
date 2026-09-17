@@ -191,7 +191,11 @@ optional. They do not need Pi or the agent completion format.
 `context`, `candidates`, `form` (JSON Schema draft-07), and `uischema` (JSON Forms).
 The completed human answer becomes its job result.
 
-The environment declares `input asys.human.v1.Human human`. Launchers connect
+For a command that directly runs `asys-human`, host launchers supply
+`input asys.human.v1.Human human` in the run's workers definition, correcting
+an omitted input or an output declaration without editing the environment's
+source files. Custom programs that call Human must declare that input in
+`component.dcomp`. Launchers connect
 it to `@human_endpoint` by default; `-L human=COMPONENT.OUTPUT` selects a specific
 service. `asys-human` calls `Ask` through this dcomp input and waits for the answer.
 It does not run a server or share job files with the Human service. Cancellation

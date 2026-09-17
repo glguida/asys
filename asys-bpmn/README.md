@@ -149,12 +149,15 @@ authorization. The channel path is printed and saved in `run.json`, so another
 host process can send `cancel` or `message` requests, or follow the same events,
 while the command waits. Internal dcomp sockets remain component endpoints.
 Workers send human requests through their `human` input, connected by default
-to `@human_endpoint`. Start [`asys-human-prompt`](../asys-human-interface/README.md)
-in another terminal to publish this shared service. Alternatively, add `--human`
-to `run` or `resume`: the launcher creates a terminal handler for this run and
-links its workers directly to it, leaving the shared global untouched. The
-handler closes with the run. While it owns the terminal, read workflow progress
-with `asys logs RUN` or `asys top`.
+to `@human_endpoint`. The launcher starts this shared service if needed;
+[`asys-human-prompt`](../asys-human-interface/README.md) can attach in another
+terminal at any time. Pending jobs survive terminal disconnection. Alternatively, add `--human`
+to `run` or `resume`: the launcher creates a private Human component and a host
+terminal handler for this run. It configures the workers' Human port as an input
+and links it directly to that component, leaving the shared global untouched.
+The environment's source files are unchanged. The handler closes with the run.
+While it owns the terminal, workflow progress is written to the run log;
+read it with `asys logs RUN` or `asys top`.
 
 The shared channel directories and their files allow different host and
 container user IDs; the enclosing run directory stays private to the host

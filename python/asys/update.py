@@ -1,12 +1,16 @@
 """Refresh shared services using the installed component images and sources."""
 import fcntl
+from argparse import Namespace
 import json
 from pathlib import Path
 import subprocess
 import sys
 import time
+import os
 
 from asys_runtime.channel import Reader, Writer, direction_root
+from asys_runtime.permissions import open_file
+from .human_service import SharedHumanService
 
 
 def inference_command():
@@ -46,13 +50,30 @@ def update(args):
         raise ValueError(f'asys state directory does not exist: {root}')
     changed = False
     machine = root / 'inference/machine.json'
-    if machine.is_file() and json.loads(machine.read_text())['config']['running']:
+    config = json.loads(machine.read_text())['config'] if machine.is_file() else {}
+    if config.get('running'):
         print('Updating inference services…', flush=True)
         subprocess.run([inference_command(), '--root', str(machine.parent), 'start'], check=True)
+        args = Namespace(system=config['system'],
+                         dcomp_state_root=Path(config['dcomp_state_root']),
+                         runtime_root=Path(config['runtime_root']) if config.get('runtime_root') else None)
+        SharedHumanService(args, root / 'human').ensure()
+        changed = True
+    for path in sorted((root / 'human').glob('*/service.json')):
+        record = json.loads(path.read_text())
+        with os.fdopen(open_file(path.parent / 'handler.lock', os.O_CREAT | os.O_RDWR), 'a+b') as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                refresh_human(path.parent, record)
+            else:
+                service = SharedHumanService(Namespace(system=record['system']), directory=path.parent, dcomp=record['dcomp'])
+                service.ensure(refresh=True)
+                print(f"Shared Human service {record['component']} is current.", flush=True)
         changed = True
     for path in sorted((root / 'human').glob('*/session.json')):
         record = json.loads(path.read_text())
-        if record['component_removed'] or record.get('global') != 'human_endpoint':
+        if record.get('persistent') or record['component_removed'] or record.get('global') != 'human_endpoint':
             continue
         with (path.parent / 'handler.lock').open('rb') as lease:
             try:

@@ -17,6 +17,7 @@ try:
     from asys.monitor import top
     from asys.state import initialize, state_root
     from asys.update import update
+    from asys.lifecycle import LaunchError
 except ImportError as error:
     raise SystemExit(f"asys needs its installed Python package: {error}")
 
@@ -81,7 +82,7 @@ def main(argv=None):
         return 0
     except (KeyboardInterrupt, BrokenPipeError):
         return 0
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, LaunchError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
