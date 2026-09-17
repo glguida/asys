@@ -10,7 +10,8 @@
   only to that run. The handler is removed when the run ends.
 - Workers send human requests to `@human_endpoint` by default.
   `asys-human-prompt` exports and binds that service. Environment manifests now
-  declare `input asys.human.v1.Human human`.
+  declare `input asys.human.v1.Human human`. Upgrading from 0.1.0 also requires a
+  one-time handler restart; see the [upgrade instructions](INSTALL.md#upgrade-from-010).
 
 ## 0.1.0
 

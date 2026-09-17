@@ -41,7 +41,7 @@ make install PREFIX=/opt/asys
 
 The destination must be writable by the installing user. `make build` builds
 the host commands and container images without installing them. `make install-host`
-installs only the `asys` observer and requires no Docker. Use
+installs the shared `asys` command and requires no Docker. Use
 `make -C asys-inference install` for inference management, or
 `make -C asys-bpmn install` for the workflow launcher and observer.
 `make -C asys-oneshot install` installs the single-agent launcher and observer
@@ -66,7 +66,7 @@ package installation is needed to use them. The optional standalone
 
 | Installed path under `PREFIX` | Contents |
 | --- | --- |
-| `bin/asys` | State initialization, run listing, status, logs, and terminal monitor |
+| `bin/asys` | State initialization, shared-service updates, run listing, status, logs, and terminal monitor |
 | `bin/asys-inference` | Inference server management command |
 | `bin/asys-bpmn` | BPMN workflow launcher |
 | `bin/asys-oneshot` | Run one named agent in an environment |
@@ -205,13 +205,28 @@ Approval forms offer approve/disapprove; plain questions accept text. See the
 
 ## Update an existing installation
 
-Update the source checkout, then run from its root:
+Update the source checkout, then reinstall from its root using the same `PREFIX`
+as the original installation. For the default per-user installation:
 
 ```sh
 make install
 ```
 
-After installing, refresh the running shared services in the selected asys state:
+For a system-wide installation under `/usr/local`:
+
+```sh
+sudo make install PREFIX=/usr/local
+```
+
+In the shell used to manage the installation, load its generated `asys-env` if
+you use a named or shared state directory. For example:
+
+```sh
+source /srv/asys/host/asys-env
+```
+
+This selects both asys and dcomp state. With the default per-user state, no
+environment file is needed. After installing, refresh running shared services:
 
 ```sh
 asys update
@@ -235,6 +250,33 @@ Saved machine configuration and run state live under the user's XDG state
 directory, normally `$HOME/.local/state/asys`. Runs and their job records use
 `asys/runs`; project workspaces remain at the paths supplied by the caller. Installation
 does not create a machine or start an inference server automatically.
+
+### Upgrade from 0.1.0
+
+Version 0.1.1 changes the direction of human requests: workers call the Human
+service through an input. For each environment that uses human tasks, replace
+`output asys.human.v1.Human human` in `component.dcomp` with:
+
+```text
+input asys.human.v1.Human human
+```
+
+Let runs that still need the 0.1.0 human handler finish, then stop that handler.
+After reinstalling, start it again in a terminal with the same asys state loaded:
+
+```sh
+asys-human-prompt --system asys
+```
+
+The new handler binds `@human_endpoint`. Existing 0.1.0 handler processes require
+this one-time restart; `asys update` cannot refresh them. Subsequent shared Human
+service image updates use `asys update`.
+
+Start or resume workflows after changing their environment manifests. Environments
+with a Dockerfile rebuild automatically; running workers keep their current image
+and wiring. Use `asys-bpmn run ... --human` or `asys-bpmn resume RUN --human` for
+a handler dedicated to one run instead of the shared handler. The BPMN itself
+does not need changing.
 
 ## Development tests
 

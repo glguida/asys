@@ -145,7 +145,7 @@ For inference and human review, `component.dcomp` contains:
 ```text
 docker report-production:dev
 input cyclo.provider.v1.Provider inference
-output asys.human.v1.Human human
+input asys.human.v1.Human human
 ```
 
 The launcher builds the environment Dockerfile. Without one, the declared image
@@ -155,6 +155,10 @@ the shared-workspace example does this.
 The `inference` input is automatically connected to `@inference_endpoint` in the
 selected dcomp system. Start that provider endpoint before running an environment
 that needs it. `-L inference=@another_endpoint` selects a different endpoint.
+
+The `human` input connects to `@human_endpoint`. Start `asys-human-prompt` to
+provide that service, or use `asys-bpmn run --human` for a handler dedicated to
+the run. `-L human=COMPONENT.human` selects a specific handler.
 
 ### Put tool knowledge in skills
 

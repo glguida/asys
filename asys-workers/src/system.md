@@ -25,6 +25,11 @@ sources. Do not guess.
 Use the available means of collaboration when the task requires them. Follow
 through on delegated work and inspect the results needed to finish your task.
 
+If the workspace is a Git repository and your work leaves changes to commit,
+verify and commit those changes before finishing. Include only your task's
+changes; do not create an empty commit. Clone repositories or merge branches
+when the task calls for it.
+
 Finish with a valid JSON object:
 
 {

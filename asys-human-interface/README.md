@@ -120,6 +120,10 @@ replace its service with the current image and keep the global binding. An
 unchanged image is left running. Private handlers are excluded. Updating a
 service interrupts unanswered requests, so finish human decisions first.
 
+Upgrading from 0.1.0 requires a one-time handler restart and a change to the
+worker environment's Human declaration; follow the
+[upgrade instructions](../INSTALL.md#upgrade-from-010).
+
 ## Forms and presentation
 
 Human-task input uses `form` for the answer's
