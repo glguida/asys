@@ -91,6 +91,43 @@ class Resume(unittest.TestCase):
             self.setup()
         self.assertEqual((self.directory / 'environment/component.dcomp').read_text(), 'docker sha256:saved-workers\n')
 
+    def test_resume_reuses_the_external_bundle_for_validation_and_worker_mounts(self):
+        external = Path(self.temp.name) / 'portable agents'
+        external.mkdir()
+        config = {'version': 1, 'name': 'portable', 'types': {'review': {'command': ['review']}}}
+        (external / 'workers.json').write_text(json.dumps(config))
+        self.record.update(environment='portable', external_directory=str(external))
+        self.path.write_text(json.dumps(self.record))
+        self.setup()
+        self.assertEqual(self.launcher.record['environment'], 'portable')
+        self.assertEqual(self.launcher.record['external_directory'], str(external))
+        self.assertEqual(self.launcher.definition, module['Environment'](external).descriptor['definition'])
+        with patch.object(self.launcher, 'add') as add:
+            self.launcher.start_workers()
+        self.assertIn(f'{external},/opt/asys/environment/external,ro', add.call_args.args[2])
+        self.assertNotIn(f'{external},/opt/asys/environment/external,ro', self.launcher.execution_mounts())
+
+    def test_resume_fails_when_its_external_bundle_is_unavailable(self):
+        self.record['external_directory'] = str(Path(self.temp.name) / 'missing bundle')
+        self.path.write_text(json.dumps(self.record))
+        with self.assertRaises(FileNotFoundError):
+            self.setup()
+        self.assertEqual((self.directory / 'environment/component.dcomp').read_text(), 'docker sha256:saved-workers\n')
+        self.assertFalse(any(command[:2] == ['docker', 'build'] for command in self.commands))
+
+    def test_external_human_worker_supplies_the_human_connection(self):
+        external = Path(self.temp.name) / 'portable agents'
+        external.mkdir()
+        config = {'version': 1, 'name': 'test', 'types': {
+            'approval': {'command': ['/opt/asys/asys-workers/tools/asys-human']}}}
+        (external / 'workers.json').write_text(json.dumps(config))
+        self.record['external_directory'] = str(external)
+        self.path.write_text(json.dumps(self.record))
+        self.setup()
+        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
+        self.assertIn('input asys.human.v1.Human human\n',
+                      (self.directory / 'environment/component.dcomp').read_text())
+
     def test_private_human_adds_the_worker_input_without_changing_the_environment_source(self):
         self.launcher.args.human = True
         source = (self.source / 'component.dcomp').read_text()

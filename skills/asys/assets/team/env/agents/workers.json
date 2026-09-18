@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "name": "report-agents",
+  "description": "Report implementer and reviewer; replace both account/model placeholders before running.",
+  "types": {
+    "implementer": {
+      "command": ["/opt/asys/asys-workers/tools/asys-agent", "--agent", "implementer", "--model", "account/model"]
+    },
+    "reviewer": {
+      "command": ["/opt/asys/asys-workers/tools/asys-agent", "--agent", "reviewer", "--model", "account/model"]
+    },
+    "program": {"command": ["/opt/asys/asys-workers/tools/asys-program"]},
+    "human": {"command": ["/opt/asys/asys-workers/tools/asys-human"]},
+    "goal": {"command": ["/opt/asys/asys-workers/tools/asys-goal"]}
+  }
+}

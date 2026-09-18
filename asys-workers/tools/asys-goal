@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+import { program } from '../src/program.mjs';
+import { goal } from '../src/goal.mjs';
+
+program(goal).catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -16,7 +16,8 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
   job.agent = {
     model: requiredString(config.model, `${job.id} model`),
     prompt: requiredString(config.prompt, `${job.id} prompt`),
-    name: definition.name, environment: definition.environment, memoryHash: definition.memoryHash,
+    name: definition.name, environment: definition.environment, directory: definition.directory,
+    promptHash: definition.promptHash, memoryHash: definition.memoryHash,
     steps: 0,
   };
   const state = job.agent;

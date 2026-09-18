@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,7 @@ import { assistant, model } from './helpers.mjs';
 const executor = fileURLToPath(new URL('../../asys-runtime/tools/asys-runtime', import.meta.url));
 const agentProgram = fileURLToPath(new URL('../tools/asys-agent', import.meta.url));
 const humanProgram = fileURLToPath(new URL('../tools/asys-human', import.meta.url));
+const goalProgram = fileURLToPath(new URL('../tools/asys-goal', import.meta.url));
 const commandProgram = fileURLToPath(new URL('../tools/asys-program', import.meta.url));
 
 async function until(fn) {
@@ -37,6 +38,7 @@ async function fixture(t, { agentArgs = [] } = {}) {
   await writeFile(config, JSON.stringify({ version: 1, types: {
     agent: { command: [process.execPath, agentProgram, '--agent', 'test', ...agentArgs] },
     human: { command: [process.execPath, humanProgram] },
+    goal: { command: [process.execPath, goalProgram] },
     program: { command: ['python3', commandProgram] },
   } }));
   let child, exited;
@@ -357,6 +359,60 @@ test('human jobs call their dcomp input and publish the answer into their own re
   assert.equal(outcome.result, false);
   assert.equal(JSON.parse(await readFile(join(f.queue.executionDirectory('approval'), 'result.json'), 'utf8')), false);
 });
+
+for (const phase of ['implement', 'verify']) {
+  for (const action of ['retry', 'stop', 'cancel']) {
+    test(`one runtime goal job handles ${phase} help and human ${action}`, async t => {
+      const f = await fixture(t);
+      const models = join(f.root, 'models.json');
+      await writeFile(models, JSON.stringify({ simple: model.id }));
+      const counts = { implement: 0, verify: 0 };
+      const service = new HumanService(join(f.root, 'human-service'));
+      t.after(() => service.close());
+      const provider = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
+        listModels() { return { models: [model] }; },
+        async *infer(request) {
+          assert.equal(request.model, model.id);
+          const { context } = JSON.parse(request.payload);
+          assert.equal(context.messages.length, 1, 'every phase and human retry is a fresh session');
+          const current = context.messages[0].content[0].text.startsWith('Implement') ? 'implement' : 'verify';
+          const help = ++counts[current] === 1 && current === phase;
+          const result = help
+            ? { final: 'Checked the workspace. The required input is unavailable.', exception: 'Input missing', question: 'Please supply the input.' }
+            : current === 'implement' ? { final: 'Implementation finished.', exception: null }
+              : { final: 'Inspected the required artifact.', exception: null, verified: true,
+                criteria: [{ requirement: 'Produce an artifact', satisfied: true,
+                  evidence: [{ source: 'artifact.txt', observation: 'Inspected its complete contents.' }] }] };
+          yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
+        },
+      }); } }));
+      f.start({ ASYS_SYSTEM_MODELS: models, DCOMP_COMPONENT_NAME: 'goal-workers',
+        DCOMP_IN_INFERENCE: await listen(t, provider, join(f.root, 'provider.sock')),
+        DCOMP_IN_HUMAN: await listen(t, humanServer(service), join(f.root, 'human.sock')) });
+      await f.queue.submit('goal', 'design', { input: { goal: 'Produce an artifact', maxAttempts: 1 }, metadata: { run_id: 'test-run' } });
+      const task = await until(() => service.listTasks().tasks[0]);
+      assert.equal((await f.queue.state('design')).status, 'running');
+      assert.deepEqual(await readdir(f.queue.jobs), ['design']);
+      const metadata = JSON.parse(task.metadataJson);
+      assert.equal(metadata.job_id, 'design');
+      assert.equal(metadata.goal_phase, phase);
+      assert.equal(metadata.run_id, 'test-run');
+      assert.deepEqual(metadata.files, { workspace: f.queue.workspace('design') });
+      const { token } = service.claimTask({ id: task.id, claimant: 'alice', claimId: 'claim' });
+      if (action === 'cancel') await f.queue.cancel('design');
+      else service.completeTask({ id: task.id, token, completionId: 'answer', resultJson: JSON.stringify({ action, guidance: 'The input is now available.' }) });
+      const outcome = await f.queue.wait('design', { timeoutMs: 10000 });
+      assert.equal(outcome.status, { retry: 'done', stop: 'failed', cancel: 'cancelled' }[action], outcome.error);
+      if (action === 'retry') {
+        assert.equal(outcome.result.verified, true);
+        assert.equal(counts[phase], 2);
+      } else if (action === 'stop') {
+        assert.equal(outcome.result.verified, false);
+        assert.equal(outcome.error, 'Stopped by human');
+      } else await until(() => service.getTask({ id: task.id }).task.status === 'cancelled');
+    });
+  }
+}
 
 test('program jobs execute a supplied command, preserve input, and propagate failures', async t => {
   const f = await fixture(t);

@@ -12,6 +12,10 @@ const examples = [
   { path: 'hello/workflow.bpmn', task: 'greet', elements: ['start', 'greet', 'end', 'begin', 'finish'] },
   { path: 'agent-task.bpmn', task: 'work', elements: ['start', 'work', 'end', 'begin', 'finish'] },
   { path: 'agent-review.bpmn', task: 'draft', elements: ['start', 'work', 'draft', 'approval', 'end', 'ready_for_review', 'begin', 'finish'] },
+  { path: 'skill/team.bpmn', url: new URL('../../../skills/asys/assets/team/workflow.bpmn', import.meta.url),
+    task: 'check', elements: ['start', 'implement', 'check', 'review', 'decision', 'end', 'begin', 'check_report', 'review_report', 'choose', 'accept', 'revise'] },
+  { path: 'skill/goal.bpmn', url: new URL('../../../skills/asys/assets/goal.bpmn', import.meta.url),
+    task: 'deliver', elements: ['start', 'deliver', 'end', 'begin', 'finish'] },
 ];
 
 test('examples render and retain their execution bindings through bpmn.io editing', { timeout: 60_000 }, async t => {
@@ -22,7 +26,7 @@ test('examples render and retain their execution bindings through bpmn.io editin
 
   for (const example of examples) {
     await t.test(example.path, async t => {
-      const xml = await readFile(new URL(`../../examples/${example.path}`, import.meta.url), 'utf8');
+      const xml = await readFile(example.url ?? new URL(`../../examples/${example.path}`, import.meta.url), 'utf8');
       const original = validateExecutable(await parseWorkflow(xml));
       const page = await browser.newPage({ viewport: { width: 1200, height: 640 } });
       t.after(() => page.close());

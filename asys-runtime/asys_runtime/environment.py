@@ -18,11 +18,14 @@ def environment_root(root, name):
 
 
 class Environment:
-    def __init__(self, directory):
+    def __init__(self, directory, *, external=None):
         self.directory = Path(directory).expanduser().resolve()
-        path = self.directory / "workers.json"
-        config = read_json(path)
-        self.types = parse_config(config, directory=self.directory, environment=True)
+        if external is None and (self.directory / "external/workers.json").exists():
+            external = self.directory / "external"
+        self.external = Path(external).expanduser().resolve(strict=True) if external is not None else None
+        self.workers_directory = self.external if self.external is not None else self.directory
+        self.config = config = read_json(self.workers_directory / "workers.json")
+        self.types = parse_config(config, directory=self.workers_directory, environment=True)
         self.name = config.get("name")
         validate_name("environment name", self.name)
         description = config.get("description", "")
@@ -32,7 +35,8 @@ class Environment:
         self.descriptor = {"version": 1, "name": self.name, "description": description,
                            "types": sorted(self.types), "definition": definition}
         for spec in self.types.values():
-            spec["env"].update(ASYS_ENVIRONMENT_DIR=str(self.directory), ASYS_ENVIRONMENT=self.name)
+            spec["env"].update(ASYS_ENVIRONMENT_DIR=str(self.directory), ASYS_ENVIRONMENT=self.name,
+                               ASYS_WORKERS_DIR=str(self.workers_directory))
 
     @contextmanager
     def register(self, root):

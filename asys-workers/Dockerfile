@@ -11,6 +11,7 @@ COPY asys-workers/src ./src
 COPY asys-workers/gen ./gen
 COPY asys-workers/extensions /opt/asys/asys-workers/extensions
 COPY asys-workers/tools ./tools
+COPY python/asys/system_agents /opt/asys/python/asys/system_agents
 ENV NODE_ENV=production
 USER node
 ENTRYPOINT ["node", "/opt/asys/asys-workers/src/main.mjs"]

@@ -95,6 +95,9 @@ class JobOutput:
         document = self.files.read(directory / "agent.json")
         agent = document.get("agent")
         errors = [f"stderr: {line}" for line in tail(directory / "stderr.log", 100)]
+        goal = self.files.read(directory / 'goal.json')
+        if goal.get('version') == 1 and isinstance(goal.get('sessions'), list):
+            return 'Goal', self.read_goal(directory, goal) + errors
         if isinstance(agent, dict):
             if self.saved is not document:
                 self.saved, self.lines = document, render(agent)
@@ -106,6 +109,32 @@ class JobOutput:
             return "Transcript", self.lines + live + errors
         output = [f"stdout: {line}" for line in tail(directory / "stdout.log", 100)]
         return "Logs", output + errors
+
+    def read_goal(self, directory, goal):
+        lines = [f"Goal: {goal.get('goal', '')}", f"Status: {goal.get('status', '')}", '']
+        current = None
+        for session in goal['sessions']:
+            relative = session.get('directory', '')
+            path = (directory / relative).resolve()
+            if not relative or not path.is_relative_to(directory.resolve()):
+                continue
+            lines += [f"Attempt {session['attempt']}: {session['phase']} ({session['status']})", '']
+            current = self.files.read(path / 'agent.json').get('agent')
+            if isinstance(current, dict):
+                lines += render(current)
+            elif session.get('result'):
+                lines += [session['result'].get('final', ''), '']
+            request = self.files.read(path / 'human.request.json')
+            if request:
+                lines += ['Human help', request.get('summary', ''), request.get('prompt', ''), '']
+                answer = self.files.read(path / 'human.result.json')
+                if answer:
+                    lines += [f"Human: {answer.get('action', '')}", answer.get('guidance', ''), '']
+        self.read_stream()
+        if isinstance(current, dict) and self.live and self.live['parentId'] == current.get('session', {}).get('leafId'):
+            for _, (kind, chunks) in sorted(self.live['blocks'].items()):
+                lines += ['Assistant' if kind == 'text' else 'Thinking', *''.join(chunks).splitlines(), '']
+        return lines
 
     def read_stream(self):
         for line in self.reader.read():

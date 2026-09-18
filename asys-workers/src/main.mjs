@@ -11,9 +11,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const { values } = parseArgs({ args: argv, options: {
     root: { type: 'string', default: '/var/lib/asys/runtime' },
     environment: { type: 'string', default: '/opt/asys/environment' },
+    external: { type: 'string' },
   } });
   const directory = resolve(values.environment);
-  const { stdout } = await promisify(execFile)('python3', [runtimeTool, 'describe', directory], { env, maxBuffer: 8 * 1024 * 1024 });
+  const selection = [directory, ...(values.external === undefined ? [] : ['--external', resolve(values.external)])];
+  const { stdout } = await promisify(execFile)('python3', [runtimeTool, 'describe', ...selection], { env, maxBuffer: 8 * 1024 * 1024 });
   const descriptor = JSON.parse(stdout);
   const shutdown = new AbortController();
   let stop;
@@ -23,7 +25,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   process.once('SIGTERM', onSignal);
   let runtime, exited, stopHealth;
   try {
-    runtime = spawn('python3', [runtimeTool, 'run', directory, '--root', resolve(values.root)], { env, stdio: ['ignore', 'inherit', 'inherit'] });
+    runtime = spawn('python3', [runtimeTool, 'run', ...selection, '--root', resolve(values.root)], { env, stdio: ['ignore', 'inherit', 'inherit'] });
     exited = new Promise((resolve, reject) => {
       runtime.once('error', reject);
       runtime.once('exit', (code, signal) => resolve({ code, signal }));

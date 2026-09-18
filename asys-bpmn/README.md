@@ -95,7 +95,7 @@ formatting preserved. A task can use `input="= {prompt: request}"` or combine
 `request` with its own instructions. `--input -` reads the request text from
 stdin. Workflows that need no request can omit `--input`.
 
-Create `agents/general/` with optional `memory.md` in the environment.
+Create `agents/general/` with optional `prompt.md` and `memory.md` in the environment.
 Choose the agent runner and model in the environment's `workers.json`, for
 example:
 

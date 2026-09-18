@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "report-dummy",
+  "description": "Deterministic report team demonstrating review and revision without inference.",
+  "types": {
+    "implementer": {"command": ["python3", "/opt/asys/environment/programs/dummy.py", "implementer"]},
+    "reviewer": {"command": ["python3", "/opt/asys/environment/programs/dummy.py", "reviewer"]},
+    "program": {"command": ["/opt/asys/asys-workers/tools/asys-program"]}
+  }
+}

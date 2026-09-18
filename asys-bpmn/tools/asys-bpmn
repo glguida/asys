@@ -151,7 +151,7 @@ class Launcher(EnvironmentHost):
                        "dcomp": self.dcomp, "status": "starting", "channel": str(self.channel)}
         self.snapshot()
         self.say(f"Run {self.id}\nState: {self.directory}")
-        self.prepare_environment(environment, args.link, human_target=self.human_target())
+        self.prepare_environment(environment, args.link, external=args.external, human_target=self.human_target())
         engine_id = self.engine_image()
         (self.directory / "engine/component.dcomp").write_text(f"docker {engine_id}\noutput {SERVICE} workflow\n")
         self.snapshot()
@@ -204,7 +204,8 @@ class Launcher(EnvironmentHost):
         environment = Path(self.record["environment_directory"]).expanduser().resolve()
         if not environment.is_dir():
             raise LaunchError(f"Cannot refresh environment source: {environment} is unavailable")
-        if Environment(environment).name != self.record['environment']:
+        external = self.record.get('external_directory')
+        if Environment(environment, external=external).name != self.record['environment']:
             raise LaunchError('The saved workflow requires the original environment name')
         links = dict(self.record['links'])
         previous = self.names.pop('human', None)
@@ -213,7 +214,7 @@ class Launcher(EnvironmentHost):
             target = '@human_endpoint'
         target = self.human_target() or target
         self.prepare_environment(environment, [f"{source}={endpoint}" for source, endpoint in links.items()],
-                                 human_target=target)
+                                 external=external, human_target=target)
 
     def human_target(self):
         if not self.args.human:

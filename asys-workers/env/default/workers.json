@@ -14,6 +14,9 @@
         "/opt/asys/asys-workers/extensions/bpmn.mjs"
       ]
     },
+    "goal": {
+      "command": ["/opt/asys/asys-workers/tools/asys-goal"]
+    },
     "program": {
       "command": [
         "/opt/asys/asys-workers/tools/asys-program"

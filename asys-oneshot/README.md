@@ -1,13 +1,16 @@
 # asys-oneshot
 
-Run one named agent in a worker environment against an actual project directory.
+Run one assignment with the `simple` system agent in a selected worker environment.
 
 ```sh
-asys-oneshot ENVIRONMENT_DIRECTORY AGENT "prompt" [--workspace DIRECTORY]
+asys-oneshot ENVIRONMENT_DIRECTORY "prompt" [--model MODEL] [--workspace DIRECTORY]
 ```
 
-The environment is a directory. The agent is an entry under `types` in its
-`workers.json`; that entry selects the command, agent definition, and model.
+Core asys supplies `simple` and its instructions; one-shot manages the run.
+The environment supplies
+installed programs, shared skills and extensions. Configure a default inference
+model with `asys system-model set simple MODEL`, choosing a name from
+`asys-inference models`. `--model MODEL` overrides that default for one run.
 Options can appear before or after the positional arguments.
 
 ## Run
@@ -18,26 +21,35 @@ For an LLM agent, start an inference server exporting `@inference_endpoint`
 in the selected dcomp system.
 
 ```sh
-asys-oneshot ./env/kicad pcb "Review the connector placement" --workspace ./project
+asys system-model set simple account/model
+asys system-model list
+asys-oneshot ./env/kicad "Review the connector placement" \
+  --workspace ./project
 ```
+
+Model defaults are saved in `config.json` in the selected asys state directory:
+`$ASYS_STATE_ROOT`, or `$XDG_STATE_HOME/asys` (normally `$HOME/.local/state/asys`).
+They apply across worker environments. If neither a default nor `--model` is
+provided, one-shot exits before creating a run and prints the command to set it.
+The chosen model is saved with the run; changing the default affects later runs.
 
 Without `--workspace`, the current directory is the workspace. The directory
 must already exist and be writable by the invoking user.
 The agent reads and modifies project files there directly. The launcher prints
 the run ID and state path to stderr, and the job result JSON to stdout.
 A failed job exits with status 1; an interrupted invocation exits with 130.
-There is no implicit agent step limit. An environment can explicitly set one
-by adding `--max-steps N` to its agent command in `workers.json`.
+There is no implicit agent step limit.
 
 Observe the run in another terminal, or inspect it after completion:
 
 ```sh
 asys status latest
-asys logs latest pcb
+asys logs latest simple
 asys top
 ```
 
-`--root DIRECTORY` selects another run-state root. `--system NAME` selects
+`--root DIRECTORY` selects another run-state root; model defaults still come
+from the selected asys state directory. `--system NAME` selects
 the dcomp system, defaulting to `asys`. `-L inference=COMPONENT.OUTPUT` selects
 another Provider output; other declared environment inputs use the same syntax.
 
@@ -50,9 +62,6 @@ env/review/
   Dockerfile
   component.dcomp
   workers.json
-  agents/
-    reviewer/
-      memory.md
   skills/
     code-review/
       SKILL.md
@@ -79,23 +88,25 @@ input cyclo.provider.v1.Provider inference
   "version": 1,
   "name": "review",
   "types": {
-    "reviewer": {
-      "command": ["/opt/asys/asys-workers/tools/asys-agent",
-                  "--agent", "reviewer", "--model", "account/model"]
+    "program": {
+      "command": ["/opt/asys/asys-workers/tools/asys-program"]
     }
   }
 }
 ```
 
-Replace `account/model` with a name listed by `asys-inference models`. Then run
-`asys-oneshot ./env/review reviewer "Review the current changes"` from the
-project to review. The environment Dockerfile is built on each invocation,
+Run `asys-oneshot ./env/review "Review the current changes" --model account/model`
+from the project to review, replacing `account/model` with an exported model.
+The environment Dockerfile is built on each invocation,
 using the current base image and Docker's cache. An environment without a
 Dockerfile uses its current declared image.
 
-The global behavior prompt is supplied by asys. Agent memory and skills come
-from the environment. Reports and proposed lessons belong to the job; ordinary
-execution does not update agent memory. See [asys-workers](../asys-workers/README.md)
+The global behavior prompt and the `simple` agent's
+[instructions](../python/asys/system_agents/simple/prompt.md) are supplied by asys.
+The shared [system-agent package](../python/asys/system_agents/__init__.py)
+owns its worker definition and setup, so other launchers can use the same agent.
+`simple` uses the environment's shared resources and has no retained memory. Reports and
+proposed lessons belong to the job. See [asys-workers](../asys-workers/README.md)
 for environment tools, skills, egress, and the agent result contract.
 
 ## Execution and storage
@@ -105,7 +116,7 @@ through the runtime filesystem queue, waits for its result, and removes that
 component. It requires no workflow engine component.
 
 ```text
-asys-oneshot (host) --> runtime queue --> workers component --> named agent
+asys-oneshot (host) --> runtime queue --> workers component --> simple system agent
 ```
 
 Run state defaults to `$XDG_STATE_HOME/asys/runs` (normally

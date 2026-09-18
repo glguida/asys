@@ -1,4 +1,5 @@
 """Shared host support for running assignments in dcomp worker environments."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -8,9 +9,11 @@ import time
 import uuid
 
 from asys_runtime.environment import Environment
+from asys_runtime.files import write_json
 from asys_runtime.permissions import mkdir, shared
 from .lifecycle import ComponentHost, LaunchError
 from .human_service import ensure_human
+from .config import system_models
 
 PROVIDER = 'cyclo.provider.v1.Provider'
 HUMAN = 'asys.human.v1.Human'
@@ -19,6 +22,7 @@ HUMAN = 'asys.human.v1.Human'
 def execution_options(parser):
     parser.add_argument('--workspace', type=Path, default=Path.cwd(), metavar='DIRECTORY',
                         help='actual project directory to work in (default: current directory)')
+    parser.add_argument('--external', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('-L', '--link', action='append', default=[], metavar='INPUT=TARGET',
                         help='wire an environment input to COMPONENT.OUTPUT or @GLOBAL; - leaves it unconnected')
     parser.add_argument('--system', default='asys', help='dcomp system (default: asys)')
@@ -49,11 +53,14 @@ def prepare_run(root, workspace):
 
 
 class EnvironmentHost(ComponentHost):
-    def prepare_environment(self, environment, links, *, human_target=None):
-        descriptor = Environment(environment).descriptor
-        config = json.loads((environment / 'workers.json').read_text())
+    def prepare_environment(self, environment, links, *, external=None, human_target=None):
+        definition = Environment(environment, external=external)
+        descriptor, config = definition.descriptor, definition.config
+        if definition.external is not None and ',' in str(definition.external):
+            raise LaunchError('External bundle paths cannot contain commas (dcomp mount syntax)')
         self.definition = descriptor['definition']
         self.record.update(environment=descriptor['name'], environment_directory=str(environment),
+                           external_directory=str(definition.external) if definition.external is not None else None,
                            egress=config.get('egress', False))
         version = json.loads(self.command([self.dcomp[0], 'version', '--json']))
         release = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:[-+].*)?', version.get('version', ''))
@@ -68,7 +75,7 @@ class EnvironmentHost(ComponentHost):
             system.write_text('system execution-preview\ncomponent environment environment\n')
             component = self.document('view', '--json', str(system))['components'][0]
         inputs = {entry['name']: entry['service'] for entry in component['inputs']}
-        human_worker = any(Path(worker['command'][0]).name == 'asys-human' for worker in config['types'].values())
+        human_worker = any(Path(worker['command'][0]).name in {'asys-human', 'asys-goal'} for worker in config['types'].values())
         if human_target is not None or human_worker:
             for entry in component['inputs'] + component['outputs']:
                 if entry['name'] == 'human' and entry['service'] != HUMAN:
@@ -127,8 +134,20 @@ class EnvironmentHost(ComponentHost):
         options += ['--bind', f"{self.record['workspace']},/var/lib/asys/workspace,rw"]
         return options
 
+    def worker_models(self):
+        return system_models()
+
     def start_workers(self):
         options = self.execution_mounts()
+        models = self.directory / 'system-models.json'
+        write_json(models, self.worker_models())
+        options += ['--bind', f'{models},/etc/asys/system-models.json,ro']
+        if self.record.get('external_directory'):
+            external = Path(self.record['external_directory'])
+            if not (external / 'workers.json').is_file():
+                raise LaunchError(f'External workers.json is unavailable: {external}')
+            options += ['--bind', f'{external},/opt/asys/environment/external,ro',
+                        '--arg=--external', '--arg=/opt/asys/environment/external']
         if self.record.get('egress'):
             options.append('--egress')
         for source, target in self.record['links'].items():

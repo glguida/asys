@@ -7,7 +7,8 @@ export function workerPrompt({ definition, jobDirectory, workspace }) {
   return {
     systemPrompt: instructions,
     appendSystemPrompt: [
-      `Agent: ${definition.name}. Its definition is in ${JSON.stringify(definition.directory)}. Read its resources as needed; do not modify the environment during this job.`,
+      `Agent: ${definition.name}. Its definition is in ${JSON.stringify(definition.directory)}. Read its resources as needed; do not modify the agent definition or environment during this job.`,
+      definition.prompt && `Agent instructions:\n${definition.prompt}`,
       definition.memory && `Agent memory:\n${definition.memory}`,
       `Job area: ${JSON.stringify(jobDirectory)}. Keep temporary files in scratch/ there. Write your factual report to report.md there, and any concise lessons supported by this job to lessons.md there. Lessons are proposals for later review, not changes to agent memory.`,
       `Workspace: ${JSON.stringify(workspace)}. This is your working directory and contains the material you are assigned to work on. Follow the task's instructions for deliverables.`,

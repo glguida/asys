@@ -46,6 +46,8 @@ installs the shared `asys` command and requires no Docker. Use
 `make -C asys-bpmn install` for the workflow launcher and observer.
 `make -C asys-oneshot install` installs the single-agent launcher and observer
 and builds the shared worker images.
+`make -C asys-goal install` installs the goal launcher and human handler and
+builds the worker and Human images.
 `make -C asys-human-interface install` builds the human interface component and
 installs the `asys-human-prompt` terminal handler; its `install-host` target
 installs just the host tool when the image is already available.
@@ -69,9 +71,12 @@ package installation is needed to use them. The optional standalone
 | `bin/asys` | State initialization, shared-service updates, run listing, status, logs, and terminal monitor |
 | `bin/asys-inference` | Inference server management command |
 | `bin/asys-bpmn` | BPMN workflow launcher |
-| `bin/asys-oneshot` | Run one named agent in an environment |
+| `bin/asys-oneshot` | Run an assignment with the simple system agent in an environment |
+| `bin/asys-goal` | Implement and verify a goal, repeating with the simple system agent |
 | `bin/asys-human-prompt` | Foreground human handler with a queue of text questions |
 | `share/asys/python/` | Shared observation, environment launch, and runtime queue packages |
+| `share/asys/python/asys/system_agents/` | Built-in agent prompts and worker setup shared by launchers |
+| `share/asys/skills/asys/` | Portable Agent Skill, topic references, and runnable team/goal templates |
 | `share/asys-inference/components/` | Provider component sources and build dependencies |
 | `share/asys-inference/gateway-channel` | Private host client for gateway administration and login |
 | `share/asys-inference/provider-channel` | Private host client for the exported model catalogue |
@@ -79,12 +84,50 @@ package installation is needed to use them. The optional standalone
 | `share/asys-bpmn/python/` | BPMN progress formatting |
 | `share/asys-human/python/` | Human handler lifecycle, terminal presentation, and runtime channel libraries |
 
+## Agent skill
+
+Every host installation includes a portable [Agent Skills](https://agentskills.io/specification)
+guide for agents using asys and building teams. It covers environments,
+`workers.json`, role prompts, tools/skills/memory, BPMN and FEEL, one-shot,
+goal loops, human briefings, model setup, observation, and recovery. It includes
+an implementer/reviewer starter with real and dummy environments, plus a goal
+workflow. The installed copy works without this source checkout.
+
+```sh
+asys skill                         # show PREFIX/share/asys/skills/asys
+asys skill ~/.agents/skills        # copy into ~/.agents/skills/asys
+asys skill ~/.claude/skills        # copy into ~/.claude/skills/asys
+asys skill ./env/development/skills
+```
+
+`DEST` is a parent directory. The command creates `DEST/asys`, including all
+references and assets. It refuses an existing directory or symlink so local
+edits are preserved. Copies are snapshots; to update one, deliberately remove
+the previous copy or choose a new destination and copy again.
+
+The format is portable; discovery paths are consumer-specific.
+[Codex](https://developers.openai.com/codex/skills#where-to-save-skills) supports
+`~/.agents/skills`, project `.agents/skills`, and machine-wide
+`/etc/codex/skills`. [Claude Code](https://code.claude.com/docs/en/skills#choose-where-skills-load)
+supports `~/.claude/skills`, project `.claude/skills`, and managed skill
+locations. Asys workers discover skills packaged in their environment's
+`skills/` directory or selected agent's `skills/` directory.
+
+For a system installation such as `PREFIX=/usr/local`, the shared original is
+`/usr/local/share/asys/skills/asys`, readable by all users, and `asys skill`
+locates it for them. Administrators can use `asys skill /etc/codex/skills` for
+machine-wide Codex discovery, or the corresponding location for another
+consumer. Consumers supporting symlinked skill directories can link to the
+shared original to track upgrades. Installation itself stays within
+`PREFIX`/`DESTDIR` and does not modify users' agent configuration.
+
 ## Select state directories
 
 By default, asys uses `$XDG_STATE_HOME/asys`, or `$HOME/.local/state/asys`;
 dcomp uses `$XDG_STATE_HOME/dcomp`, or `$HOME/.local/state/dcomp`. These are
 separate directories. `ASYS_STATE_ROOT` selects the asys base, containing
-`runs/`, `inference/`, and `human/`. `DCOMP_STATE_ROOT` selects dcomp state.
+`runs/`, `inference/`, `human/`, and `config.json` for system-model defaults.
+`DCOMP_STATE_ROOT` selects dcomp state.
 
 Initialize a setup in directories you can write:
 
@@ -155,20 +198,34 @@ custom state directories, and terminal controls.
 Workflows and environment definitions remain ordinary files in their project
 repositories. The launcher accepts their paths directly.
 
-To run a single agent, give its environment directory, its entry in
-`workers.json`, and the assignment:
+To run one assignment with the `simple` system agent, give the environment
+directory and assignment. `--model` can select the inference model for this run:
 
 ```sh
-asys-oneshot ./env/kicad pcb "Review the connector placement" --workspace ./project
+asys-oneshot ./env/kicad "Review the connector placement" \
+  --model account/model --workspace ./project
 ```
 
-Both launchers use the current directory as the actual workspace unless
+The launchers use the current directory as the actual workspace unless
 `--workspace DIRECTORY` is given. Agents modify that directory directly.
 Workers and BPMN run with the invoking host user's UID, supplied through
 dcomp's `--user` option. Private state uses that user's primary group; shared
 state uses its selected group. Project files retain the invoking user's ownership.
 Job logs, transcripts, results, and reports are kept in the separate run state.
 See the [oneshot guide](asys-oneshot/README.md) for a complete environment example.
+
+For repeated implementation and verification, use the same environment and
+`simple` model setting:
+
+```sh
+asys-goal ./env/development "Implement the requested behavior" \
+  --workspace ./project
+```
+
+The [goal guide](asys-goal/README.md) explains human help, evidence-based
+verification, and using the goal worker from BPMN. Host launchers supply a
+read-only snapshot of model defaults to workers; reinstall and rebuild the
+workers image to make the new program and built-in agent prompts available.
 
 ## Start the inference server
 
@@ -187,6 +244,32 @@ listed identifier, for example:
 asys-inference gateway login openai-codex --as work
 asys-inference models
 ```
+
+Choose a model from that list as the default for the `simple` system agent:
+
+```sh
+asys system-model set simple account/model
+asys system-model list
+```
+
+This writes `config.json` in the selected asys state directory:
+
+```json
+{
+  "system_models": {
+    "simple": "account/model"
+  }
+}
+```
+
+Core asys installs the agent definitions, including the
+[`simple` prompt](python/asys/system_agents/simple/prompt.md), independently of
+the launchers. Defaults apply across worker environments in that asys setup. `asys-oneshot`
+uses the `simple` entry unless `--model MODEL` is supplied. If neither is set,
+it exits before creating a run and prints the command to configure it.
+`asys system-model list --json` prints the mapping as JSON, including unset
+system models as `null`. Add `--root DIRECTORY` to either configuration command
+to select another asys state base; a launcher's `--root` selects saved runs only.
 
 The inference server continues running after the command exits and exports
 `@inference_endpoint` in the `asys` dcomp system by default. See the

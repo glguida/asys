@@ -13,6 +13,18 @@ const cli = fileURLToPath(new URL('../tools/asys-bpmn', import.meta.url));
 const workflow = fileURLToPath(new URL('../examples/hello/workflow.bpmn', import.meta.url));
 const environment = fileURLToPath(new URL('../examples/hello/env/dummy', import.meta.url));
 
+test('the worker override is internal and does not appear in public help', async () => {
+  const { stdout } = await exec('python3', [cli, 'run', '--help']);
+  assert.doesNotMatch(stdout, /--external/);
+  const { stdout: selected } = await exec('python3', ['-c', `
+import runpy, sys
+module = runpy.run_path(sys.argv[1])
+args = module['arguments'](['run', 'workflow.bpmn', 'env', '--external', 'internal-workers'])
+print(args.external)
+`, cli]);
+  assert.equal(selected.trim(), 'internal-workers');
+});
+
 test('resume preserves saved configuration, enforces launcher ownership and skips the previous failure', async () => {
   const child = spawn('python3', [fileURLToPath(new URL('./resume-cli.py', import.meta.url))]);
   let error = '';
@@ -105,12 +117,14 @@ test('dcomp without container user support is rejected before starting component
 
 test('the launcher gives both components fixed queue, job and workspace mounts through dcomp', async () => {
   const { stdout } = await exec('python3', ['-c', `
-import json, runpy, tempfile
+import json, os, runpy, tempfile
 from pathlib import Path
 module = runpy.run_path(${JSON.stringify(fileURLToPath(new URL('../tools/asys-bpmn', import.meta.url)))})
 launcher = module['Launcher'](module['arguments'](['run', 'workflow.bpmn', 'env']))
 temporary = tempfile.TemporaryDirectory()
 launcher.directory = Path(temporary.name)
+os.environ['ASYS_STATE_ROOT'] = temporary.name
+(launcher.directory / 'config.json').write_text(json.dumps({'system_models': {'simple': 'account/goal'}, 'private': 'not mounted'}))
 launcher.record = {'links': {}, 'egress': False, 'workspace': str(Path.cwd())}
 launcher.wait_ready = lambda: None
 launcher.snapshot = lambda: None
@@ -119,9 +133,13 @@ launcher.channel = launcher.directory / 'runtime/channels/workflow'
 calls = []
 launcher.add = lambda *args: calls.append(args)
 launcher.start_components()
-print(json.dumps({'directory': temporary.name, 'calls': calls}))
+models = json.loads((launcher.directory / 'system-models.json').read_text())
+print(json.dumps({'directory': temporary.name, 'calls': calls, 'models': models}))
 `]);
-  const { directory, calls } = JSON.parse(stdout);
+  const { directory, calls, models } = JSON.parse(stdout);
+  assert.deepEqual(models, { simple: 'account/goal' });
+  assert.ok(calls[0][2].includes(`${directory}/system-models.json,/etc/asys/system-models.json,ro`));
+  assert.ok(!calls[1][2].includes(`${directory}/system-models.json,/etc/asys/system-models.json,ro`));
   assert.deepEqual(calls.map(call => call[0]), ['workers', 'engine']);
   for (const [, , args] of calls) {
     assert.equal(args[args.indexOf('--user') + 1], `${process.getuid()}:${process.getgid()}`);

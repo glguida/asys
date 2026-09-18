@@ -21,6 +21,7 @@ env/kicad/
   workers.json
   agents/
     schematic/
+      prompt.md        # optional stable agent instructions
       memory.md
       skills/          # optional skills specific to this agent
       extensions/      # optional additional Pi tools
@@ -66,7 +67,9 @@ agent and model; task data supplies the assignment:
 
 Use a model name exported by `asys-inference models`. Job types and agent names
 are chosen by the environment author. More than one job type can select the
-same agent. `memory.md` is optional; the named agent directory must exist.
+same agent. `prompt.md` and `memory.md` are optional; the named agent directory
+must exist. `prompt.md` supplies stable agent instructions in addition to the
+global prompt. Each job still supplies its own assignment in `input.prompt`.
 Shared skills and the selected agent's skills are both discovered. Skills of
 other agents are not loaded. Pi includes the skill catalogue and reads full
 skills with its ordinary tools. Shared and agent-specific `extensions/` folders
@@ -75,7 +78,7 @@ fails initialization rather than silently dropping tools. Installed programs
 are available through the shell tool.
 
 `--extension PATH` explicitly loads an additional Pi extension; relative paths
-are resolved within the environment. For an ad-hoc BPMN
+are resolved beside the selected `workers.json`. For an ad-hoc BPMN
 assignment, the supplied `extensions/bpmn.mjs` registers `list_actions`, `start_action`, and `wait_action`.
 The generic agent runner does not inspect BPMN metadata or choose workflow
 activities. Environments for other callers can provide their own extensions.
@@ -122,7 +125,7 @@ exit status. It does not prepare artifact dependencies or decide the next job.
 ## Agent execution and completion
 
 `asys-agent --agent NAME --model MODEL` constructs the session using the global
-system prompt, the selected agent's memory, its actual skills and tools, and
+system prompt, the selected agent's `prompt.md` and memory, its actual skills and tools, and
 the supplied task and execution locations. Project files in the workspace do
 not configure the agent's system prompt or automatically install extensions.
 
@@ -177,12 +180,25 @@ the workflow component. Images may retain a default user for independent use;
 asys execution uses the caller's identity for shared files.
 
 `JOB/.pi/system-prompt.txt` contains the exact last effective prompt.
-`JOB/agent.json` stores Pi session entries, agent identity and memory hash.
+`JOB/agent.json` stores Pi session entries, the selected agent directory, and
+hashes of its `prompt.md` and memory.
 Streaming text, thinking, tool activity, inference retries, exhaustion, and
 compaction are emitted on stdout with timestamps. The host monitor combines
 these events with the saved transcript without changing execution state.
 
 ## Programs and humans
+
+The [goal worker](../asys-goal/README.md) is another ordinary program:
+`/opt/asys/asys-workers/tools/asys-goal`. It runs the built-in `simple` agent
+in fresh implementation and verification sessions, repeating until verified
+with no default attempt limit. Both phases can ask for human help through the
+Human input. Its job
+input contains `goal` and optional `maxAttempts`; its model defaults to the
+`simple` system-model setting supplied by the launcher, with an optional
+`--model MODEL` command override. BPMN can bind a task to a `goal` job type
+without implementing the loop itself. The default environment declares this
+job type alongside agent, program, and human jobs.
+
 
 `asys-program` executes the assignment's complete argument vector directly.
 Use an explicit shell when shell syntax is needed. Ordinary programs use

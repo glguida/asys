@@ -52,6 +52,7 @@ def main(argv=None):
     parser.add_argument("--root", default=os.environ.get("ASYS_RUNTIME_ROOT", ".asys-runtime"))
     if command in {"run", "describe"}:
         parser.add_argument("config")
+        parser.add_argument("--external", help=argparse.SUPPRESS)
     if command == "run":
         parser.add_argument("--once", action="store_true")
     elif command == "submit":
@@ -72,13 +73,15 @@ def main(argv=None):
         else:
             options = parser.parse_intermixed_args(argv)
         if command == "describe":
-            print(json.dumps(Environment(options.config).descriptor, indent=2))
+            print(json.dumps(Environment(options.config, external=options.external).descriptor, indent=2))
             return 0
         if command == "environments":
             print(json.dumps(list_environments(options.root), indent=2))
             return 0
         if command == "run":
-            environment = Environment(options.config) if Path(options.config).is_dir() else None
+            environment = Environment(options.config, external=options.external) if Path(options.config).is_dir() else None
+            if options.external is not None and environment is None:
+                raise ValueError("--external requires an environment directory")
             types = environment.types if environment else load_config(options.config)
             with environment.register(options.root) if environment else nullcontext(options.root) as root:
                 runtime = Runtime(root, types, health_file=os.environ.get("ASYS_RUNTIME_HEALTH_FILE"))

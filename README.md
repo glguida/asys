@@ -12,6 +12,12 @@ across workflows and share inference across environments and users.
 
 [Installation](INSTALL.md) · [Write workflows and environments](asys-bpmn/AUTHORING.md) · [Inspect runs](docs/monitoring.md)
 
+For agents using asys, the portable [asys skill](skills/asys/SKILL.md) covers
+team design, environments, BPMN, one-shot, goals, human decisions, and recovery,
+with runnable starter projects. Every host installation includes it. `asys skill`
+prints its directory; `asys skill DEST` copies it into `DEST/asys` for your agent
+or environment. See [skill discovery and installation](INSTALL.md#agent-skill).
+
 ## 01 · Follow the work
 
 Consider a workflow for a software change. An agent implements the request in
@@ -57,8 +63,10 @@ repository. The launcher takes paths; it imposes no repository layout. Before
 execution, the BPMN runner checks that the selected environment declares the
 job types the workflow needs.
 
-Agents read their memory and skills from the environment. They write reports
-and proposed lessons into their job directories. Updating retained memory is
+Environment agents read their memory and skills from the environment. Core asys
+supplies system agents separately; one-shot and goal use its `simple` agent with the
+environment's shared resources. Agents write
+reports and proposed lessons into their job directories. Updating retained memory is
 an explicit change to the environment, which several runs can reuse. Project
 deliverables stay in the workspace, separate from execution records.
 
@@ -129,16 +137,40 @@ command exits. Use [asys-inference](asys-inference/README.md) to add providers
 and poolers or change the pipeline while it is running.
 
 Create a worker environment from the [default template](asys-workers/env/default)
-or the [minimal agent example](asys-oneshot/README.md#environment). Its
-`workers.json` selects the agents and models, using model names returned by
-`asys-inference models`. In a project whose environment defines a `reviewer`
-agent, a single assignment looks like this:
+or the [minimal environment example](asys-oneshot/README.md#environment).
+One-shot uses the `simple` system agent supplied by asys. Set that agent's
+default inference model using a name returned by `asys-inference models`, then
+run an assignment:
 
 ```sh
-asys-oneshot ./env/review reviewer \
+asys system-model set simple account/model
+asys system-model list
+asys-oneshot ./env/review \
   "Review the current changes and run the relevant checks" \
   --workspace ./project
 ```
+
+The default is saved in the selected asys state's `config.json` and applies
+across environments. Pass `--model MODEL` to override it for one invocation.
+Without either setting, one-shot prints instructions for configuring the model.
+
+The [simple agent's prompt](python/asys/system_agents/simple/prompt.md) and
+worker setup belong to the shared asys system-agent package. Other launchers
+can use that agent independently of one-shot.
+
+To implement a goal and verify it in a fresh session, use the
+[goal launcher](asys-goal/README.md):
+
+```sh
+asys-goal ./env/development "Implement the requested behavior and its tests" \
+  --workspace ./project
+```
+
+It repeats implementation and verification until the goal is verified, with
+no default attempt limit. Either phase can ask for human help through
+`asys-human-prompt`. The loop lives in the workers program, so BPMN can use it
+as an ordinary `goal` job too. It uses the configured `simple` model;
+`--model MODEL` overrides it for a run.
 
 A workflow takes the same kind of environment and a Markdown request file:
 
@@ -216,12 +248,12 @@ from a project directory:
 source /srv/asys/host/asys-env
 cd /path/to/project
 asys-inference models
-asys-oneshot /path/to/environment AGENT "Complete the assignment"
+asys-oneshot /path/to/environment "Complete the assignment" --model account/model
 asys top
 ```
 
-`AGENT` names an entry in the worker environment's `workers.json`. `asys-env`
-selects host state; the worker environment supplies the agents and tools.
+`--model` overrides the configured model for the `simple` system agent. `asys-env`
+selects host state; the worker environment supplies tools and shared resources.
 Project workspaces and environment sources must be accessible to the users
 who run them. Group members share access to run records, inference
 configuration, credentials, and control of the dcomp setup.
@@ -234,8 +266,8 @@ The full command is `asys init DIR [--dcomp DIR] [--group GROUP]`; it creates
 
 | Package | Responsibility |
 | --- | --- |
-| [asys](docs/monitoring.md) | Initialize host state; list runs; inspect status, logs, results, and agent transcripts. |
-| [asys-oneshot](asys-oneshot/README.md) | Run one named agent against a project workspace. |
+| [asys](docs/monitoring.md) | Supply system agents; initialize host state; configure models; inspect runs, logs, results, and agent transcripts. |
+| [asys-oneshot](asys-oneshot/README.md) | Run an assignment with the shared simple agent against a project workspace. |
 | [asys-bpmn](asys-bpmn/README.md) | Execute BPMN workflows, handle control flow, and resume failed runs. |
 | [asys-workers](asys-workers/README.md) | Define worker environments, agent memory, skills, tools, and execution behavior. |
 | [asys-runtime](asys-runtime/README.md) | Execute filesystem jobs, supervise processes, and record their outcomes. |

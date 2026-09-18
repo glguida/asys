@@ -22,6 +22,44 @@ const coordinator = fileURLToPath(new URL('./coordinator.py', import.meta.url));
 const binding = (type = 'program', attrs = '') => `<bpmn:extensionElements><asys:job type="${type}" ${attrs}/></bpmn:extensionElements>`;
 const programTask = (id, extra = '') => `<bpmn:task id="${id}">${binding('program', `input="= {step: &quot;${id}&quot;${extra}}"`)}</bpmn:task>`;
 
+for (const verified of [true, false]) {
+  test(`BPMN runs the goal worker as one ordinary job with verified=${verified}`, async t => {
+    const f = await fixture(t);
+    const models = join(f.root, 'models.json');
+    await writeFile(models, JSON.stringify({ simple: model.id }));
+    let calls = 0;
+    const server = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
+      listModels() { return { models: [model] }; },
+      async *infer(request) {
+        assert.equal(request.model, model.id);
+        const { context } = JSON.parse(request.payload);
+        assert.equal(context.messages.length, 1);
+        const result = ++calls === 1 ? { final: 'Implementation finished.', exception: null }
+          : { final: verified ? 'Artifact exists.' : 'Artifact missing.', exception: null, verified,
+            criteria: [{ requirement: 'Produce an artifact', satisfied: verified,
+              evidence: [{ source: 'artifact.txt', observation: verified ? 'Inspected the file.' : 'File does not exist.' }] }] };
+        yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
+      },
+    }); } }));
+    const socket = join(f.root, 'goal-provider.sock');
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+    t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+    const goal = fileURLToPath(new URL('../../asys-workers/tools/asys-goal', import.meta.url));
+    const queue = await f.addEnvironment('goals', { goal: { command: [process.execPath, goal] } },
+      { DCOMP_IN_INFERENCE: `unix://${socket}`, ASYS_SYSTEM_MODELS: models });
+    const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: workflow(
+      `<bpmn:task id="deliver">${binding('goal', 'input="= {goal: &quot;Produce an artifact&quot;, maxAttempts: 1}"')}</bpmn:task>`) });
+    await f.runtime.startRun({ environment: 'goals', id: 'run', workflowId });
+    await until(() => ['completed', 'failed'].includes(f.runtime.record('run').status));
+    assert.equal(f.runtime.record('run').status, verified ? 'completed' : 'failed');
+    const jobs = Object.values(f.runtime.record('run').jobs);
+    assert.equal(jobs.length, 1);
+    const state = await queue.state(jobs[0].id);
+    assert.equal(state.result.verified, verified);
+    assert.equal(calls, 2);
+  });
+}
+
 for (const hasCheckpoint of [true, false]) {
   test(hasCheckpoint ? 'resuming a failed workflow preserves completed work and retries only the failed job'
     : 'resume rejects a missing failure checkpoint without replaying or changing saved work', async t => {

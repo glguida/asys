@@ -24,7 +24,17 @@ class AgentProgress:
             kind = event.get("type", "")
             when = event.get("time", "")
             notice = True
-            if kind == "agent.provider_exhausted":
+            if kind == "goal.phase_started":
+                state, detail = "working", "started"
+            elif kind == "goal.phase_finished":
+                state, detail = "working", event.get("status", "finished")
+            elif kind == "goal.human_requested":
+                state, detail = "waiting_for_human", event.get("reason", "human help needed")
+            elif kind == "goal.human_answered":
+                state, detail = "working", f"human chose {event.get('action', 'retry')}"
+            elif kind == "goal.finished":
+                state, detail = event.get("status", "finished"), f"goal {event.get('status', 'finished')}"
+            elif kind == "agent.provider_exhausted":
                 state, detail = "exhausted", f"provider exhausted; retry at {event.get('retryAt', 'unknown')}"
             elif kind == "agent.provider_retrying":
                 state, detail = "retrying", "retrying provider request"
@@ -39,6 +49,8 @@ class AgentProgress:
                 state, detail, notice = "working", "agent working", False
             else:
                 continue
+            if event.get('phase'):
+                detail = f"attempt {event.get('attempt', '?')} {event['phase']}: {detail}"
             current = {"status": state, "detail": detail, "time": when}
             self.states[path] = current
             if notice:

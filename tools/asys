@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""Initialize asys state, update shared services, and inspect runs and jobs."""
-import argparse
+"""Configure asys, update shared services, and inspect runs and jobs."""
 from pathlib import Path
-import subprocess
 import sys
 
 executable = Path(__file__).resolve()
@@ -13,78 +11,9 @@ for directory in (executable.parents[1] / "share/asys/python", executable.parent
         sys.path.insert(0, str(directory))
         break
 try:
-    from asys.runs import default_root, logs, status
-    from asys.monitor import top
-    from asys.state import initialize, state_root
-    from asys.update import update
-    from asys.lifecycle import LaunchError
+    from asys.cli import main
 except ImportError as error:
     raise SystemExit(f"asys needs its installed Python package: {error}")
-
-
-def arguments(argv):
-    common = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    common.add_argument("--root", type=Path, metavar="DIRECTORY",
-                        help="saved run directory or root (default: XDG state directory/asys/runs)")
-    global_args, remaining = common.parse_known_args(argv)
-    commands = {"init": "Initialize state: DIR [--dcomp DIR] [--group GROUP]",
-                "update": "Refresh running shared services from the installed images",
-                "ps": "List saved runs", "status": "Show a run's jobs and errors",
-                "logs": "Show saved run output; JOB selects worker output", "top": "Monitor runs, jobs, and transcripts"}
-    if not remaining or remaining[0] in {"-h", "--help"}:
-        print("Usage: asys COMMAND [ARGUMENTS] [OPTIONS]\n")
-        for command, description in commands.items():
-            print(f"  {command:8} {description}")
-        print("\nObservation commands accept --root DIRECTORY. Options may appear before or after arguments.")
-        raise SystemExit(0)
-    command = remaining.pop(0)
-    if command not in commands:
-        common.error(f"unknown command {command!r}; choose init, update, ps, status, logs, or top")
-    parser = argparse.ArgumentParser(prog=f"asys {command}", parents=[] if command in {"init", "update"} else [common],
-                                     description=commands[command], allow_abbrev=False)
-    parser.set_defaults(command=command, root=global_args.root or default_root(), run=None)
-    if command == "update":
-        parser.set_defaults(root=global_args.root or state_root())
-        parser.add_argument('--root', type=Path, metavar='DIRECTORY', help='asys state base (default: ASYS_STATE_ROOT or the local state directory)')
-        return parser.parse_intermixed_args(remaining)
-    if command == "init":
-        if global_args.root is not None:
-            parser.error("init takes its state directory as DIR, without --root")
-        parser.add_argument("directory", type=Path, metavar="DIR")
-        parser.add_argument("--dcomp", type=Path, metavar="DIR", help="initialize or reuse this dcomp state directory")
-        parser.add_argument("--group", metavar="GROUP", help="share new state with this Unix group")
-        return parser.parse_intermixed_args(remaining)
-    if command != "ps":
-        parser.add_argument("run", nargs="?", metavar="RUN", help="run ID or unique prefix, latest, or a saved run directory")
-    if command in {"ps", "status"}:
-        parser.add_argument("--json", action="store_true", help="print structured run and job status")
-    if command == "logs":
-        parser.add_argument("job", nargs="?", metavar="JOB", help="job name, ID, or unique ID prefix")
-        parser.add_argument("-f", "--follow", action="store_true", help="follow new output and jobs until the run ends")
-        parser.add_argument("-n", "--lines", type=int, metavar="N", help="initial lines (default: full run log, 50 per worker log; 0 starts at the end)")
-        parser.add_argument("--stream", choices=["both", "stdout", "stderr"], help="select a worker output stream")
-        parser.add_argument("--source", choices=["run", "events", "jobs", "components", "commands"], help="saved log source (default: run, or jobs when JOB is given)")
-    result = parser.parse_intermixed_args(remaining)
-    if command == "logs":
-        result.source = result.source or ("jobs" if result.job or result.stream else "run")
-        if (result.lines is not None and result.lines < 0) or ((result.job or result.stream) and result.source != "jobs"):
-            parser.error("--lines must be nonnegative; JOB and --stream are only valid with --source jobs")
-        result.stream = result.stream or "both"
-        if result.source not in {"run", "events"} and result.lines is None:
-            result.lines = 50
-    return result
-
-
-def main(argv=None):
-    args = arguments(sys.argv[1:] if argv is None else argv)
-    try:
-        {"init": initialize, "update": update, "ps": status, "status": status, "logs": logs, "top": top}[args.command](args)
-        return 0
-    except (KeyboardInterrupt, BrokenPipeError):
-        return 0
-    except (OSError, ValueError, LaunchError, subprocess.CalledProcessError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 1
 
 
 if __name__ == "__main__":

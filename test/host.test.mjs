@@ -12,6 +12,14 @@ const cli = fileURLToPath(new URL('../tools/asys', import.meta.url));
 const launcher = fileURLToPath(new URL('../asys-bpmn/tools/asys-bpmn', import.meta.url));
 const json = (path, value) => writeFile(path, JSON.stringify(value));
 
+test('asys routes commands and preserves interspersed options', async () => {
+  await exec('python3', [fileURLToPath(new URL('./cli.py', import.meta.url))]);
+});
+
+test('asys sets and lists model defaults in the selected state', async () => {
+  await exec('python3', [fileURLToPath(new URL('./system_models.py', import.meta.url))]);
+});
+
 test('asys initializes private and shared state and a sourceable environment', async () => {
   await exec('python3', [fileURLToPath(new URL('./init.py', import.meta.url))]);
 });

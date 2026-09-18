@@ -73,6 +73,66 @@ class EnvironmentTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 Environment(directory)
 
+    def test_external_workers_replace_the_definition_and_keep_environment_resources_separate(self):
+        builtin = self.definition("builtin", {"local": {"command": ["false"]}})
+        external = self.definition("portable", {"remote": {"command": ["./program"], "env": {
+            "ASYS_ENVIRONMENT_DIR": "wrong", "ASYS_WORKERS_DIR": "wrong"}}})
+        selected = Environment(builtin.directory, external=external.directory)
+        self.assertEqual(selected.descriptor, external.descriptor)
+        self.assertEqual(list(selected.types), ["remote"])
+        self.assertEqual(selected.types["remote"]["command"], [str(external.directory / "program")])
+        self.assertEqual(selected.types["remote"]["env"], {
+            "ASYS_ENVIRONMENT": "portable", "ASYS_ENVIRONMENT_DIR": str(builtin.directory),
+            "ASYS_WORKERS_DIR": str(external.directory)})
+
+    def test_runtime_executes_external_workers_using_explicit_and_mounted_selection(self):
+        builtin = self.definition("builtin", {"local": {"command": ["false"]}})
+        (builtin.directory / "tool-data.txt").write_text("environment resource")
+        for mode in ("explicit", "mounted"):
+            with self.subTest(mode=mode):
+                external = self.root / "bundle" if mode == "explicit" else builtin.directory / "external"
+                external.mkdir()
+                (external / "worker").write_text(f'#!{sys.executable}\n' + '''import json, os
+from pathlib import Path
+json.dump({
+    "environment": Path(os.environ["ASYS_ENVIRONMENT_DIR"]).joinpath("tool-data.txt").read_text(),
+    "agent": Path(os.environ["ASYS_WORKERS_DIR"]).joinpath("agent-data.txt").read_text()
+}, open(os.environ["ASYS_RESULT"], "w"))
+''')
+                (external / "worker").chmod(0o755)
+                (external / "agent-data.txt").write_text("external resource")
+                (external / "workers.json").write_text(json.dumps({"version": 1, "name": "portable",
+                    "types": {"remote": {"command": ["./worker"]}}}))
+                selection = [str(builtin.directory)] + (["--external", str(external)] if mode == "explicit" else [])
+                state = self.root / mode
+                queue = Queue(environment_root(state, "portable"))
+                queue.submit("remote", "one")
+                result = subprocess.run([sys.executable, str(ROOT / "tools/asys-runtime"), "run", *selection,
+                    "--root", str(state), "--once"], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(queue.state("one")["status"], "done", queue.state("one"))
+                self.assertEqual(queue.state("one")["result"], {
+                    "environment": "environment resource", "agent": "external resource"})
+                result = subprocess.run([sys.executable, str(ROOT / "tools/asys-runtime"), "describe", *selection],
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), describe(state, "portable"))
+
+    def test_missing_or_invalid_external_workers_never_fall_back_to_builtin_workers(self):
+        builtin = self.definition("builtin", {"local": {"command": ["true"]}})
+        with self.assertRaises(FileNotFoundError):
+            Environment(builtin.directory, external=self.root / "missing")
+        external = builtin.directory / "external"
+        external.mkdir()
+        with self.assertRaises(FileNotFoundError):
+            Environment(builtin.directory, external=external)
+        (external / "workers.json").write_text('{"version": 1, "types": {}}')
+        with self.assertRaises(ValueError):
+            Environment(builtin.directory)
+        (external / "workers.json").write_text("invalid json")
+        with self.assertRaises(ValueError):
+            Environment(builtin.directory)
+
     def test_environment_egress_is_an_optional_boolean(self):
         directory = self.root / "env"
         directory.mkdir()
