@@ -337,6 +337,31 @@ directory, normally `$HOME/.local/state/asys`. Runs and their job records use
 `asys/runs`; project workspaces remain at the paths supplied by the caller. Installation
 does not create a machine or start an inference server automatically.
 
+### Upgrade from 0.1.1
+
+Version 0.1.2 changes one-shot to use the built-in `simple` agent. Remove the
+agent-name argument from existing commands and configure its model, or supply
+`--model MODEL` for the invocation:
+
+```sh
+asys-inference models
+asys system-model set simple account/model
+asys-oneshot ./env/development "Implement the requested change" --workspace ./project
+```
+
+Use an exported model ID in place of `account/model`. Named environment agents
+remain available through their `workers.json` job types; one-shot uses the
+system agent with the environment's shared tools, skills, and extensions.
+
+Reinstall with the original `PREFIX` and rebuild the workers image to include
+the goal program and system-agent prompts (`make install` does both). New runs
+and BPMN resume rebuild environments that have a Dockerfile. Environments using
+only a prebuilt image must have that image rebuilt against the new workers base.
+The new `asys-goal` launcher and BPMN goal jobs share the `simple` model default.
+
+The installation also includes the [portable agent skill](#agent-skill).
+Previously exported copies are independent; update them explicitly when needed.
+
 ### Upgrade from 0.1.0
 
 Version 0.1.1 changes the direction of human requests: workers call the Human

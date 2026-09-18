@@ -1,6 +1,23 @@
 # Release notes
 
-## Unreleased
+## 0.1.2
+
+- Add the reusable `asys-goal` worker and host launcher. Fresh implementation
+  and verification sessions repeat until the goal is verified, with no default
+  attempt limit. Both phases can ask a human for help; evidence, lessons, and
+  replies remain in job state. BPMN can use the same worker as an ordinary job.
+- Supply the built-in `simple` agent independently of worker environments.
+  One-shot now takes an environment and prompt, without an agent argument.
+  `asys system-model set/list` configures defaults, and `--model` overrides
+  the model for a one-shot or goal run. See the
+  [upgrade instructions](INSTALL.md#upgrade-from-011).
+- Load stable `prompt.md` instructions for named environment agents alongside
+  their memory and resources, and record the effective definition in job state.
+- Install a portable asys Agent Skill covering team and environment design,
+  BPMN, one-shot, goals, human decisions, and recovery, with runnable templates.
+  `asys skill` locates it; `asys skill DEST` copies it for any compatible agent.
+- Teach agents to prepare human briefings with completed work, evidence,
+  concrete questions, and the consequences of each choice.
 
 - Keep the shared Human component running independently of terminal prompts.
   Workflows start it when needed; prompts attach later and can disconnect or

@@ -1,4 +1,4 @@
-<img src="docs/assets/banner.svg" alt="asys — Agentic systems, composed. Version 0.1.1. MIT. Linux." width="100%">
+<img src="docs/assets/banner.svg" alt="asys — Agentic systems, composed. Version 0.1.2. MIT. Linux." width="100%">
 
 asys runs specialized agents, programs, and human tasks against real project
 files. Give one agent an assignment, or coordinate a workflow that creates,
