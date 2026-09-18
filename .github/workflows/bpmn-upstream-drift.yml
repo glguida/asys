@@ -1,0 +1,51 @@
+name: BPMN dependency contracts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 6 * * 1'
+  pull_request:
+    paths:
+      - 'asys-bpmn/**'
+      - 'asys-runtime/**'
+      - 'asys-workers/**'
+      - 'python/asys/system_agents/**'
+      - 'asys-inference/components/**'
+      - '.github/workflows/bpmn-upstream-drift.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.advisory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Pinned dependencies
+            elements: '17.3.0'
+            serializer: '4.4.1'
+            advisory: false
+          - name: Latest dependencies (advisory)
+            elements: latest
+            serializer: latest
+            advisory: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install worker test dependencies
+        run: |
+          npm --prefix asys-inference/components/protocol/component ci --ignore-scripts --omit=dev
+          npm --prefix asys-inference/components/protocol/provider ci --ignore-scripts --omit=dev
+          npm --prefix asys-workers ci --ignore-scripts --omit=dev
+      - name: Check engine contracts and workflows
+        run: make -C asys-bpmn test-upstream-drift BPMN_ELEMENTS=${{ matrix.elements }} MODDLE_CONTEXT_SERIALIZER=${{ matrix.serializer }}

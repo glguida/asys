@@ -12,6 +12,7 @@ import { Provider } from '../../asys-inference/components/protocol/provider/gen/
 import { Environments } from '../../asys-runtime/javascript/environments.mjs';
 import { Store } from '../src/store.mjs';
 import { WorkflowRuntime } from '../src/runtime.mjs';
+import { ENGINE } from '../src/engine.mjs';
 import { Actions } from '../../asys-workers/src/actions.mjs';
 import { assistant, model } from '../../asys-workers/test/helpers.mjs';
 import { workflow, flow, until } from './helpers.mjs';
@@ -130,6 +131,30 @@ test('resume retries an interrupted stage when the engine never recorded its fai
   assert.notEqual(jobs.interrupted.id, job.id);
   assert.equal(jobs.interrupted.metadata.retry_of, job.id);
   assert.equal((await f.queue.state(job.id)).status, 'cancelled');
+});
+
+test('the new adapter rejects old-engine resume and recovery before changing saved jobs', async t => {
+  const f = await fixture(t);
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: workflow(programTask('fails', ', fail: true')) });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId });
+  await until(() => f.runtime.record('run').status === 'failed' && !f.runtime.active.has('run'));
+  assert.equal(f.runtime.record('run').engine, ENGINE);
+  assert.equal(ENGINE, 'bpmn-elements@17.3.0+asys.2');
+  await f.runtime.close();
+  f.runtime = new WorkflowRuntime({ store: new Store(f.state), environments: f.environments });
+  const record = f.runtime.record('run');
+  record.engine = 'bpmn-elements@17.3.0';
+  f.runtime.store.save(record);
+  const jobs = await readdir(f.queue.jobs);
+  const events = f.runtime.getEvents({ runId: 'run', limit: 1000 });
+  await assert.rejects(f.runtime.resumeRun({ id: 'run' }), /requires workflow engine bpmn-elements@17\.3\.0/);
+  assert.deepEqual(f.runtime.record('run'), record);
+  record.status = 'running';
+  f.runtime.store.save(record);
+  await assert.rejects(f.runtime.recover(), /requires workflow engine bpmn-elements@17\.3\.0/);
+  assert.deepEqual(f.runtime.record('run'), record);
+  assert.deepEqual(await readdir(f.queue.jobs), jobs);
+  assert.deepEqual(f.runtime.getEvents({ runId: 'run', limit: 1000 }), events);
 });
 
 test('resume reruns the failed agent stage without rerunning its completed predecessor', async t => {
@@ -548,6 +573,151 @@ test('ad-hoc sequence flows enable the next selection, which survives a workflow
   const run = await finished(f);
   assert.equal(JSON.parse(run.outputJson).work.approval.approved, true);
   assert.deepEqual(Object.keys(f.runtime.record('run').jobs).sort(), before);
+});
+
+test('ad-hoc dependencies remain enabled but unselected across recovery, and false conditions stay disabled', async t => {
+  const f = await fixture(t);
+  const hold = join(f.root, 'finish-coordinator');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: workflow(`<bpmn:adHocSubProcess id="work">${binding('coordinator', 'input="= {select: [], hold: hold}"')}
+    ${programTask('first')}${programTask('enabled')}${programTask('disabled')}
+    ${flow('yes', 'first', 'enabled', 'true')}${flow('no', 'first', 'disabled', 'false')}
+    </bpmn:adHocSubProcess>`) });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId, variablesJson: JSON.stringify({ hold }) });
+  const coordinatorJob = await until(() => Object.values(f.runtime.record('run').jobs).find(job => job.metadata?.actions && job.status === 'submitted'));
+  const actions = new Actions((await f.queue.paths(coordinatorJob.id)).directory, coordinatorJob.metadata.actions.entries);
+  const first = await actions.start('first', 'first', {});
+  await actions.wait(first.id);
+  await until(async () => (await actions.list()).entries.find(entry => entry.id === 'enabled').available);
+  const before = f.runtime.record('run');
+  const controller = Object.values(before.controllers)[0];
+  assert.equal(controller.enabled.enabled.length, 1);
+  assert.equal(controller.enabled.disabled, undefined);
+  assert.equal(Object.values(before.jobs).filter(job => ['enabled', 'disabled'].includes(job.activityId)).length, 0);
+  await f.restart();
+  assert.deepEqual(Object.keys(f.runtime.record('run').jobs).sort(), Object.keys(before.jobs).sort());
+  assert.equal(Object.values(f.runtime.record('run').controllers)[0].enabled.enabled.length, 1);
+  await assert.rejects(actions.start('disabled', 'disabled', {}), /not enabled/);
+  const enabled = await actions.start('enabled', 'enabled', {});
+  await actions.wait(enabled.id);
+  await writeFile(hold, 'done');
+  await finished(f);
+  const jobs = Object.values(f.runtime.record('run').jobs);
+  assert.equal(jobs.filter(job => job.activityId === 'first').length, 1);
+  assert.equal(jobs.filter(job => job.activityId === 'enabled').length, 1);
+  assert.equal(jobs.filter(job => job.activityId === 'disabled').length, 0);
+  const events = f.runtime.getEvents({ runId: 'run', limit: 1000 }).events;
+  assert.equal(events.filter(event => event.type === 'activity.discard' && event.activityId === 'disabled').length, 0);
+});
+
+test('ad-hoc gateways and message events keep native tokens across recovery', async t => {
+  const f = await fixture(t);
+  const hold = join(f.root, 'finish-coordinator');
+  const source = workflow(`<bpmn:adHocSubProcess id="work" cancelRemainingInstances="false">${binding('coordinator', 'input="= {select: [], hold: hold}"')}
+    ${programTask('left')}${programTask('right')}<bpmn:parallelGateway id="join"/>
+    <bpmn:exclusiveGateway id="choose" default="no"/>
+    <bpmn:intermediateCatchEvent id="ready"><bpmn:messageEventDefinition messageRef="Ready"/></bpmn:intermediateCatchEvent>
+    ${programTask('last')}${programTask('unused')}
+    ${flow('leftDone', 'left', 'join')}${flow('rightDone', 'right', 'join')}${flow('joined', 'join', 'choose')}
+    ${flow('yes', 'choose', 'ready', 'left.step = "left"')}${flow('no', 'choose', 'unused')}${flow('next', 'ready', 'last')}
+    </bpmn:adHocSubProcess>`).replace('<bpmn:process', '<bpmn:message id="Ready"/><bpmn:process');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: source });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId, variablesJson: JSON.stringify({ hold }) });
+  const coordinatorJob = await until(() => Object.values(f.runtime.record('run').jobs).find(job => job.metadata?.actions && job.status === 'submitted'));
+  assert.deepEqual(coordinatorJob.metadata.actions.entries.map(entry => entry.id), ['left', 'right', 'last', 'unused']);
+  const actions = new Actions((await f.queue.paths(coordinatorJob.id)).directory, coordinatorJob.metadata.actions.entries);
+  const waiting = () => [...f.runtime.active.get('run').waiters.values()].some(({ activity }) => activity.id === 'ready');
+  const left = await actions.start('left', 'left', {}, { signal: AbortSignal.timeout(10000) });
+  await actions.wait(left.id, { signal: AbortSignal.timeout(10000) });
+  assert.equal(waiting(), false, 'The join must wait for both selections');
+  await f.restart();
+  const right = await actions.start('right', 'right', {}, { signal: AbortSignal.timeout(10000) });
+  await actions.wait(right.id, { signal: AbortSignal.timeout(10000) });
+  await until(waiting);
+  assert.equal((await actions.list()).entries.find(entry => entry.id === 'last').available, false);
+  await f.restart();
+  await until(waiting);
+  await f.runtime.sendMessage({ runId: 'run', target: 'Ready', id: 'ready' });
+  await until(async () => (await actions.list()).entries.find(entry => entry.id === 'last').available);
+  assert.equal(Object.values(f.runtime.record('run').jobs).some(job => job.activityId === 'last'), false);
+  assert.equal((await actions.list()).entries.find(entry => entry.id === 'unused').available, false);
+  const last = await actions.start('last', 'last', {}, { signal: AbortSignal.timeout(10000) });
+  await actions.wait(last.id, { signal: AbortSignal.timeout(10000) });
+  await writeFile(hold, 'done');
+  await finished(f);
+  assert.deepEqual(Object.values(f.runtime.record('run').jobs).filter(job => job.type === 'program').map(job => job.activityId).sort(), ['last', 'left', 'right']);
+});
+
+test('ad-hoc compensation waits for its trigger and survives recovery', async t => {
+  const f = await fixture(t);
+  const hold = join(f.root, 'finish-coordinator');
+  const source = workflow(`<bpmn:adHocSubProcess id="work" cancelRemainingInstances="false">${binding('coordinator', 'input="= {select: [], hold: hold}"')}
+    ${programTask('first')}
+    <bpmn:boundaryEvent id="compensate" attachedToRef="first" cancelActivity="false"><bpmn:compensateEventDefinition/></bpmn:boundaryEvent>
+    <bpmn:task id="undo" isForCompensation="true">${binding('program', 'input="= {step: &quot;undo&quot;}"')}</bpmn:task>
+    <bpmn:association id="handler" sourceRef="compensate" targetRef="undo" associationDirection="One"/>
+    <bpmn:intermediateCatchEvent id="ready"><bpmn:messageEventDefinition messageRef="Rollback"/></bpmn:intermediateCatchEvent>
+    <bpmn:intermediateThrowEvent id="rollback"><bpmn:compensateEventDefinition/></bpmn:intermediateThrowEvent>
+    ${flow('done', 'first', 'ready')}${flow('next', 'ready', 'rollback')}
+    </bpmn:adHocSubProcess>`).replace('<bpmn:process', '<bpmn:message id="Rollback"/><bpmn:process');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: source });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId, variablesJson: JSON.stringify({ hold }) });
+  const coordinatorJob = await until(() => Object.values(f.runtime.record('run').jobs).find(job => job.metadata?.actions && job.status === 'submitted'));
+  assert.deepEqual(coordinatorJob.metadata.actions.entries.map(entry => entry.id), ['first']);
+  const undoJobs = () => Object.values(f.runtime.record('run').jobs).filter(job => job.activityId === 'undo');
+  assert.deepEqual(undoJobs(), []);
+  const actions = new Actions((await f.queue.paths(coordinatorJob.id)).directory, coordinatorJob.metadata.actions.entries);
+  const selected = await actions.start('first', 'first', {}, { signal: AbortSignal.timeout(10000) });
+  await actions.wait(selected.id, { signal: AbortSignal.timeout(10000) });
+  const waiting = () => [...f.runtime.active.get('run').waiters.values()].some(({ activity }) => activity.id === 'ready');
+  await until(waiting);
+  assert.deepEqual(undoJobs(), []);
+  await f.restart();
+  await until(waiting);
+  assert.deepEqual(undoJobs(), []);
+  await f.runtime.sendMessage({ runId: 'run', target: 'Rollback', id: 'rollback' });
+  await until(() => undoJobs().some(job => job.status === 'completed'));
+  await writeFile(hold, 'done');
+  await finished(f);
+  assert.equal(undoJobs().length, 1);
+});
+
+test('discarding selected ad-hoc work does not discard its successors', async t => {
+  const f = await fixture(t);
+  const hold = join(f.root, 'finish-coordinator');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: workflow(`<bpmn:adHocSubProcess id="work">${binding('coordinator', 'input="= {select: [], hold: hold}"')}
+    ${programTask('first', ', wait: never')}${programTask('second')}${flow('next', 'first', 'second')}
+    </bpmn:adHocSubProcess>`) });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId, variablesJson: JSON.stringify({ hold, never: join(f.root, 'never') }) });
+  const coordinatorJob = await until(() => Object.values(f.runtime.record('run').jobs).find(job => job.metadata?.actions && job.status === 'submitted'));
+  const actions = new Actions((await f.queue.paths(coordinatorJob.id)).directory, coordinatorJob.metadata.actions.entries);
+  const selected = await actions.start('first', 'first', {});
+  const controller = [...f.runtime.active.get('run').controllers.values()][0];
+  controller.children().find(child => child.id === 'first').getApi().discard();
+  await assert.rejects(actions.wait(selected.id, { signal: AbortSignal.timeout(5000) }), /discarded/);
+  assert.equal(controller.children().find(child => child.id === 'second').counters.discarded, 0);
+  assert.equal(controller.record.enabled.second, undefined);
+  assert.equal(controller.available('second'), false);
+  await writeFile(hold, 'done');
+  await finished(f);
+  assert.equal(Object.values(f.runtime.record('run').jobs).filter(job => job.activityId === 'second').length, 0);
+});
+
+test('an ad-hoc scope boundary timer cancels selected work and its coordinator', async t => {
+  const f = await fixture(t);
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: workflow(`<bpmn:adHocSubProcess id="work">${binding('coordinator', 'input="= {select: [{action: &quot;slow&quot;}]}"')}
+    ${programTask('slow', ', wait: never')}${programTask('unused')}
+    </bpmn:adHocSubProcess>
+    <bpmn:boundaryEvent id="deadline" attachedToRef="work"><bpmn:timerEventDefinition><bpmn:timeDuration xsi:type="bpmn:tFormalExpression">PT1S</bpmn:timeDuration></bpmn:timerEventDefinition></bpmn:boundaryEvent>
+    ${programTask('timeout')}${flow('elapsed', 'deadline', 'timeout')}`) });
+  await f.runtime.startRun({ environment: 'test', id: 'run', workflowId, variablesJson: JSON.stringify({ never: join(f.root, 'never') }) });
+  await until(() => Object.values(f.runtime.record('run').jobs).some(job => job.activityId === 'slow' && job.status === 'submitted'));
+  const run = await finished(f);
+  assert.equal(JSON.parse(run.outputJson).timeout.step, 'timeout');
+  const jobs = Object.values(f.runtime.record('run').jobs);
+  assert.equal(jobs.filter(job => job.activityId === 'unused').length, 0);
+  for (const job of jobs.filter(job => job.activityId === 'slow' || job.type === 'coordinator')) {
+    assert.equal((await f.queue.wait(job.id, { timeoutMs: 3000 })).status, 'cancelled');
+  }
 });
 
 test('standard loops repeat while true and stop without issuing work when a precondition is false', async t => {

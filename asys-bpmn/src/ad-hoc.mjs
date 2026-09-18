@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { readJSON, writeJSON } from '../../asys-runtime/javascript/queue.mjs';
 import { clone } from './values.mjs';
 import { messagePaths, valueOf } from './expressions.mjs';
+import { adHocActions } from './bpmn.mjs';
 
 export class AdHoc {
   constructor(execution, activity, message, signal) {
@@ -19,9 +20,7 @@ export class AdHoc {
     this.record = execution.record.controllers[this.id] ??= { actions: {}, enabled: {} };
     this.record.enabled ??= {};
     this.targets = new Set((this.scope.flowElements ?? []).filter(e => e.$type === 'bpmn:SequenceFlow').map(e => e.targetRef.$ref));
-    this.entries = (this.scope.flowElements ?? []).filter(e =>
-      (execution.artifact.bindings[e.id] || ['bpmn:SubProcess', 'bpmn:CallActivity', 'bpmn:Transaction'].includes(e.$type)) && !e.isForCompensation
-    ).map(e => ({ id: e.id, name: e.name ?? e.id, description: (e.documentation ?? []).map(d => d.text).join('\n'),
+    this.entries = adHocActions(this.scope, execution.artifact.bindings).map(e => ({ id: e.id, name: e.name ?? e.id, description: (e.documentation ?? []).map(d => d.text).join('\n'),
       inputPaths: [...new Set(['input', 'args'].flatMap(key => {
         const expression = execution.artifact.bindings[e.id]?.[key];
         return expression ? messagePaths(expression) : [];
@@ -136,7 +135,7 @@ export class AdHoc {
         if (!existing?.runContent) this.record.enabled[request.action]?.shift();
         this.record.actions[id] = { request: clone(request), status: 'starting', runContent };
         this.execution.checkpoint();
-        activity.run({ ...runContent, message: clone(request.input ?? null), asysSelected: true, asysController: this.id, asysAction: id });
+        activity.run({ ...runContent, message: clone(request.input ?? null), asysController: this.id, asysAction: id });
         this.execution.checkpoint();
       } catch (error) {
         if (this.signal.aborted || this.execution.abort.signal.aborted) throw error;
@@ -153,5 +152,9 @@ export function actionEvent(execution, activity, key, content) {
   if (!action || action.request.action !== activity.id) return;
   if (key === 'activity.enter') { action.status = 'running'; action.executionId = content.executionId; }
   if (key === 'activity.end') { action.status = 'completed'; action.result = clone(content.output ?? null); }
-  if (key === 'activity.discard') { action.status = 'failed'; action.error = 'Action discarded'; }
+  // Discarding active work emits execution.discard; activity.discard applies
+  // to work discarded before execution. Contract P13 pins both paths.
+  if (['activity.discard', 'activity.execution.discard', 'activity.execution.cancel'].includes(key)) {
+    action.status = 'failed'; action.error = 'Action discarded';
+  }
 }

@@ -67,24 +67,27 @@ export function expressions(context = contextOf) {
 // conditions remain booleans and cannot execute host-language code.
 export function scripts(context = contextOf) {
   return {
-    register() {},
-    getScript(language, owner) {
-      const condition = owner.behaviour.conditionExpression;
-      const body = condition?.body ?? owner.behaviour.script;
-      if (!body) return;
-      if (language && !['feel', 'https://www.omg.org/spec/DMN/20191111/FEEL/'].includes(language)) return;
-      return { execute(scope, callback) {
-        try {
-          const result = feel(body, context(scope.environment, scope.content));
-          if (condition) {
-            if (typeof result !== 'boolean') throw new Error(`Condition ${owner.id} did not return a boolean`);
-          } else {
-            if (!object(result)) throw new Error(`Script ${owner.id} must return a context of variable updates`);
-            scope.environment.assignVariables(variables(result));
-          }
-          callback(null, result);
-        } catch (error) { callback(error); }
-      } };
+    register(owner) {
+      if (owner.type === 'bpmn:ConditionalEventDefinition') return getScript(owner.behaviour.scriptFormat, owner);
     },
+    getScript,
   };
+  function getScript(language, owner) {
+    const condition = owner.behaviour.conditionExpression || owner.type === 'bpmn:ConditionalEventDefinition';
+    const body = owner.behaviour.conditionExpression?.body ?? owner.behaviour.script;
+    if (!body) return;
+    if (language && !['feel', 'https://www.omg.org/spec/DMN/20191111/FEEL/'].includes(language)) return;
+    return { execute(scope, callback) {
+      try {
+        const result = feel(body, context(scope.environment, scope.content));
+        if (condition) {
+          if (typeof result !== 'boolean') throw new Error(`Condition ${owner.id} did not return a boolean`);
+        } else {
+          if (!object(result)) throw new Error(`Script ${owner.id} must return a context of variable updates`);
+          scope.environment.assignVariables(variables(result));
+        }
+        callback(null, result);
+      } catch (error) { callback(error); }
+    } };
+  }
 }

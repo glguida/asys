@@ -308,7 +308,8 @@ class Execution {
       activate: () => {
         activity.broker.subscribeTmp('execution', 'execute.*', (key, message) => {
           const content = message.content;
-          if (!content.isMultiInstance || !['execute.start', 'execute.completed', 'execute.discard'].includes(key)) return;
+          // The root also has isMultiInstance, but no iteration index (P9).
+          if (!content.isMultiInstance || content.isRootScope || !['execute.start', 'execute.completed', 'execute.discard'].includes(key)) return;
           this.record.loops ??= {};
           const loop = this.record.loops[content.parent.executionId] ??= {};
           loop[content.index] = key === 'execute.start' ? 'running' : key === 'execute.completed' ? 'completed' : 'terminated';

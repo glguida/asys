@@ -118,6 +118,20 @@ export function validateExecutable(artifact) {
     if ((SCOPES.has(type) || JOB_TASKS.has(type) || type === 'bpmn:CallActivity') && !element.id) errors.push(`${type}: executable element needs an ID`);
     const needsJob = JOB_TASKS.has(type) && type !== 'bpmn:ReceiveTask';
     if ((needsJob || type === 'bpmn:AdHocSubProcess') && !Object.hasOwn(artifact.bindings, element.id)) errors.push(`${label}: missing asys:job binding`);
+    if (type === 'bpmn:AdHocSubProcess') {
+      const catches = new Set((element.flowElements ?? []).filter(child =>
+        ['bpmn:BoundaryEvent', 'bpmn:IntermediateCatchEvent'].includes(child.$type)
+        && child.eventDefinitions?.some(event => event.$type === 'bpmn:CompensateEventDefinition')
+      ).map(child => child.id));
+      const handlers = new Set((element.artifacts ?? []).filter(association =>
+        association.$type === 'bpmn:Association' && catches.has(association.sourceRef?.$ref)
+      ).map(association => association.targetRef?.$ref));
+      // Native compensation activities use inbound associations as triggers.
+      // Without one they become start activities, running rollback on entry.
+      for (const child of element.flowElements ?? []) if (child.isForCompensation && !handlers.has(child.id)) {
+        errors.push(`${child.id}: ad-hoc compensation requires an association from a compensation catch event in the same scope`);
+      }
+    }
     if (type === 'bpmn:CallActivity') {
       const called = element.calledElement;
       if (!called) errors.push(`${label}: call activity needs calledElement`);
@@ -148,6 +162,13 @@ export function validateExecutable(artifact) {
     if (!FEEL_LANGUAGES.has(selected)) { errors.push(`${label}: execution expressions must use FEEL (found ${selected})`); return; }
     try { checkExpression(body, label); } catch (error) { errors.push(error.message); }
   }
+}
+
+// Flow interception and the coordinator's action list must agree on which
+// children are selected by a worker. Gateways/events remain engine-controlled.
+export function adHocActions(scope, bindings) {
+  return (scope.flowElements ?? []).filter(element => !element.isForCompensation && !element.triggeredByEvent
+    && (Object.hasOwn(bindings, element.id) || ['bpmn:SubProcess', 'bpmn:CallActivity', 'bpmn:Transaction'].includes(element.$type)));
 }
 
 export function indexElements(document) {

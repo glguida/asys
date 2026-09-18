@@ -1,5 +1,23 @@
 # Release notes
 
+## Unreleased
+
+- Replace BPMN loop and ad-hoc activity instance patches with registered loop
+  and sequence-flow constructors. Keep ad-hoc work idle until selected, including
+  after recovery, and prevent discards from cascading into other selections.
+  Discarded active selections now report failure to their coordinator.
+  Gateways and events between selections retain native execution and recovery.
+  Reject unconnected ad-hoc compensation handlers before execution so they
+  cannot run automatically on scope entry.
+- Route explicit FEEL conditional-event scripts through the engine's script
+  registry. Pin engine/serializer assumptions with contract tests and add an
+  advisory CI check against their latest releases.
+- Change the workflow engine identity to `bpmn-elements@17.3.0+asys.2`.
+  Checkpoints from the previous adapter cannot be recovered or resumed by this
+  version, including failed runs from 0.1.2. Finish or resume those runs with
+  the previous installation before upgrading, or start a new run. Saved logs,
+  results, and workspace files remain available.
+
 ## 0.1.2
 
 - Add the reusable `asys-goal` worker and host launcher. Fresh implementation

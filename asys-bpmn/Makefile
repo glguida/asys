@@ -1,7 +1,11 @@
 PREFIX ?= $(HOME)/.local
-.PHONY: test build install
+BPMN_ELEMENTS ?= latest
+MODDLE_CONTEXT_SERIALIZER ?= latest
+.PHONY: test test-upstream-drift build install
 test:
 	npm test
+test-upstream-drift:
+	node tools/test-upstream-drift.mjs "$(BPMN_ELEMENTS)" "$(MODDLE_CONTEXT_SERIALIZER)"
 build:
 	install -D -m 0755 tools/asys-bpmn bin/asys-bpmn
 	$(MAKE) -C ../asys-workers build

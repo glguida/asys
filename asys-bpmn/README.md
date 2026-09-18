@@ -10,6 +10,8 @@ The [authoring guide](AUTHORING.md) covers projects, environments, prompts,
 programs, human decisions, workspace handling, parallel work, and recovery.
 The [shared-workspace example](examples/shared-workspace) is a runnable workflow with its own
 environment that passes real files through a split and join.
+The [engine adapter guide](ENGINE.md) records extension rules, dependency
+contracts, upgrade checks, and checkpoint compatibility.
 
 ## Workspace and jobs
 
