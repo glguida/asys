@@ -143,6 +143,9 @@ them to JSON Forms as its `schema` and `uischema` and submit the same result.
 JSON Forms is a framework with a documented UI schema; it is not a universal
 terminal UI standard. This host implements the terminal mapping below.
 
+The short [Reporting to humans guide](../asys-workers/src/reporting-to-humans.md)
+explains how to compose the request and is included in built-in agent prompts.
+
 The complete question screen is a JSON Forms document, not a separately printed
 header followed by a form. The host combines the task's title, prompt, context,
 file references and answer controls into one `uischema`. Display information

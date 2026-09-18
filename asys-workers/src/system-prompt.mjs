@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
-const instructions = readFileSync(new URL('./system.md', import.meta.url), 'utf8').trim();
+const instructions = ['system.md', 'reporting-to-humans.md']
+  .map(name => readFileSync(new URL(name, import.meta.url), 'utf8').trim()).join('\n\n');
 
 export function workerPrompt({ definition, jobDirectory, workspace }) {
   return {

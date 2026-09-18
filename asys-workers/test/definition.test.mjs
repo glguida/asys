@@ -40,6 +40,8 @@ test('named agents share environment resources and load their own memory and ski
   assert.doesNotMatch(prompt, /schematic retained lesson|schematic techniques/);
   assert.match(prompt, /report\.md/);
   assert.match(prompt, /lessons\.md/);
+  const reportingGuide = await readFile(new URL('../src/reporting-to-humans.md', import.meta.url), 'utf8');
+  assert.ok(prompt.includes(reportingGuide.trim()), 'the model receives the complete shared reporting guide');
   assert.doesNotMatch(prompt, /ASYS_RESULT/);
   assert.equal(job.agent.name, 'pcb');
   assert.equal(await readFile(join(environment, 'agents/pcb/memory.md'), 'utf8'), 'pcb retained lesson');

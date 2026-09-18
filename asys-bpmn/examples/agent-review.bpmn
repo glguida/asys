@@ -14,12 +14,22 @@
       <bpmn:serviceTask id="draft" name="Prepare a draft">
         <bpmn:documentation>Prepare the requested draft using the programs available in the workspace.</bpmn:documentation>
         <bpmn:extensionElements>
-          <asys:job type="agent" input='= {prompt: request}'/>
+          <asys:job type="agent" input='= {prompt: "Prepare the requested draft for human review. Include review_summary and review_files in your final JSON using the Reporting to humans guide. Request: " + request}'/>
         </bpmn:extensionElements>
       </bpmn:serviceTask>
       <bpmn:userTask id="approval" name="Review the draft">
         <bpmn:extensionElements>
-          <asys:job type="human" input='= {title: "Review the draft", prompt: "Approve this draft?", context: draft.final, form: {type: "object", properties: {approved: {type: "boolean"}}, required: ["approved"], additionalProperties: false}}'/>
+          <asys:job type="human" input='= {
+            title: "Review the completed draft",
+            prompt: "Accept the draft described below, or request changes in the comments. This example records your decision and ends; requested revisions need a new run.",
+            summary: draft.review_summary,
+            files: draft.review_files,
+            form: {type: "object", properties: {
+              approved: {type: "boolean", title: "Accept this draft?",
+                oneOf: [{const: true, title: "Accept draft"}, {const: false, title: "Request changes"}]},
+              comments: {type: "string", title: "What should change?"}
+            }, required: ["approved"], additionalProperties: false}
+          }'/>
         </bpmn:extensionElements>
       </bpmn:userTask>
       <bpmn:sequenceFlow id="ready_for_review" sourceRef="draft" targetRef="approval"/>

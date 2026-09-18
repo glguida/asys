@@ -33,8 +33,11 @@ env/kicad/
   programs/            # environment-specific commands
 ```
 
-The global behavioral prompt is [src/system.md](src/system.md), supplied by
-asys. Agent memory contains retained lessons and principles. Agents read their
+The global behavioral prompt includes [src/system.md](src/system.md) and the
+short [Reporting to humans guide](src/reporting-to-humans.md), supplied by asys.
+The guide is included in every agent's system prompt, so reporting guidance
+does not depend on an individual workflow repeating it. Agent memory contains
+retained lessons and principles. Agents read their
 definitions during jobs; reports and proposed lessons go into job storage.
 Several workers components can use the same environment concurrently. A later
 review process can evaluate their evidence and propose a new environment
@@ -188,8 +191,15 @@ runtime contract. Their exit code determines success; a result JSON file is
 optional. They do not need Pi or the agent completion format.
 
 `asys-human` accepts an object with required `prompt` and optional `title`,
-`context`, `candidates`, `form` (JSON Schema draft-07), and `uischema` (JSON Forms).
-The completed human answer becomes its job result.
+`summary`, `files`, `context`, `details`, `candidates`, `form` (JSON Schema draft-07),
+and `uischema` (JSON Forms). The completed human answer becomes its job result.
+The producing workflow or environment writes the question and work summary,
+selects the evidence, and defines what the answer means. The shared
+[Reporting to humans guide](src/reporting-to-humans.md) explains how to compose
+these fields. Follow the
+[decision-authoring guide](../asys-bpmn/AUTHORING.md#write-a-decision-the-human-can-understand):
+put the question and requested action in `prompt`, completed work in `summary`,
+review artifacts in `files`, and machine state in `details`.
 
 For a command that directly runs `asys-human`, host launchers supply
 `input asys.human.v1.Human human` in the run's workers definition, correcting

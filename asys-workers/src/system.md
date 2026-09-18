@@ -33,7 +33,7 @@ when the task calls for it.
 Finish with a valid JSON object:
 
 {
-  "final": "A short factual line describing what you did and what happened.",
+  "final": "A factual account of the outcome, checks, and any unresolved work.",
   "exception": null
 }
 

@@ -240,7 +240,7 @@ default component name. `--name NAME` overrides it.
 <bpmn:serviceTask id="draft" name="Draft the report">
   <bpmn:extensionElements>
     <asys:job type="agent"
-      input='= {prompt: "Prepare the project report in reports/report.md. Request: " + request}'
+      input='= {prompt: "Prepare the project report in reports/report.md for human review. Include review_summary and review_files in your final JSON using the Reporting to humans guide. Request: " + request}'
       result="draft"/>
   </bpmn:extensionElements>
 </bpmn:serviceTask>
@@ -254,8 +254,11 @@ default component name. `--name NAME` overrides it.
 | `result` | Variable receiving the completed JSON result | Task ID |
 
 The job's JSON result describes the outcome. Project files live in the shared
-workspace; later jobs read them directly. The agent's `final` field is a concise
-report, and its full transcript remains in the separate job directory.
+workspace; later jobs read them directly. The agent's `final` field reports the
+outcome, checks, and unresolved work; its full transcript remains in the
+separate job directory. For the human review below, this task also returns
+`review_summary` and `review_files` as described in the shared
+[Reporting to humans guide](../asys-workers/src/reporting-to-humans.md).
 
 Define structured decision fields and their meaning in the job's prompt. The
 agent includes them in its final JSON response alongside `final` and `exception`:
@@ -274,7 +277,8 @@ FEEL expressions can use workflow variables, `variables`, `output`, `message`,
 `inputs`, `item`, `index`, and loop counters. `task` is the parsed BPMN element.
 Bindings must produce the input shape expected by their selected program.
 
-After `draft` finishes, a review can use `draft.final`:
+After `draft` finishes, another agent can use `draft.final` to orient its review
+and inspect the actual report:
 
 ```xml
 <asys:job type="agent"
@@ -286,9 +290,11 @@ I/O and data objects, including FEEL transformations. They remain useful for
 business data. Files remain in the workspace; BPMN data associations do not
 copy or publish them.
 
-Prefer a deliberate summary such as `draft.final` over stringifying its entire
-result. The complete agent transcript is in job storage. For large or exact data, write
-a JSON or Markdown file in the workspace and have the next program read it.
+Pass the result fields needed by the next task instead of stringifying the
+entire result. An outcome summary alone is insufficient for a human decision;
+prepare its explanation and evidence using the reporting guide. For large or
+exact data, write a JSON or Markdown file in the workspace and reference it.
+The complete agent transcript remains in job storage.
 
 ## Workspace and execution records
 
@@ -396,10 +402,14 @@ A human task uses a program too. The supplied `human` program accepts:
   <bpmn:extensionElements>
     <asys:job type="human" input='= {
       title: "Report approval",
-      prompt: "Review the report and approve or request changes.",
-      context: {summary: draft.final},
+      prompt: "Approve this report for publication, or request changes in the comments.",
+      summary: draft.review_summary,
+      files: draft.review_files,
       form: {type: "object", properties: {
-        approved: {type: "boolean"}, comments: {type: "string"}
+        approved: {type: "boolean", title: "Publish this report?",
+          oneOf: [{const: true, title: "Approve publication"},
+                  {const: false, title: "Request revisions"}]},
+        comments: {type: "string", title: "What should change?"}
       }, required: ["approved"], additionalProperties: false}
     }'/>
   </bpmn:extensionElements>
@@ -421,6 +431,20 @@ workflow's ordinary error handling.
 
 Completing a human task with `approved: false` successfully executes the question.
 Add a gateway afterward to proceed or return to revision.
+
+### Write a decision the human can understand
+
+Start with the short [Reporting to humans guide](../asys-workers/src/reporting-to-humans.md).
+It is included in every built-in agent's system prompt.
+
+The workflow or environment that creates the Human input owns the question,
+explanation, file selection, and meaning of each answer. `asys-human` forwards
+that input. The terminal arranges it and collects an answer; it does not infer
+the question from workflow state, diagnose failures, or write a work summary.
+Require the preceding agent or program to prepare the briefing before submitting
+the human job. The draft task above explicitly requests `review_summary` and
+`review_files`; the human task passes them through. These fields are written by
+the agent, not added by the runtime.
 
 ## Parallelism, repetition, and waiting
 
