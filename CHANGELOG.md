@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## 0.1.4
 
 - Define and independently review success criteria before goal implementation.
   Preserve accepted contracts, review feedback and unresolved findings across

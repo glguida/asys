@@ -337,6 +337,20 @@ directory, normally `$HOME/.local/state/asys`. Runs and their job records use
 `asys/runs`; project workspaces remain at the paths supplied by the caller. Installation
 does not create a machine or start an inference server automatically.
 
+### Upgrade from 0.1.3
+
+Version 0.1.4 adds definition and review of success criteria to goal jobs, with
+accepted contracts and unresolved findings retained between attempts. The goal
+command and BPMN job input stay the same; the goal result adds criterion IDs,
+statuses and an open-findings list alongside the existing verdict and evidence.
+
+Reinstall with the original `PREFIX` (`make install` rebuilds the images and
+updates the host tools and bundled skill). Rebuild environments that use a
+prebuilt workers image against the new base. Refresh any separately exported
+skill copies. New goal jobs use the updated prompts and loop; running jobs
+continue with their existing version. BPMN engine checkpoint compatibility is
+unchanged from 0.1.3.
+
 ### Upgrade from 0.1.2
 
 Version 0.1.3 changes the BPMN engine adapter and its saved checkpoint format.
