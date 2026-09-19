@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## 0.1.3
 
 - Present Human requests with the question, work summary, and evidence links
   first. Keep request identifiers and technical details in a separate tab or

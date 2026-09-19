@@ -337,6 +337,19 @@ directory, normally `$HOME/.local/state/asys`. Runs and their job records use
 `asys/runs`; project workspaces remain at the paths supplied by the caller. Installation
 does not create a machine or start an inference server automatically.
 
+### Upgrade from 0.1.2
+
+Version 0.1.3 changes the BPMN engine adapter and its saved checkpoint format.
+It cannot recover or resume BPMN runs recorded by the previous adapter,
+including failed runs from 0.1.2. Finish or resume those runs with the previous
+installation before upgrading, or start new runs after upgrading. Saved logs,
+results, and project files remain available. See the
+[engine adapter guide](asys-bpmn/ENGINE.md) for the compatibility boundary.
+
+Reinstall with the original `PREFIX` (`make install` rebuilds the images and
+updates the host tools). Restart terminal Human prompts to use the updated
+briefing and file preview interface.
+
 ### Upgrade from 0.1.1
 
 Version 0.1.2 changes one-shot to use the built-in `simple` agent. Remove the
