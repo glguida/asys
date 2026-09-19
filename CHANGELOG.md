@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Present Human requests with the question, work summary, and evidence links
+  first. Keep request identifiers and technical details in a separate tab or
+  `/details` in plain mode, while preserving response drafts during navigation.
+- Open workspace file links in the terminal preview, resolve links relative to
+  the document, and support returning to the previous file. Expand the authoring
+  guide with concrete instructions for preparing human decisions and evidence.
 - Replace BPMN loop and ad-hoc activity instance patches with registered loop
   and sequence-flow constructors. Keep ad-hoc work idle until selected, including
   after recovery, and prevent discards from cascading into other selections.

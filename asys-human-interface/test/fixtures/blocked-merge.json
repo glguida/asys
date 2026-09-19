@@ -1,0 +1,35 @@
+{
+  "title": "Uncommitted docs/asys.md blocks the merge",
+  "prompt": "Can you preserve your uncommitted change to `docs/asys.md` and make the original checkout ready for another merge attempt? This workflow requires a clean checkout.\n\nChoose Retry after resolving that change, Clarify to change the requirements, or Stop to leave the work unfinished.",
+  "summary": "Implemented the FIFO fix in `worktree/rtl/sync_fifo.sv` and passed its simulation. The generated work is still in the separate worktree; it has not been merged into `main`.\n\n`docs/asys.md` is your unrelated local edit. It is not part of the generated changes, and no merge conflict was reported.",
+  "files": [
+    {"path": "worktree/rtl/sync_fifo.sv", "label": "Changed: rtl/sync_fifo.sv", "description": "Fix simultaneous read and write handling."},
+    {"path": "review/changes.diff", "label": "Full diff"},
+    {"path": "review/simulation.txt", "label": "Simulation results"},
+    {"path": "docs/asys.md", "label": "Local edit blocking this workflow"}
+  ],
+  "details": {
+    "state": "/var/lib/asys/workspace/build/asys/example-run",
+    "phase": "publish",
+    "attempts": 3,
+    "failure": {"reason": "Original target has user changes", "origin_status": " M docs/asys.md"},
+    "inputs": {"rtl/sync_fifo.sv": "sha256:example"}
+  },
+  "form": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "What should happen next?",
+        "oneOf": [
+          {"const": "retry", "title": "Retry after resolving the local edit"},
+          {"const": "clarify", "title": "Clarify the requirements"},
+          {"const": "stop", "title": "Stop and keep the unfinished work"}
+        ]
+      },
+      "text": {"type": "string", "title": "What did you resolve or want changed?", "minLength": 1}
+    },
+    "required": ["action", "text"],
+    "additionalProperties": false
+  }
+}

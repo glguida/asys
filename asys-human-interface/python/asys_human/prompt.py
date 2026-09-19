@@ -6,6 +6,7 @@ import sys
 from dataclasses import replace
 
 from .forms import Field, Form, Label, Layout, MISSING, get_value, initial_value, set_value
+from .presentation import technical_text
 
 
 class Quit(Exception):
@@ -25,6 +26,7 @@ def text(value):
 class FormPrompt:
     def __init__(self, description, output=sys.stdout):
         self.form = Form(description)
+        self.description = description
         self.output = output
         self.draft = initial_value(self.form.root)
         self.show_labels = True
@@ -33,16 +35,20 @@ class FormPrompt:
         print(text(message), file=self.output, flush=True)
 
     def line(self, prompt, readline):
-        print(text(prompt), end="", file=self.output, flush=True)
-        value = readline()
-        if value.startswith("//"):
-            return value[1:], ""  # Escape a literal slash command in a text answer.
-        command = value.strip().lower()
-        if command == "/quit":
-            raise Quit()
-        if command == "/skip":
-            raise Skip()
-        return value, command
+        while True:
+            print(text(prompt), end="", file=self.output, flush=True)
+            value = readline()
+            if value.startswith("//"):
+                return value[1:], ""  # Escape a literal slash command in a text answer.
+            command = value.strip().lower()
+            if command == "/quit":
+                raise Quit()
+            if command == "/skip":
+                raise Skip()
+            if command == "/details":
+                self.say("\nTechnical details\n" + technical_text(self.description))
+                continue
+            return value, command
 
     def yes_no(self, prompt, readline):
         while True:
@@ -55,7 +61,7 @@ class FormPrompt:
 
     def read(self, readline):
         """Keep the draft for edits and for retries after service validation."""
-        self.say("Use /skip to leave this request or /quit to stop. Prefix a literal slash command with another slash.")
+        self.say("Use /details for technical details, /skip to leave this request or /quit to stop. Prefix a literal slash command with another slash.")
         while True:
             self.collect(self.form.ui, readline)
             self.show_labels = False

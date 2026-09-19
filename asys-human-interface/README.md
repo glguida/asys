@@ -42,16 +42,20 @@ without assigning a global. Other launchers can select it explicitly with
 `-L human=review-desk.human`. `--claimant alice` changes the reviewer identity.
 
 Interactive terminals open a full-screen [Textual](https://textual.textualize.io/)
-application. The review has a section selector and scrollable Markdown; the
+application. Review opens with the question, work summary, and file links. Additional
+supporting information has a section selector and scrollable Markdown; the
 response pane contains choices, multiline comments, and other schema fields.
 The Files tab browses the project workspace, previews text and Markdown, and
-offers Copy path and Open externally. Request counts
-update in place while you edit. At widths below 100 columns, Review, Files and
+offers Back, Copy path and Open externally. File links open in this preview;
+links inside a document resolve relative to that document. Copy path copies
+only when explicitly selected. The Technical tab holds job identifiers,
+metadata, and the full supplied request. Request counts
+update in place while you edit. At widths below 100 columns, Review, Files, Technical and
 Response occupy separate tabs, preserving the draft when the terminal resizes.
 
 | Key | Action |
 | --- | --- |
-| F2 / F3 / F4 | Review / Files / Response |
+| F2 / F3 / F4 / F5 | Review / Files / Response / Technical |
 | Tab / Shift-Tab | Next / previous control |
 | Arrows / Space | Navigate and select choices |
 | Ctrl-S | Submit the displayed response |
@@ -64,7 +68,8 @@ beside the form and retain all entered values for correction. Scroll with the
 mouse, or focus the review pane and use arrows, Page Up/Down, Home/End.
 
 `--plain` selects the line-based interface; redirected input/output also selects
-it automatically. `--tui` forces the full-screen interface. Python 3.10 or later
+it automatically. Use `/details` at any input prompt to inspect the technical
+record without changing your answer. `--tui` forces the full-screen interface. Python 3.10 or later
 and pip are required to install the host. `make install-host` installs just the
 host and its pinned private dependencies, without rebuilding container images
 or changing the user's Python environment.
@@ -91,8 +96,8 @@ Questions enter a FIFO queue in notification order. Duplicate notifications
 retain their position, and job IDs are qualified by their originating component, so different workers
 remain separate. Only the question being presented is claimed. Tasks already
 claimed elsewhere, tasks for other candidates, and tasks completed or cancelled
-while queued are skipped. The handler shows the title, prompt, context, and
-origin before asking for input.
+while queued are skipped. The handler shows the question and the supplied work
+summary before asking for input. Origin identifiers are in Technical.
 
 The terminal renders the task's JSON Schema `form` as individual fields. Objects
 with approval and comment fields work directly; the user does not type JSON.
@@ -143,18 +148,37 @@ them to JSON Forms as its `schema` and `uischema` and submit the same result.
 JSON Forms is a framework with a documented UI schema; it is not a universal
 terminal UI standard. This host implements the terminal mapping below.
 
+The workflow or environment writes the request. The host presents its content
+and collects an answer; it does not generate explanations from state or logs.
 The short [Reporting to humans guide](../asys-workers/src/reporting-to-humans.md)
 explains how to compose the request and is included in built-in agent prompts.
+The [environment authoring guide](../asys-bpmn/AUTHORING.md#write-a-decision-the-human-can-understand)
+describes how to prepare the question and evidence.
 
-The complete question screen is a JSON Forms document, not a separately printed
-header followed by a form. The host combines the task's title, prompt, context,
-file references and answer controls into one `uischema`. Display information
+| Input field | Content and presentation |
+| --- | --- |
+| `title` | Short name for this decision |
+| `prompt` | Required question, concrete issue, and requested action; appears first |
+| `summary` | Optional Markdown describing work completed, changes, checks, and remaining work; appears on the first page under Work so far |
+| `files` | Optional list of `{path, label, description?}` entries for changed files, diffs, and evidence inside the workspace; first-page links open in Files |
+| `context` | Optional supporting explanation, rendered as additional Review sections |
+| `details` | Optional technical data such as full diagnostics, state paths, revisions, and counters; available in Technical |
+| `form`, `uischema` | Answer schema and optional control layout |
+| `candidates` | Optional eligible reviewer names |
+
+The host combines the task's title, prompt, summary, context, file references
+and answer controls into one `uischema`. Display information
 uses standard `Label` elements; answer fields use `Control` elements. The saved
-`request.json` has `version`, `worker`, `task`, `title`, `prompt`, `files`, `form` and `uischema`.
+`request.json` has `version`, `worker`, `task`, `title`, `prompt`, `summary`, `files`,
+`technical`, `fileMounts`, `form` and `uischema`. `fileMounts` records the relevant
+worker mounts so links inside documents can be resolved on the host.
 It can be rendered by another frontend with `form` as the answer schema and the
 complete `uischema` as its presentation. File locations stay outside the answer
 data. Submission, claims and queue navigation remain host responsibilities.
-Structured context becomes labeled sections. Worker result prose and domain
+`technical` retains the complete supplied request and metadata, including
+`details`, and the originating worker and task IDs. No domain evidence is
+truncated or summarized by the presenter. Structured context becomes labeled
+sections. Worker result prose and domain
 fields are retained; enclosing assistant transcripts, signatures, token usage
 and provider metadata are excluded from the presentation.
 
@@ -162,14 +186,26 @@ and provider metadata are excluded from the presentation.
 
 The approval view shows the actual project workspace. The Files tab starts at
 that directory, where you can browse files, preview text and Markdown, and open
-a selected file in its external viewer. Job records and the answer result file
-are not offered as review locations. File references in the task input do not
-change the browser's root.
+a selected file in its external viewer. Explicit `files` entries add shortcuts
+to relevant files and directories without replacing the workspace browser.
+Use workspace-relative paths, or absolute worker paths inside the workspace.
+Paths outside the workspace and paths containing `..` are not offered as
+shortcuts. Job records and the answer result file are not automatically offered
+as review locations. References are retained in the technical record even when
+they cannot be offered as file shortcuts.
+
+Clicking a local Markdown link opens the file inside the Files tab, including
+workspace-relative links, absolute worker paths, and host `file:` URLs. Links
+inside a preview resolve relative to that file. Back returns to the previous
+file or directory; F2 returns to the question without losing the response.
+Missing files, unmounted worker paths, and paths outside the workspace show an
+explanation in the preview. Web links open in the browser. Binary and specialized
+design files use Open externally; text and Markdown can be read in the terminal.
 
 Workers supply the workspace in `Task.metadataJson.files.workspace` through the
 Human interface. The host translates that worker path using the component's
 actual dcomp binds, including nested mounts. The saved document's `files` entry
-has role `workspace`, a label, `workerPath`, and, when mounted on the host,
+has role `workspace` or `file`, a label, `workerPath`, and, when mounted on the host,
 `path` and a `file:` URI. Named volumes or unmounted paths are explicitly marked
 as worker paths. Files are never automatically opened, copied, or modified.
 The service does not need access to worker job directories.
@@ -181,7 +217,14 @@ For example, a workflow can submit this human-task input:
 ```json
 {
   "title": "Review the PCB",
-  "prompt": "Review the design and verification results.",
+  "prompt": "Approve this PCB revision for fabrication, or describe the corrections you need before approval.",
+  "summary": "Moved connector J1 to the board edge and rerouted its power traces. The design-rule check passed. Connector clearance still needs your review.",
+  "files": [
+    {"path": "pcb/board.kicad_pcb", "label": "Changed PCB", "description": "Inspect J1 and its power traces."},
+    {"path": "pcb/review/changes.diff", "label": "Changes since the previous review"},
+    {"path": "pcb/review/drc.txt", "label": "Design-rule check report"}
+  ],
+  "details": {"revision": 5},
   "form": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",

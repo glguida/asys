@@ -435,7 +435,8 @@ Add a gateway afterward to proceed or return to revision.
 ### Write a decision the human can understand
 
 Start with the short [Reporting to humans guide](../asys-workers/src/reporting-to-humans.md).
-It is included in every built-in agent's system prompt.
+It is included in every built-in agent's system prompt. The instructions below
+explain how to connect the resulting briefing to a workflow's decision.
 
 The workflow or environment that creates the Human input owns the question,
 explanation, file selection, and meaning of each answer. `asys-human` forwards
@@ -445,6 +446,56 @@ Require the preceding agent or program to prepare the briefing before submitting
 the human job. The draft task above explicitly requests `review_summary` and
 `review_files`; the human task passes them through. These fields are written by
 the agent, not added by the runtime.
+
+Write the request in this order:
+
+1. **Question and requested action (`prompt`).** State the concrete issue and
+   what the person must decide or do. Explain what each offered choice will
+   cause. For an approval, say exactly which changes are being approved. For a
+   blocker, name the failing operation, affected file or resource, and required
+   intervention. Put essential facts here, where the human sees them first.
+2. **Work completed (`summary`).** Supply Markdown explaining what has actually
+   been done, what changed since the previous review, and what remains. Describe
+   the changed behavior as well as the files. Give check results with their
+   scope, failures, and unverified work. If nothing has changed yet, say so.
+   A short agent completion message is usually insufficient for this purpose.
+3. **Files and evidence (`files`, optional `context`).** Link the actual files
+   under review, an inspectable diff, and relevant reports. Explain each file's
+   purpose with its `label` and optional `description`. Paths are relative to the
+   worker workspace, or absolute paths inside it. For work in a separate
+   worktree, point to that worktree's files. Record the compared revisions in
+   `details` and retain the diff used for the review. Use `context` for additional
+   readable explanation; its sections remain accessible in Review.
+4. **Technical record (`details`).** Put state paths, phase names, hashes,
+   attempt counters, full diagnostic objects, and other machine data here. The
+   Technical tab (F5), or `/details` in plain mode, preserves this data along
+   with the complete supplied request, metadata, and job identifiers.
+
+The first page shows `prompt`, `summary`, and file links. The terminal can only
+show evidence supplied by the producer; adding these fields is the environment
+author's responsibility. Older inputs still render, but a generic prompt and a
+state dump do not become a useful briefing automatically.
+
+Use ordinary terms with concrete names. For example, write “the `main` branch
+in your original checkout” instead of “the acquired target.” Write “The merge
+step stopped because this workflow requires a clean checkout; `docs/asys.md`
+has uncommitted changes” when that is the actual cause. Do not call that a Git
+merge conflict unless Git reported a conflict. Explain what the human must do
+before choosing Retry, and which steps Retry will rerun. A retry limit is
+technical detail; the underlying unresolved problem belongs in the question.
+
+Give choices useful labels using JSON Schema `oneOf` entries with `const` and
+`title`; preserve the values the workflow consumes. Label comment fields for
+their purpose, such as “What should change?” instead of “Text.” Approval of a
+specification, permission to retry, and acceptance of completed changes are
+different decisions: state which one this request asks for.
+
+Check the submitted request in the real terminal at a normal window size. A
+reviewer should be able to identify the question, requested action, completed
+work, and relevant files without opening the technical record. Verify that file
+links open the intended worktree and that each choice follows its advertised
+workflow path. See the [Human presentation reference](../asys-human-interface/README.md#forms-and-presentation)
+for the field contract and rendering behavior.
 
 ## Parallelism, repetition, and waiting
 

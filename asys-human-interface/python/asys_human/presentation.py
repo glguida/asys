@@ -48,12 +48,14 @@ def context_ui(value, label="Context"):
     elements = []
     if isinstance(value, dict):
         for key, item in value.items():
+            # File names are evidence, not prose to capitalize or split on '_'.
+            heading = key if "/" in key or "." in key else title(key)
             if key == "text" and isinstance(item, str):
                 elements.append(text(item))
             elif isinstance(item, (dict, list)) or isinstance(item, str) and "\n" in item:
-                elements.append(context_ui(item, title(key)))
+                elements.append(context_ui(item, heading))
             else:
-                elements.append(text(f"{title(key)}: {scalar(item)}"))
+                elements.append(text(f"{heading}: {scalar(item)}"))
     elif isinstance(value, list):
         for index, item in enumerate(value, 1):
             if isinstance(item, (dict, list)):
@@ -92,31 +94,68 @@ def host_path(path, component):
 def task_files(worker, task, topology):
     metadata = json.loads(task.get("metadataJson") or "{}")
     path = metadata.get("files", {}).get("workspace")
-    if not isinstance(path, str) or not path:
+    if not isinstance(path, str) or not path.startswith("/") or "\x00" in path or ".." in PurePosixPath(path).parts:
         return []
+    workspace = PurePosixPath(path)
     component_name = worker.split(".", 1)[0]
     component = next((item for item in topology.get("components", []) if item["name"] == component_name), {})
-    entry = {"role": "workspace", "label": "Workspace", "workerPath": path}
-    mapped = host_path(path, component)
-    if mapped:
-        entry.update(path=mapped, uri=PurePosixPath(mapped).as_uri())
-    return [entry]
+    files = [{"role": "workspace", "label": "Workspace", "workerPath": str(workspace)}]
+    attachments = json.loads(task["inputJson"]).get("files", [])
+    for attachment in attachments if isinstance(attachments, list) else []:
+        if not isinstance(attachment, dict):
+            continue
+        raw = attachment.get("path")
+        if not isinstance(raw, str) or not raw or "\x00" in raw or ".." in PurePosixPath(raw).parts:
+            continue
+        location = workspace / raw
+        if not location.is_relative_to(workspace) or any(entry["workerPath"] == str(location) for entry in files):
+            continue
+        label = attachment.get("label")
+        entry = {"role": "file", "label": label if isinstance(label, str) and label.strip() else str(location.relative_to(workspace)),
+                 "workerPath": str(location)}
+        if isinstance(attachment.get("description"), str):
+            entry["description"] = attachment["description"]
+        files.append(entry)
+    for entry in files:
+        mapped = host_path(entry["workerPath"], component)
+        if mapped:
+            entry.update(path=mapped, uri=PurePosixPath(mapped).as_uri())
+    return files
+
+
+def technical_text(document):
+    """Keep complete supplied domain data and request identifiers inspectable."""
+    return json.dumps(document.get("technical", {"worker": document.get("worker"), "task": document.get("task")}),
+                      ensure_ascii=False, indent=2)
 
 
 def request_document(worker, task, topology):
-    """The renderer consumes this document; it has no separate question header."""
+    """Separate the decision briefing from the technical request record."""
     description = json.loads(task["inputJson"])
     files = task_files(worker, task, topology)
+    component = next((item for item in topology.get("components", []) if item["name"] == worker.split(".", 1)[0]), {})
+    workspace = next((PurePosixPath(entry["workerPath"]) for entry in files if entry["role"] == "workspace"), None)
+    mounts = {kind: [{key: mount[key] for key in ("target", "source") if key in mount}
+                     for mount in component.get(kind, []) if workspace and
+                     (workspace.is_relative_to(mount["target"]) or PurePosixPath(mount["target"]).is_relative_to(workspace))]
+              for kind in ("binds", "volumes")}
     def label(value):
         return {"type": "Label", "text": value}
-    elements = [label(description.get("title") or "Human request"), label(f"{worker} / {task['id']}"), label(description["prompt"])]
+    elements = [label(description.get("title") or "Human request"), label(description["prompt"])]
+    summary = description.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        elements.append(context_ui(summary, "Work so far"))
     for entry in files:
         location = entry.get("path") or entry["workerPath"] + " (worker path; not mounted on this host)"
         elements.append(label(f"{entry['label']}: {location}"))
     if "context" in description:
         elements.append(context_ui(review_context(description["context"])))
     elements.append(description.get("uischema", {"type": "Control", "scope": "#"}))
-    return {"version": 1, "worker": worker, "task": task["id"], "files": files,
+    return {"version": 1, "worker": worker, "task": task["id"], "files": files, "fileMounts": mounts,
             "title": description.get("title") or "Human request", "prompt": description["prompt"],
+            "summary": summary if isinstance(summary, str) else "",
+            "technical": {"worker": worker, "task": task["id"],
+                          "metadata": review_context(json.loads(task.get("metadataJson") or "{}")),
+                          "request": review_context(description)},
             "form": description.get("form", {"type": "string"}),
             "uischema": {"type": "VerticalLayout", "elements": elements}}

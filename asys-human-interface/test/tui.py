@@ -14,7 +14,7 @@ from asys_human.interaction import Interaction
 from asys_human.presentation import request_document
 from asys_human.forms import Form
 from asys_human.tui import HumanApp, review_sections
-from asys_human.tui_files import FilesView, PREVIEW_LIMIT, preview
+from asys_human.tui_files import FilesView, PREVIEW_LIMIT, preview, resolve_file_link
 from asys_human.tui_forms import FieldEditor
 
 
@@ -117,7 +117,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.query_one("#answer").display)
             self.assertTrue(app.query_one("#reading").display)
             await pilot.resize_terminal(60, 18)
-            await pilot.press("f2", "f3", "f4")
+            await pilot.press("f2", "f3", "f5", "f4")
             self.assertEqual(field(app, ("comments",)).editor.text, "Keep this draft.")
             for selector in ["#submit", "#skip"]:
                 region = app.query_one(selector).region
@@ -134,7 +134,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             ui.form(document(data))
             await ready(app, pilot)
             self.assertNotIn("OPAQUE", str(app.sections))
-            self.assertEqual([label for label, _ in app.sections], ["Overview", "Pcb review"])
+            self.assertEqual([label for label, _ in app.sections], ["Question and work", "Pcb review"])
             app.query_one("#section", Select).value = 1
             await pilot.pause()
             scroll = app.query_one("#review-scroll")
@@ -143,6 +143,55 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(scroll.scroll_y, 0)
             self.assertTrue(app.query_one("#answer").display)
             self.assertEqual(field(app, ("approved",)).editor.pressed_index, -1)
+
+    async def test_blocked_merge_shows_question_work_and_files_before_full_technical_details(self):
+        data = json.loads((ROOT / "test/fixtures/blocked-merge.json").read_text())
+        data["details"]["full_evidence"] = "\n".join(f"Evidence line {i}: ```" for i in range(700))
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            changed = workspace / "worktree/rtl/sync_fifo.sv"
+            changed.parent.mkdir(parents=True)
+            changed.write_text("module sync_fifo; // revised implementation\nendmodule\n")
+            task = {"id": "merge-review-job", "inputJson": json.dumps(data),
+                    "metadataJson": json.dumps({"job_id": "merge-review-job", "files": {"workspace": "/work"}})}
+            doc = request_document("test.human", task, {"components": [{"name": "test", "binds": [
+                {"target": "/work", "source": directory}]}]})
+            ui = Interaction()
+            app = HumanApp(ui)
+            async with app.run_test(size=(120, 40)) as pilot:
+                ui.form(doc)
+                await ready(app, pilot)
+                briefing = app.query_one("#review-body", Markdown)
+                shown = briefing.source
+                self.assertIn(data["prompt"], shown)
+                self.assertIn(data["summary"], shown)
+                self.assertIn("Changed: rtl/sync_fifo.sv", shown)
+                self.assertLess(shown.index("Can you preserve"), shown.index("Implemented the FIFO fix"))
+                self.assertLess(shown.index("Implemented the FIFO fix"), shown.index("Full diff"))
+                self.assertNotIn("merge-review-job", shown)
+                self.assertNotIn(data["details"]["state"], shown)
+                self.assertNotIn("Evidence line", shown)
+                self.assertFalse(app.query_one("#section").display)
+                self.assertEqual(field(app, ("action",)).editor.pressed_index, -1)
+                field(app, ("text",)).editor.load_text("Keep this response while I inspect the files.")
+                briefing.post_message(Markdown.LinkClicked(briefing, changed.as_uri()))
+                await pilot.pause()
+                view = app.query_one(FilesView)
+                self.assertTrue(view.display)
+                self.assertEqual(view.location, changed)
+                self.assertIn("revised implementation", view.query_one(Markdown).source)
+                await pilot.press("f5")
+                self.assertTrue(app.query_one("#technical").display)
+                technical = app.query_one("#technical-body", Markdown).source
+                self.assertIn("merge-review-job", technical)
+                self.assertIn("Evidence line 699", technical)
+                self.assertIn("````json", technical)
+                self.assertEqual(doc["technical"]["request"], data)
+                await pilot.press("f2", "f4")
+                self.assertEqual(field(app, ("text",)).editor.text, "Keep this response while I inspect the files.")
+                await pilot.click(field(app, ("action",)).editor.query(RadioButton)[0])
+                await pilot.press("ctrl+s")
+                self.assertEqual(ui.answers.get_nowait()[2], {"action": "retry", "text": "Keep this response while I inspect the files."})
 
     async def test_skipping_and_next_request_clear_old_data(self):
         ui = Interaction()
@@ -222,8 +271,92 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.click(next(button for button in view.query(Button) if button.name == "open-file"))
                     self.assertEqual(opener.call_args.args[0][1], str(chosen))
 
+    async def test_clicking_encoded_and_relative_links_reads_files_and_back_restores_the_document(self):
+        with tempfile.TemporaryDirectory(prefix="human review ") as directory:
+            workspace = Path(directory)
+            review = workspace / "docs" / "design review.md"
+            report = workspace / "reports" / "sim results.txt"
+            review.parent.mkdir()
+            report.parent.mkdir()
+            review.write_text("# Design review\n\n[Read simulation results](../reports/sim%20results.txt)\n")
+            report.write_text("Simulation passed: all 24 vectors matched.\n")
+            task = {"id": "review", "inputJson": json.dumps({
+                "prompt": f"[Open the review]({review.as_uri()}) before deciding.",
+                "files": [{"path": "docs/design review.md", "label": "Design review"}]}),
+                "metadataJson": json.dumps({"files": {"workspace": "/work"}})}
+            doc = request_document("test.human", task, {"components": [{"name": "test", "binds": [
+                {"target": "/work", "source": directory}]}]})
+            ui = Interaction()
+            app = HumanApp(ui)
+            async with app.run_test(size=(120, 40)) as pilot:
+                ui.form(doc)
+                await ready(app, pilot)
+                field(app, ()).editor.load_text("My draft answer")
+                with patch.object(app, "copy_to_clipboard") as clipboard:
+                    paragraph = next(block for block in app.query_one("#review-body").query("MarkdownParagraph")
+                                     if "Open the review" in block.source)
+                    await pilot.click(paragraph, offset=(2, 0))
+                    await pilot.pause()
+                    view = app.query_one(FilesView)
+                    self.assertEqual(view.location, review)
+                    self.assertTrue(app.query_one("#files").display)
+                    paragraph = next(block for block in view.query(Markdown).first().query("MarkdownParagraph")
+                                     if "Read simulation" in block.source)
+                    await pilot.click(paragraph, offset=(2, 0))
+                    await pilot.pause()
+                    self.assertEqual(view.location, report)
+                    self.assertIn("all 24 vectors matched", view.query_one(Markdown).source)
+                    self.assertEqual(view.query_one(DirectoryTree).path, workspace)
+                    clipboard.assert_not_called()
+                    await pilot.click(next(button for button in view.query(Button) if button.name == "copy-path"))
+                    clipboard.assert_called_once_with(str(report))
+                    await pilot.click(next(button for button in view.query(Button) if button.name == "back-file"))
+                    self.assertEqual(view.location, review)
+                    self.assertIn("Design review", view.query_one(Markdown).source)
+                    await pilot.press("f2", "f4")
+                    self.assertEqual(field(app, ()).editor.text, "My draft answer")
+
+    async def test_unavailable_links_explain_the_problem_and_allow_returning_to_the_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = {"id": "review", "inputJson": '{"prompt":"Inspect the evidence."}',
+                    "metadataJson": '{"files":{"workspace":"/work"}}'}
+            doc = request_document("test.human", task, {"components": [{"name": "test", "binds": [
+                {"target": "/work", "source": directory}], "volumes": [{"target": "/work/private", "name": "private"}]}]})
+            ui = Interaction()
+            app = HumanApp(ui)
+            async with app.run_test() as pilot:
+                ui.form(doc)
+                await ready(app, pilot)
+                body = app.query_one("#review-body", Markdown)
+                body.post_message(Markdown.LinkClicked(body, "/work/private/report.txt"))
+                await pilot.pause()
+                view = app.query_one(FilesView)
+                self.assertIn("not mounted on this host", view.query_one(Markdown).source)
+                await pilot.click(next(button for button in view.query(Button) if button.name == "back-file"))
+                self.assertEqual(view.location, Path(directory))
+                body.post_message(Markdown.LinkClicked(body, "missing-report.txt"))
+                await pilot.pause()
+                self.assertIn("Cannot read this file", view.query_one(Markdown).source)
+                self.assertIn("missing-report.txt", str(view.query_one(".file-location", Static).content))
+
 
 class PreviewTests(unittest.TestCase):
+    def test_links_use_actual_mounts_and_allow_relative_document_links_inside_the_workspace(self):
+        files = [{"role": "workspace", "workerPath": "/work", "path": "/host/project"}]
+        mounts = {"binds": [{"target": "/work", "source": "/host/project"},
+                            {"target": "/work/parts", "source": "/host/parts"}],
+                  "volumes": [{"target": "/work/private"}]}
+        for href, current, expected in [("parts/review.md", None, "/host/parts/review.md"),
+                                        ("/work/docs/a.md", None, "/host/project/docs/a.md"),
+                                        ("file:///host/project/docs/a.md", None, "/host/project/docs/a.md"),
+                                        ("../reports/result.txt", Path("/host/project/docs/a.md"), "/host/project/reports/result.txt")]:
+            self.assertEqual(resolve_file_link(href, files, mounts, current)[0], Path(expected))
+        for href in ["/elsewhere/secret", "../outside", "file://remote/work/file"]:
+            with self.assertRaises(ValueError):
+                resolve_file_link(href, files, mounts)
+        with self.assertRaisesRegex(ValueError, "not mounted"):
+            resolve_file_link("private/report.txt", files, mounts)
+
     def test_binary_and_large_files_do_not_dump_into_terminal(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "board.bin"

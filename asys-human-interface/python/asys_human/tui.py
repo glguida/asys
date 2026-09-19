@@ -1,6 +1,8 @@
 """Full-screen JSON Forms host, with a persistent queue and response editor."""
 from queue import Empty
+import re
 from threading import Thread
+from urllib.parse import urlsplit
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -8,9 +10,11 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Footer, Markdown, Select, Static, Tab, Tabs
 
 from .forms import Field, Form, Label, Layout
+from .presentation import technical_text
 from .prompt import text
-from .tui_files import FilesView
+from .tui_files import FilesView, resolve_file_link
 from .tui_forms import AnswerError, ResponseForm
+from .tui_markdown import ReviewMarkdown
 
 
 def markdown(node, depth=2):
@@ -40,6 +44,8 @@ def review_sections(document, form):
             if node.text not in ignored:
                 notes.append(text(node.text))
         elif isinstance(node, Layout):
+            if node.label == "Work so far" and document.get("summary"):
+                return  # This briefing belongs on the first page.
             if node.label == "Context":
                 for child in node.children:
                     content = markdown(child)
@@ -54,19 +60,31 @@ def review_sections(document, form):
                     collect(child)
 
     collect(form.ui)
-    overview = text(document.get("prompt", ""))
+    overview = "## Question\n\n" + text(document.get("prompt", ""))
+    if document.get("summary"):
+        overview += "\n\n## Work so far\n\n" + text(document["summary"])
     if notes:
         overview += "\n\n" + "\n\n".join(notes)
-    if sections:
-        overview += "\n\n## Review sections\n\nChoose a section above to read:\n\n" + "\n".join(f"- {text(label)}" for label, _ in sections)
     if document.get("files"):
-        overview += "\n\n## Files\n\n"
-        for entry in document["files"]:
-            label = text(f"{entry['label']}: {entry.get('path') or entry['workerPath']}")
+        overview += "\n\n## Files and evidence\n\n"
+        for entry in sorted(document["files"], key=lambda item: item["role"] == "workspace"):
+            label = entry["label"]
+            if entry["role"] == "workspace":
+                label += ": " + (entry.get("path") or entry["workerPath"])
+            label = text(label)
             label = label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
-            overview += f"- [{label}]({entry['uri']})\n" if entry.get("uri") else f"- {label} (worker path)\n"
-        overview += "\nSelect the workspace link to browse it in the **Files** tab."
-    return [("Overview", overview or "Review this request and enter your response."), *sections]
+            link = f"[{label}]({entry['uri']})" if entry.get("uri") else f"{label} (worker path; not mounted on this host)"
+            overview += f"- {link}" + (" — " + text(entry["description"]) if entry.get("description") else "") + "\n"
+        overview += "\nSelect a link to inspect it in the **Files** tab."
+    if sections:
+        overview += "\n\n## Supporting information\n\nAvailable in the section selector: " + ", ".join(text(label) for label, _ in sections) + "."
+    return [("Question and work", overview), *sections]
+
+
+def technical_markdown(document):
+    content = text(technical_text(document))
+    fence = "`" * max(3, max((len(part) for part in re.findall(r"`+", content)), default=0) + 1)
+    return f"## Technical details\n\n{fence}json\n{content}\n{fence}"
 
 
 class HumanApp(App):
@@ -76,6 +94,7 @@ class HumanApp(App):
         Binding("f2", "review", "Review"),
         Binding("f3", "files", "Files"),
         Binding("f4", "response", "Response"),
+        Binding("f5", "technical", "Technical"),
         Binding("ctrl+s", "submit", "Submit", priority=True),
         Binding("ctrl+k", "skip", "Skip", priority=True),
         Binding("ctrl+q,ctrl+c", "quit", "Quit", priority=True),
@@ -86,14 +105,13 @@ class HumanApp(App):
     #brand { width: 1fr; text-style: bold; color: $accent; }
     #counts { width: auto; color: $text-muted; }
     #task-title { height: 2; padding: 0 1; content-align: left middle; text-style: bold; }
-    #origin { height: 1; padding: 0 1; color: $text-muted; text-wrap: nowrap; text-overflow: ellipsis; }
     #tabs { height: 2; }
     #workspace { height: 1fr; padding: 0 1; }
     #reading { width: 1fr; height: 1fr; border: round $border; }
     #review { height: 1fr; }
     #section { margin: 0; }
-    #review-scroll { height: 1fr; padding: 0 1; }
-    #review-scroll:focus { border: none; }
+    #review-scroll, #technical { height: 1fr; padding: 0 1; }
+    #review-scroll:focus, #technical:focus { border: none; }
     Markdown { margin: 0; padding: 0 1; }
     #files { height: 1fr; }
     #answer { width: 40; height: 1fr; border: round $border; margin-left: 1; padding: 0 1; }
@@ -132,15 +150,17 @@ class HumanApp(App):
             yield Static("ASYS HUMAN", id="brand", markup=False)
             yield Static(f"{self.claimant} · {self.system}", id="counts", markup=False)
         yield Static("Connecting to human requests…", id="task-title", markup=False)
-        yield Static("", id="origin", markup=False)
-        yield Tabs(Tab("Review", id="tab-review"), Tab("Files", id="tab-files"), Tab("Response", id="tab-response"), id="tabs")
+        yield Tabs(Tab("Review", id="tab-review"), Tab("Files", id="tab-files"), Tab("Response", id="tab-response"),
+                   Tab("Technical", id="tab-technical"), id="tabs")
         with Horizontal(id="workspace"):
             with Vertical(id="reading"):
                 with Vertical(id="review"):
                     yield Select([], prompt="Review sections", id="section")
                     with VerticalScroll(id="review-scroll", can_focus=True):
-                        yield Markdown("Waiting for a human request.\n\nWorkers send requests through the Human endpoint.", id="review-body", open_links=False)
+                        yield ReviewMarkdown("Waiting for a human request.\n\nWorkers send requests through the Human endpoint.", id="review-body")
                 yield Vertical(id="files")
+                with VerticalScroll(id="technical", can_focus=True):
+                    yield ReviewMarkdown("No request selected.", id="technical-body")
             with Vertical(id="answer"):
                 yield Static("", id="answer-error", markup=False)
                 yield VerticalScroll(Static("Your response form will appear here.", markup=False), id="response-scroll")
@@ -176,6 +196,7 @@ class HumanApp(App):
         self.query_one("#answer").display = not narrow or self.active_tab == "response"
         self.query_one("#review").display = self.reading_tab == "review"
         self.query_one("#files").display = self.reading_tab == "files"
+        self.query_one("#technical").display = self.reading_tab == "technical"
 
     def status(self, message):
         self.query_one("#status", Static).update(text(message))
@@ -214,12 +235,14 @@ class HumanApp(App):
         self.sections = review_sections(document, form)
         self.query_one("#task-title", Static).update(text(document.get("title", "Human request")))
         self.query_one("#task-title").tooltip = text(f"{document.get('worker', '')} / {document.get('task', '')}")
-        self.query_one("#origin", Static).update(text(f"{document.get('worker', '')} · {document.get('task', '')}"))
         section = self.query_one("#section", Select)
         section.set_options((text(label), index) for index, (label, _) in enumerate(self.sections))
         section.value = 0
+        section.display = len(self.sections) > 1
         await self.query_one("#review-body", Markdown).update(self.sections[0][1])
         self.query_one("#review-scroll", VerticalScroll).scroll_home(animate=False)
+        await self.query_one("#technical-body", Markdown).update(technical_markdown(document))
+        self.query_one("#technical", VerticalScroll).scroll_home(animate=False)
         responses = self.query_one("#response-scroll", VerticalScroll)
         await responses.remove_children()
         self.response_form = ResponseForm(form)
@@ -239,9 +262,10 @@ class HumanApp(App):
         self.submitting = False
         self.set_busy(True)
         self.query_one("#task-title", Static).update("Waiting for the next human request")
-        self.query_one("#origin", Static).update("")
         self.query_one("#section", Select).set_options([])
+        self.query_one("#section").display = False
         await self.query_one("#review-body", Markdown).update("New requests appear here automatically.\n\nYou can leave this handler running.")
+        await self.query_one("#technical-body", Markdown).update("No request selected.")
         await self.query_one("#response-scroll", VerticalScroll).remove_children()
         await self.query_one("#files", Vertical).remove_children()
         self.query_one("#answer-error", Static).update("")
@@ -283,6 +307,12 @@ class HumanApp(App):
         if self.response_form:
             self.response_form.focus_input()
 
+    def action_technical(self):
+        self.query_one("#tabs", Tabs).active = "tab-technical"
+        self.active_tab = self.reading_tab = "technical"
+        self.arrange()
+        self.query_one("#technical").focus()
+
     def action_submit(self):
         if self.document is None or self.submitting or self.interaction.stopping.is_set():
             return
@@ -320,13 +350,26 @@ class HumanApp(App):
         if not self.run_handler:
             self.exit(0)
 
-    def on_markdown_link_clicked(self, event):
+    async def on_markdown_link_clicked(self, event):
         event.stop()
-        if self.document:
-            for index, entry in enumerate(self.document.get("files", [])):
-                if event.href == entry.get("uri"):
-                    self.action_files()
-                    self.query_one("#file-source", Select).value = index
-                    return
-        self.copy_to_clipboard(event.href)
-        self.notify("Link copied. Use the Files tab to browse the workspace.")
+        if not self.document:
+            return
+        if event.href.startswith("#"):
+            if not event.markdown.goto_anchor(event.href[1:]):
+                self.notify("That heading was not found in this document.", severity="warning")
+            return
+        if urlsplit(event.href).scheme in {"http", "https"}:
+            self.open_url(event.href)
+            return
+        view = self.query_one(FilesView)
+        current = view.location if event.markdown in view.query(Markdown) else None
+        self.action_files()
+        try:
+            path, anchor = resolve_file_link(event.href, self.document.get("files", []),
+                                             self.document.get("fileMounts"), current)
+        except ValueError as error:
+            await view.show_unavailable(event.href, str(error))
+            self.status(str(error))
+            return
+        await view.open_path(path, anchor=anchor)
+        self.status(f"Viewing {path.name}. Back returns to the previous file; F2 returns to the question.")

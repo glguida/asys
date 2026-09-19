@@ -11,9 +11,13 @@ from asys_human.prompt import FormPrompt
 
 
 class PresentationTests(unittest.TestCase):
-    def test_only_the_workspace_is_offered_even_with_job_files_and_attachments(self):
+    def test_explicit_review_files_map_to_the_workspace_but_job_files_and_traversal_do_not(self):
         description = {"prompt": "Review the corrected PCB", "files": [
             {"label": "PCB revision 5", "path": "create_pcb/wf-selected/pcb/board.kicad_pcb"},
+            {"label": "Full diff", "path": "/var/lib/asys/workspace/review/changes.diff", "description": "Since the last approval."},
+            {"label": "Duplicate", "path": "review/changes.diff"},
+            {"label": "Job output", "path": "/queue/approval/job/report.md"},
+            {"label": "Similar prefix", "path": "/var/lib/asys/workspace-other/board.kicad_pcb"},
             {"label": "Invalid traversal", "path": "../old/board.kicad_pcb"}],
             "context": {"checks": {"layout": {"step": "create_pcb", "job": "wf-selected", "revision": 5}},
                         "review": {"workspace": "/queue/reviewer/workspace", "text": "Review report.",
@@ -25,9 +29,14 @@ class PresentationTests(unittest.TestCase):
             {"target": "/queue", "source": "/host/run"},
             {"target": "/var/lib/asys/workspace", "source": "/host/PCB project"}]}]}
         files = request_document("alpha.human", task, topology)["files"]
-        self.assertEqual(files, [{"role": "workspace", "label": "Workspace",
+        self.assertEqual(files[0], {"role": "workspace", "label": "Workspace",
             "workerPath": "/var/lib/asys/workspace", "path": "/host/PCB project",
-            "uri": "file:///host/PCB%20project"}])
+            "uri": "file:///host/PCB%20project"})
+        self.assertEqual([entry["label"] for entry in files], ["Workspace", "PCB revision 5", "Full diff"])
+        self.assertEqual(files[1]["path"], "/host/PCB project/create_pcb/wf-selected/pcb/board.kicad_pcb")
+        self.assertEqual(files[1]["uri"], "file:///host/PCB%20project/create_pcb/wf-selected/pcb/board.kicad_pcb")
+        self.assertEqual(files[2]["path"], "/host/PCB project/review/changes.diff")
+        self.assertEqual(files[2]["description"], "Since the last approval.")
 
     def test_worker_results_render_as_readable_reviews_without_model_metadata(self):
         report = "Verdict: PASS.\n\n- Connector faces outward.\n- Review the robustness warning."
@@ -57,9 +66,27 @@ class PresentationTests(unittest.TestCase):
         self.assertNotIn(r"\n\n", shown)
         self.assertNotIn("Context", shown.split("Response:", 1)[1])
         for internal in ["OPAQUE_", "INTERNAL_", "thinkingSignature", "textSignature", "responseId", "usage",
-                         "/worker/private-workspace", '"passed":', '"component":']:
+                         "/worker/private-workspace"]:
             self.assertNotIn(internal, shown)
             self.assertNotIn(internal, json.dumps(document))
+        self.assertNotIn('"passed":', shown)
+        self.assertEqual(document["technical"]["request"]["context"], review_context(context))
+
+    def test_plain_briefing_and_on_demand_details_preserve_the_answer_and_exact_file_names(self):
+        request = json.loads((ROOT / "test/fixtures/blocked-merge.json").read_text())
+        request["context"] = {"rtl/sync_fifo.sv": "Changed simultaneous read/write handling."}
+        doc = request_document("test.human", {"id": "merge-review", "inputJson": json.dumps(request)}, {})
+        output = io.StringIO()
+        prompt = FormPrompt(doc, output)
+        lines = iter(["1", "/details", "Saved my edit in a separate commit.", "y"])
+        self.assertEqual(prompt.read(lambda: next(lines)), {"action": "retry", "text": "Saved my edit in a separate commit."})
+        briefing, technical = output.getvalue().split("Technical details\n", 1)
+        self.assertLess(briefing.index("Can you preserve"), briefing.index("Implemented the FIFO fix"))
+        self.assertIn("rtl/sync_fifo.sv: Changed", briefing)
+        self.assertNotIn("merge-review", briefing)
+        self.assertNotIn(request["details"]["state"], briefing)
+        self.assertIn(request["details"]["state"], technical)
+        self.assertEqual(doc["technical"]["request"], request)
 
     def test_ordinary_business_fields_are_preserved_and_message_text_is_not_duplicated(self):
         plain = {"message": "Check connector access.", "usage": "USB power only", "model": "J1", "steps": ["Inspect", "Measure"]}
