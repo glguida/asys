@@ -166,8 +166,9 @@ asys-goal ./env/development "Implement the requested behavior and its tests" \
   --workspace ./project
 ```
 
-It repeats implementation and verification until the goal is verified, with
-no default attempt limit. Either phase can ask for human help through
+It defines and reviews success criteria, then repeats implementation and
+verification until the goal is verified, preserving findings between attempts.
+There is no default attempt limit. Any phase can ask for human help through
 `asys-human-prompt`. The loop lives in the workers program, so BPMN can use it
 as an ordinary `goal` job too. It uses the configured `simple` model;
 `--model MODEL` overrides it for a run.

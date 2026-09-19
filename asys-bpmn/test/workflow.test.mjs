@@ -35,10 +35,18 @@ for (const verified of [true, false]) {
         assert.equal(request.model, model.id);
         const { context } = JSON.parse(request.payload);
         assert.equal(context.messages.length, 1);
-        const result = ++calls === 1 ? { final: 'Implementation finished.', exception: null }
-          : { final: verified ? 'Artifact exists.' : 'Artifact missing.', exception: null, verified,
-            criteria: [{ requirement: 'Produce an artifact', satisfied: verified,
-              evidence: [{ source: 'artifact.txt', observation: verified ? 'Inspected the file.' : 'File does not exist.' }] }] };
+        calls++;
+        const { phase } = JSON.parse(context.messages[0].content[0].text.split('Assignment data:\n')[1]);
+        const result = {
+          define: { final: 'Defined the required artifact.', exception: null, contract: { criteria: [
+            { id: 'C1', requirement: 'Produce an artifact', basis: 'User request', verification: 'Inspect artifact.txt' },
+          ] } },
+          review: { final: 'Criteria cover the request.', exception: null, decision: 'accept' },
+          implement: { final: 'Implementation finished.', exception: null },
+          verify: { final: verified ? 'Artifact exists.' : 'Artifact missing.', exception: null, coverage: 'complete',
+            criteria: [{ id: 'C1', status: verified ? 'satisfied' : 'unmet',
+              evidence: [{ source: 'artifact.txt', observation: verified ? 'Inspected the file.' : 'File does not exist.' }] }] },
+        }[phase];
         yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
       },
     }); } }));
@@ -57,7 +65,7 @@ for (const verified of [true, false]) {
     assert.equal(jobs.length, 1);
     const state = await queue.state(jobs[0].id);
     assert.equal(state.result.verified, verified);
-    assert.equal(calls, 2);
+    assert.equal(calls, 4);
   });
 }
 

@@ -35,29 +35,38 @@ asys-goal ./env/development \
 
 Use a concrete goal with observable criteria and the location of its inputs.
 Avoid making the verifier infer success from prose like “the task is done.”
-The goal worker alternates:
+The goal worker uses four roles:
 
-1. A fresh `simple` implementation session works on the fixed original goal.
-   Later attempts receive prior verification findings and implementation lessons.
-2. A fresh `simple` verification session checks the goal against actual artifacts
-   and executed checks. It receives the goal and human guidance, without the
-   implementation's completion narrative or earlier verdicts.
-3. An unmet verdict starts another implementation cycle. A verified verdict
-   finishes the job. Either phase can report a blocker and ask a human.
+1. Definition reads the goal and governing sources, then proposes a concise
+   contract of required outcomes, their source basis and how to verify them.
+2. An independent review checks coverage, scope and the proposed checks. Material
+   problems return to definition; acceptance permits implementation.
+3. Implementation works against that contract with previous findings, progress
+   and lessons available.
+4. Verification checks current artifacts and behavior against every criterion,
+   reconciles earlier findings and checks that the contract covers the whole goal.
 
-Both phases use the same chosen model and the shared `simple` definition.
+Unmet work starts another implementation attempt. A material contract correction
+returns to definition and review. All phases use fresh sessions with the same
+chosen model and the shared `simple` definition, and can ask a human for help.
+Verification receives the original goal, contract, human guidance and unresolved
+findings, without the implementer's completion narrative. Earlier defects remain
+open until a verifier explains their resolution; omissions do not erase them.
+
 Verification is instructed to inspect facts, including actual file contents,
-commands and outputs. Documentation, comments, commit messages and agent
-reports can identify things to check, but their claims do not establish that
-the goal is met. The verifier is instructed not to repair the work. Its normal
+commands and outputs. Documentation may establish requirements. Comments, commit
+messages and agent reports can identify things to check, but claims do not
+establish that the goal is met. The verifier is instructed not to repair the work. Its normal
 workspace access is still available for checks; this is not an OS-enforced
 read-only role.
 
 There is **no default attempt limit**. Set `--max-attempts N` only when an
 explicit limit is wanted. A cycle is implementation plus verification; retries
-of a blocked phase after human help stay in that cycle. Execution failures or
-invalid verifier output can still fail the job: unlimited attempts do not
-silently retry every transport/parser failure forever.
+of a blocked phase after human help stay in that cycle. Initial definition and
+review do not consume attempts; an implementation requesting an amendment does.
+Missing or invalid phase fields get one corrective session before failing the job.
+Execution failures can still fail the job: unlimited attempts do not silently
+retry every transport/parser failure forever.
 
 ## Use the goal worker from BPMN
 
@@ -95,7 +104,7 @@ or give it retained memory.
 
 ## Human escalation
 
-Either phase can finish with a non-null `exception`, explaining why it cannot
+Any phase can finish with a non-null `exception`, explaining why it cannot
 continue. Include a concrete `question` and workspace `review_files` when
 useful. The worker composes a Human request and waits for retry guidance or stop.
 
@@ -126,29 +135,35 @@ Successful result shape:
   "attempts": 2,
   "criteria": [
     {
+      "id": "C1",
       "requirement": "Reject an empty identifier",
+      "status": "satisfied",
       "satisfied": true,
       "evidence": [
         {"source": "python3 -m unittest tests.test_identifier", "observation": "The empty-identifier test passed against the modified parser."}
       ]
     }
-  ]
+  ],
+  "findings": []
 }
 ```
 
 This is illustrative, not evidence that this command was run in your project.
-The worker requires nonempty criteria/evidence and consistency between the
-criterion booleans and verdict. Those checks enforce the report structure;
-the factual judgment is still made by the verifier agent.
+The worker checks that verification covers the accepted criterion IDs, coverage
+is complete, each criterion is satisfied with evidence, and all earlier findings
+are resolved. A criterion can instead be unmet or unverified; missing evidence
+leaves the goal open. The public satisfied boolean is derived from status.
+The agents judge scope, appropriate checks and evidence; the controller tracks
+the accepted criteria and unfinished work.
 
 An explicit attempt limit reached with unmet criteria, human stop, or execution
 failure returns an unsuccessful job. BPMN can use ordinary boundary errors.
 Inspect the saved result rather than expecting successful JSON on stdout after
 a host failure.
 
-`JOB/goal.json` preserves original goal, selected model, attempts, session
-results, lessons, and human replies. Per-phase files live under
-`attempts/ATTEMPT/implement-RETRY/` and `attempts/ATTEMPT/verify-RETRY/`:
+`JOB/goal.json` preserves the original goal, selected model, accepted contract,
+proposal/review history, findings, attempts, session results, lessons and human
+replies. Per-phase files live under `attempts/ATTEMPT/PHASE-SESSION/`:
 input, result, transcript, stdout, report, proposed lessons and scratch. Human
 request/answer files stay beside the session that needed them.
 

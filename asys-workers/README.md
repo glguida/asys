@@ -190,9 +190,10 @@ these events with the saved transcript without changing execution state.
 
 The [goal worker](../asys-goal/README.md) is another ordinary program:
 `/opt/asys/asys-workers/tools/asys-goal`. It runs the built-in `simple` agent
-in fresh implementation and verification sessions, repeating until verified
-with no default attempt limit. Both phases can ask for human help through the
-Human input. Its job
+in fresh sessions to define and review success criteria, then implement and
+verify until the goal is met. Criteria and unresolved findings persist between
+attempts. There is no default attempt limit, and every phase can ask for help
+through the Human input. Its job
 input contains `goal` and optional `maxAttempts`; its model defaults to the
 `simple` system-model setting supplied by the launcher, with an optional
 `--model MODEL` command override. BPMN can bind a task to a `goal` job type

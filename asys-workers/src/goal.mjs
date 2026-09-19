@@ -9,33 +9,16 @@ import { human } from './human.mjs';
 import { writeJSON } from './files.mjs';
 import { systemModel } from './system-model.mjs';
 import { requiredString } from './values.mjs';
+import { contract, review, verification, reconcileFindings } from './goal/results.mjs';
 
-const instructions = Object.fromEntries(['implement', 'verify'].map(phase =>
+const instructions = Object.fromEntries(['define', 'review', 'implement', 'verify'].map(phase =>
   [phase, readFileSync(new URL(`./goal/${phase}.md`, import.meta.url), 'utf8').trim()]));
+const shared = readFileSync(new URL('./goal/shared.md', import.meta.url), 'utf8').trim();
 const now = () => new Date().toISOString();
-
-export function verification(result) {
-  if (typeof result.verified !== 'boolean' || !Array.isArray(result.criteria) || !result.criteria.length) {
-    throw new Error('Verification must include a boolean verified and a nonempty criteria list');
-  }
-  for (const criterion of result.criteria) {
-    if (!criterion || typeof criterion.satisfied !== 'boolean' || !Array.isArray(criterion.evidence) || !criterion.evidence.length) {
-      throw new Error('Each verification criterion needs a boolean satisfied and observed evidence');
-    }
-    requiredString(criterion.requirement, 'Verification requirement');
-    for (const item of criterion.evidence) {
-      requiredString(item?.source, 'Evidence source');
-      requiredString(item?.observation, 'Evidence observation');
-    }
-  }
-  if (result.verified !== result.criteria.every(criterion => criterion.satisfied)) {
-    throw new Error('Verification verdict contradicts its criteria');
-  }
-  return { verified: result.verified, criteria: result.criteria, final: result.final };
-}
+const stages = { define: 'definition', review: 'contract review', implement: 'implementation', verify: 'verification' };
 
 export function humanRequest(goal, phase, result, attempt) {
-  const stage = phase === 'implement' ? 'implementation' : 'verification';
+  const stage = stages[phase];
   return {
     title: `Goal ${stage} needs help`,
     prompt: `${result.question || result.exception}\n\n` +
@@ -69,7 +52,8 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
   const model = systemModel('simple', values.model, env);
   const definition = systemAgentDefinition(env.ASYS_ENVIRONMENT_DIR, 'simple');
   const state = { version: 1, goal: original, agent: 'simple', model, maxAttempts,
-    status: 'running', attempt: 0, sessions: [], human: [], startedAt: now() };
+    status: 'running', attempt: 0, sessions: [], human: [], contracts: [], contract: null,
+    findings: [], contractChanges: null, startedAt: now() };
   const save = () => writeJSON(join(job.directory, 'goal.json'), { ...state, updatedAt: now() });
   const finish = (status, final, exception = null) => {
     state.status = status;
@@ -79,12 +63,34 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
     save();
     event('goal.finished', { status, attempt: state.attempt, verified: status === 'completed' });
     return { final, exception, verified: status === 'completed', attempts: state.attempt,
-      ...(state.verification?.attempt === state.attempt ? { criteria: state.verification.criteria } : {}) };
+      ...(state.verification?.attempt === state.attempt && state.verification.contractRevision === state.contract?.revision
+        ? { criteria: state.verification.criteria } : {}),
+      findings: state.findings.filter(item => item.status === 'open') };
   };
 
-  async function phase(name) {
-    for (let retry = 1; ; retry++) {
+  function assignmentData(name) {
+    const context = { phase: name, goal: original, contract: state.contract,
+      unresolvedFindings: state.findings.filter(item => item.status === 'open'),
+      humanGuidance: state.human.map(({ phase, question, answer }) => ({ phase, question, answer })) };
+    if (name === 'define' || name === 'review') {
+      context.proposal = state.proposal ?? null;
+      context.contractChanges = state.contractChanges;
+      context.reviewHistory = state.contracts.filter(item => item.review).map(item =>
+        ({ revision: item.revision, decision: item.review.decision, feedback: item.review.final }));
+    }
+    if (name === 'implement') {
+      context.previousVerification = state.verification ?? null;
+      context.previousImplementation = state.implementation ?? null;
+      context.lessons = state.sessions.filter(item => item.phase === 'implement' && item.lessons).map(item => item.lessons);
+    }
+    return context;
+  }
+
+  async function phase(name, validate = result => result) {
+    let correction = null;
+    for (;;) {
       signal.throwIfAborted();
+      const retry = state.sessions.filter(item => item.attempt === state.attempt && item.phase === name).length + 1;
       const relative = `attempts/${state.attempt}/${name}-${retry}`;
       const directory = join(job.directory, relative);
       makeDirectory(directory, { recursive: true, mode: 0o700 });
@@ -93,12 +99,8 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
       state.sessions.push(session);
       state.phase = name;
       state.status = 'running';
-      const context = { goal: original, humanGuidance: state.human.map(({ phase, question, answer }) => ({ phase, question, answer })) };
-      if (name === 'implement') {
-        context.previousVerification = state.verification ?? null;
-        context.lessons = state.sessions.filter(item => item.phase === 'implement' && item.lessons).map(item => item.lessons);
-      }
-      const assignment = { prompt: `${instructions[name]}\n\nAssignment data:\n${JSON.stringify(context, null, 2)}` };
+      const context = { ...assignmentData(name), ...(correction ? { correction } : {}) };
+      const assignment = { prompt: `${instructions[name]}\n\n${shared}\n\nAssignment data:\n${JSON.stringify(context, null, 2)}` };
       writeJSON(join(directory, 'input.json'), assignment);
       const output = join(directory, 'stdout.log');
       prepareFile(output);
@@ -120,9 +122,26 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
       session.finishedAt = now();
       try { session.lessons = readFileSync(join(directory, 'lessons.md'), 'utf8'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
+      let validated, invalid;
+      if (result.exception === null) {
+        try {
+          requiredString(result.final, 'Final report');
+          if (result.contract_changes != null && result.contract_changes !== '') {
+            requiredString(result.contract_changes, 'Proposed contract changes');
+          }
+          validated = validate(result);
+        }
+        catch (error) { invalid = error; session.status = 'invalid'; session.error = error.message; }
+      }
       save();
       event('goal.phase_finished', { phase: name, attempt: state.attempt, status: session.status, session: session.id });
-      if (result.exception === null) return result;
+      signal.throwIfAborted();
+      if (invalid) {
+        if (correction) throw invalid;
+        correction = { problem: invalid.message, previousResult: result };
+        continue;
+      }
+      if (result.exception === null) return validated;
       requiredString(result.exception, 'Agent exception');
       const request = humanRequest(original, name, result, state.attempt);
       writeJSON(join(directory, 'human.request.json'), request);
@@ -139,21 +158,57 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
       save();
       event('goal.human_answered', { phase: name, attempt: state.attempt, action: answer.action });
       if (answer.action === 'stop') return null;
+      correction = null;
+    }
+  }
+
+  async function agreeContract() {
+    for (;;) {
+      const proposal = await phase('define', contract);
+      if (!proposal) return false;
+      const entry = { revision: state.contracts.length + 1, contract: proposal };
+      state.proposal = proposal;
+      state.contracts.push(entry);
+      save();
+      const result = await phase('review', review);
+      if (!result) return false;
+      entry.review = result;
+      if (result.decision === 'accept') {
+        state.contract = { ...proposal, revision: entry.revision };
+        state.contractChanges = null;
+        save();
+        return true;
+      }
+      save();
     }
   }
 
   save();
   try {
+    if (!await agreeContract()) return finish('stopped', 'The human stopped the goal while defining success.', 'Stopped by human');
     for (let attempt = 1; maxAttempts === null || attempt <= maxAttempts; attempt++) {
+      if (state.contractChanges && !await agreeContract()) {
+        return finish('stopped', 'The human stopped the goal while revising success criteria.', 'Stopped by human');
+      }
       state.attempt = attempt;
-      if (!await phase('implement')) return finish('stopped', 'The human stopped the goal during implementation.', 'Stopped by human');
-      const result = await phase('verify');
+      const implementation = await phase('implement');
+      if (!implementation) return finish('stopped', 'The human stopped the goal during implementation.', 'Stopped by human');
+      state.implementation = implementation;
+      if (implementation.contract_changes) {
+        state.contractChanges = implementation.contract_changes;
+        save();
+        continue;
+      }
+      const result = await phase('verify', result => verification(result, state.contract, state.findings));
       if (!result) return finish('stopped', 'The human stopped the goal during verification.', 'Stopped by human');
-      state.verification = { ...verification(result), attempt };
+      state.verification = { ...result, attempt, contractRevision: state.contract.revision };
+      reconcileFindings(state.findings, result, attempt);
+      state.contractChanges = result.contract_changes || (result.coverage !== 'complete' ? result.final : null);
       save();
-      if (state.verification.verified) return finish('completed', result.final);
+      if (result.verified) return finish('completed', result.final);
     }
-    return finish('exhausted', state.verification.final, `Goal remains unmet after ${maxAttempts} attempts`);
+    return finish('exhausted', state.implementation?.contract_changes || state.verification?.final || state.implementation.final,
+      `Goal remains unmet after ${maxAttempts} attempts`);
   } catch (error) {
     const current = state.sessions.at(-1);
     if (current && ['running', 'needs_human'].includes(current.status)) {

@@ -360,13 +360,13 @@ test('human jobs call their dcomp input and publish the answer into their own re
   assert.equal(JSON.parse(await readFile(join(f.queue.executionDirectory('approval'), 'result.json'), 'utf8')), false);
 });
 
-for (const phase of ['implement', 'verify']) {
+for (const phase of ['define', 'review', 'implement', 'verify']) {
   for (const action of ['retry', 'stop', 'cancel']) {
     test(`one runtime goal job handles ${phase} help and human ${action}`, async t => {
       const f = await fixture(t);
       const models = join(f.root, 'models.json');
       await writeFile(models, JSON.stringify({ simple: model.id }));
-      const counts = { implement: 0, verify: 0 };
+      const counts = { define: 0, review: 0, implement: 0, verify: 0 };
       const service = new HumanService(join(f.root, 'human-service'));
       t.after(() => service.close());
       const provider = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
@@ -375,14 +375,20 @@ for (const phase of ['implement', 'verify']) {
           assert.equal(request.model, model.id);
           const { context } = JSON.parse(request.payload);
           assert.equal(context.messages.length, 1, 'every phase and human retry is a fresh session');
-          const current = context.messages[0].content[0].text.startsWith('Implement') ? 'implement' : 'verify';
+          const { phase: current } = JSON.parse(context.messages[0].content[0].text.split('Assignment data:\n')[1]);
           const help = ++counts[current] === 1 && current === phase;
           const result = help
             ? { final: 'Checked the workspace. The required input is unavailable.', exception: 'Input missing', question: 'Please supply the input.' }
-            : current === 'implement' ? { final: 'Implementation finished.', exception: null }
-              : { final: 'Inspected the required artifact.', exception: null, verified: true,
-                criteria: [{ requirement: 'Produce an artifact', satisfied: true,
-                  evidence: [{ source: 'artifact.txt', observation: 'Inspected its complete contents.' }] }] };
+            : {
+              define: { final: 'Defined the required artifact.', exception: null, contract: { criteria: [
+                { id: 'C1', requirement: 'Produce an artifact', basis: 'User request', verification: 'Inspect artifact.txt' },
+              ] } },
+              review: { final: 'Criteria cover the request.', exception: null, decision: 'accept' },
+              implement: { final: 'Implementation finished.', exception: null },
+              verify: { final: 'Inspected the required artifact.', exception: null, coverage: 'complete',
+                criteria: [{ id: 'C1', status: 'satisfied',
+                  evidence: [{ source: 'artifact.txt', observation: 'Inspected its complete contents.' }] }] },
+            }[current];
           yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
         },
       }); } }));

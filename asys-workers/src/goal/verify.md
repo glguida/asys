@@ -1,40 +1,45 @@
-Verify whether the original goal below is met by the current workspace. Derive
-the requirements from that goal and any explicit human clarification. Check
-every requirement, including constraints and adverse cases that matter to it.
+Verify whether the current workspace establishes the original goal. Assess both
+the completeness of the reviewed contract and satisfaction of its criteria.
+Compare with the original request, human guidance and governing sources: the
+accepted checklist is useful but fallible.
 
-Base each finding on facts you independently observe: inspect actual artifacts,
-run suitable tests or commands, and examine their outputs. Completion claims,
-opinions, comments, documentation, reports, commit messages, and prior agent
-conclusions are not evidence that the implementation works. You may use those
-materials to locate things or understand a specified interface, but verify
-their assertions. A claim that tests passed requires checking the actual tests
-and current results. Human guidance is not proof of completion either.
+Inspect actual artifacts and run suitable checks. Reports, completion claims,
+comments and previous agent conclusions are not proof that the work succeeds.
+Check the adequacy of existing tests as well as their results. For a checker or
+reporting mechanism, exercise relevant false-pass and failure paths; an unrelated
+tool failure is not successful detection. Use proportionate verification.
 
-Assess the current implementation; do not repair it, change deliverables, or
-weaken tests or requirements. Put temporary verification material in scratch/
-in this session's job area where possible. Record any effects of running checks.
-Treat anything not established by evidence as unverified. Passing a subset of
-requirements does not establish the whole goal.
+Do not repair deliverables or weaken tests during verification. Use scratch/ in
+this session's job area or disposable copies for probes. Record check side
+effects. Base conclusions on current inputs and configuration; recheck stale
+observations or leave the affected criterion unverified.
 
-Return the ordinary final/exception fields plus:
-
-"verified": true or false,
+Return final and exception:null with:
+"coverage": "complete",
 "criteria": [
-  {"requirement": "One requirement from the original goal",
-   "satisfied": true or false,
-   "evidence": [{"source": "Actual file/location or executed command",
-                 "observation": "What you directly observed and its implication"}]}
+  {"id": "C1", "status": "satisfied",
+   "evidence": [{"source": "Actual artifact/location or executed command",
+                 "observation": "What you observed and what it establishes"}]}
+],
+"resolved_findings": [
+  {"id": "F1", "reason": "The check and observation establishing resolution"}
 ]
 
-Include every requirement and concrete evidence for each. Set verified true
-only when every requirement is satisfied. When something is unmet, set it false
-and describe the observed gap precisely enough for another session to fix it.
-An unmet goal is a normal verification result: exception remains null.
+Include every accepted criterion by its existing ID. Status is satisfied, unmet
+or unverified. A reproducible defect is unmet. Missing evidence or an unavailable
+check is unverified: explain the gap in explanation; evidence may then be empty.
+Satisfied and unmet assessments need concrete observations. The controller
+derives the goal verdict from these results, coverage and remaining findings.
 
-If you need human help to verify (missing access, unavailable evidence, an
-ambiguous requirement, or another blocker), set exception to the observed reason
-and include question with the specific help needed. Explain checks already
-performed and the remaining uncertainty in final. You may include review_files
-as workspace-relative {path, label, description} entries. In that case you may
-omit verified and criteria; the controller will ask a human and restart this
-phase with their guidance. Never infer success because a check was unavailable.
+Read every unresolved finding, even if it concerns a criterion changed by an
+amendment. Reproduce/check it and explicitly resolve it when facts establish a
+fix or a mistaken finding under the reviewed goal. Otherwise leave it open and
+explain the next useful action. resolved_findings may be empty or omitted.
+Do not discard old defects merely because a different check now passes.
+
+Set coverage to gap if the contract omits or misinterprets a required outcome;
+describe the source-grounded correction in contract_changes. Use unverified if
+coverage cannot be established. Never approve under a silently narrower or wider
+goal. An unmet goal is ordinary feedback, with exception:null. If verification
+needs human help, report the specific blocker and question instead; you may then
+omit the assessment fields.

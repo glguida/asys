@@ -1,5 +1,13 @@
 # Release notes
 
+## Unreleased
+
+- Define and independently review success criteria before goal implementation.
+  Preserve accepted contracts, review feedback and unresolved findings across
+  attempts; reopen the contract when implementation or verification finds a
+  material gap. Any phase can ask for human help. Keep unlimited attempts by
+  default and give malformed phase reports one opportunity for correction.
+
 ## 0.1.3
 
 - Present Human requests with the question, work summary, and evidence links
