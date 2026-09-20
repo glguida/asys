@@ -337,6 +337,19 @@ directory, normally `$HOME/.local/state/asys`. Runs and their job records use
 `asys/runs`; project workspaces remain at the paths supplied by the caller. Installation
 does not create a machine or start an inference server automatically.
 
+### Upgrade from 0.1.4
+
+Version 0.1.5 gives malformed agent completion JSON one correction attempt in
+the same session, preserving its work and observations. Goal prompts also ask
+implementation to finish actionable work before handing off and verification
+to critically assess implementation and test adequacy with focused checks.
+
+Reinstall with the original `PREFIX` (`make install` rebuilds the images and
+updates the host tools and bundled skill). Rebuild environments that use a
+prebuilt workers image against the new base, and refresh separately exported
+skill copies. New jobs use the changes; running jobs keep their existing images.
+Saved-state formats and BPMN engine checkpoint compatibility are unchanged.
+
 ### Upgrade from 0.1.3
 
 Version 0.1.4 adds definition and review of success criteria to goal jobs, with

@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## 0.1.5
 
 - Strengthen goal prompts to finish actionable implementation before handing off
   and critically review implementation and test adequacy during verification.

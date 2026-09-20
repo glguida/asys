@@ -1,6 +1,6 @@
 {
   "name": "@asys/human-protocol",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "exports": "./asys/human/v1/human_pb.js",

@@ -18,7 +18,7 @@ import (
 
 const Service = "cyclo.provider.v1.Provider"
 const GlobalName = "inference_endpoint"
-const Version = "0.1.4"
+const Version = "0.1.5"
 
 type Provider struct {
 	Name    string              `json:"name"`
