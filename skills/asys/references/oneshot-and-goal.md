@@ -118,10 +118,11 @@ BPMN can also use `--human` for a terminal attached to that run.
 
 Retry launches the same phase in a fresh session with the human question and
 answer preserved. Stop ends the goal unsuccessfully. A human answer cannot
-directly mark the goal verified. Missing service/transport failures and malformed
-completion/verdict JSON remain job errors rather than agent-authored requests
-for help. Cancellation interrupts an active session or withdraws a waiting Human
-request.
+directly mark the goal verified. Malformed completion JSON gets one format
+correction in the same agent session; invalid phase fields get one fresh session
+to correct the report. Uncorrected reports and service/transport failures fail
+the job instead of opening a Human request. Cancellation interrupts an active
+session or withdraws a waiting Human request.
 
 ## Results, evidence, and retained state
 

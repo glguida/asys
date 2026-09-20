@@ -17,8 +17,8 @@ async function fixture(t) {
     async listModels() { return { models: [model] }; },
     async *infer(request) { yield* f.infer(JSON.parse(request.payload), ++f.calls); },
   };
-  f.run = () => runAgent({
-    config: { model: 'fixture/model', prompt: 'Integrate the circuit.', maxSteps: 8, options: {} },
+  f.run = ({ maxSteps = 8 } = {}) => runAgent({
+    config: { model: 'fixture/model', prompt: 'Integrate the circuit.', maxSteps, options: {} },
     job: f.job, workspace, signal: f.controller.signal,
     provider, save() {},
     event(type, data) { f.events.push({ type, ...data }); f.onEvent(type, data); },
@@ -81,4 +81,60 @@ test('cancelling a job interrupts Pi retry backoff without another inference cal
   };
   await assert.rejects(f.run(), /Job cancelled during retry/);
   assert.equal(f.calls, 1);
+});
+
+test('completion correction preserves a reported blocker and task-specific fields', async t => {
+  const f = await fixture(t);
+  const blocked = { exception: 'Missing board specification', question: 'Which board revision should I use?' };
+  f.infer = async function* (_frame, attempt) {
+    const result = attempt === 1 ? blocked : { ...blocked, final: 'Inspected the inputs; the board revision is unspecified.' };
+    yield response({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) });
+  };
+  const result = await f.run();
+  assert.equal(result.exception, blocked.exception);
+  assert.equal(result.question, blocked.question);
+  assert.equal(f.calls, 2);
+  assert.equal(f.events.filter(e => e.type === 'agent.result_correcting').length, 1);
+});
+
+test('completion correction stops after one unsuccessful retry', async t => {
+  const f = await fixture(t);
+  f.infer = async function* () {
+    yield response({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: '{invalid' }]) });
+  };
+  await assert.rejects(f.run(), /Agent final response must be a JSON object/);
+  assert.equal(f.calls, 2);
+  assert.equal(f.events.filter(e => e.type === 'agent.result_correcting').length, 1);
+});
+
+test('completion correction respects the inference step budget', async t => {
+  const f = await fixture(t);
+  f.infer = async function* () {
+    yield response({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: '{}' }]) });
+  };
+  await assert.rejects(f.run({ maxSteps: 1 }), /exceeded 1 inference steps/);
+  assert.equal(f.calls, 1);
+});
+
+test('cancellation before completion correction prevents another inference call', async t => {
+  const f = await fixture(t);
+  f.infer = async function* () {
+    yield response({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: '{}' }]) });
+  };
+  f.onEvent = type => {
+    if (type === 'agent.result_correcting') f.controller.abort(new Error('Cancelled before correction'));
+  };
+  await assert.rejects(f.run(), /Cancelled before correction/);
+  assert.equal(f.calls, 1);
+});
+
+test('execution errors are not treated as completion format errors', async t => {
+  const f = await fixture(t);
+  f.infer = async function* () {
+    const error = { ...assistant([{ type: 'text', text: '{invalid' }], 'error'), errorMessage: 'Model does not support this request' };
+    yield response({ type: 'error', reason: 'error', error });
+  };
+  await assert.rejects(f.run(), /Model does not support this request/);
+  assert.equal(f.calls, 1);
+  assert.equal(f.events.filter(e => e.type === 'agent.result_correcting').length, 0);
 });

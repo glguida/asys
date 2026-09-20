@@ -319,7 +319,7 @@ test('an interrupted Pi job restarts the assignment without carrying its result 
 });
 
 for (const content of ['{invalid', 'null', '{"exception":""}', '{"exception":false}']) {
-  test(`an invalid agent result fails the job: ${content}`, async t => {
+  test(`a persistently invalid agent result fails the job after correction: ${content}`, async t => {
     const f = await fixture(t, { agentArgs: ['--model', 'fixture/model'] });
     let requests = 0;
     const server = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
@@ -334,6 +334,7 @@ for (const content of ['{invalid', 'null', '{"exception":""}', '{"exception":fal
     await f.queue.submit('agent', 'invalid', { input: { prompt: 'Return the result.' } });
     const state = await f.queue.wait('invalid', { timeoutMs: 10000 });
     assert.equal(state.status, 'failed');
+    assert.equal(requests, 2);
     assert.equal(state.exit_code, 1);
     assert.equal(state.artifacts, undefined);
   });

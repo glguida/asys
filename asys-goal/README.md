@@ -107,7 +107,9 @@ negative checks need no human approval. The controller completes the goal only
 when coverage is complete, every accepted criterion is satisfied and no finding
 remains open. Missing or invalid phase fields get one fresh session to correct
 the report; a repeated format error fails the job. Unmet work starts another
-attempt. Invalid completion JSON and execution errors remain job failures.
+attempt. Invalid completion JSON or missing `final`/`exception` fields get one
+format correction in the same agent session, preserving its work and observations.
+An uncorrected response or an execution error fails the job.
 
 Verification instructions require inspecting artifacts and running checks.
 Documentation can define requirements. Completion claims in documentation,

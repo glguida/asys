@@ -1,5 +1,12 @@
 # Release notes
 
+## Unreleased
+
+- Give malformed agent completion JSON one format correction in the same session,
+  preserving completed work and observations. Include the parser diagnostic and
+  show complete JSON examples in goal prompts, so a formatting mistake can be
+  corrected before it fails a goal or another agent job.
+
 ## 0.1.4
 
 - Define and independently review success criteria before goal implementation.

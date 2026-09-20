@@ -87,13 +87,26 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
     save();
   }
   try {
-    signal.throwIfAborted();
-    await session.prompt(state.prompt, { expandPromptTemplates: false });
-    signal.throwIfAborted();
-    snapshot();
-    const assistant = session.messages.at(-1);
-    if (!isFinalAnswer(assistant)) throw new Error(compactionError || assistant?.errorMessage || `Agent ${job.id} did not finish`);
-    return agentResult(assistant);
+    let prompt = state.prompt;
+    for (let correction = 0; ; correction++) {
+      signal.throwIfAborted();
+      await session.prompt(prompt, { expandPromptTemplates: false });
+      signal.throwIfAborted();
+      snapshot();
+      const assistant = session.messages.at(-1);
+      if (!isFinalAnswer(assistant)) throw new Error(compactionError || assistant?.errorMessage || `Agent ${job.id} did not finish`);
+      try { return agentResult(assistant); }
+      catch (error) {
+        // Repair only the report, once, with the completed work still in context.
+        if (correction) throw error;
+        event('agent.result_correcting', { errorMessage: error.message });
+        prompt = `Your final response was rejected: ${error.message}\n\n` +
+          'Correct the response format using the work and observations already in this session. ' +
+          'Return one valid JSON object with a nonempty string final, exception (null or a nonempty reason), ' +
+          'and all task-specific result fields. Use double quotes for JSON strings; no Markdown fences or surrounding prose. ' +
+          'Preserve the findings and outcome, including any blocker. Do not repeat completed work or run tools just to reformat the report.';
+      }
+    }
   } finally {
     signal.removeEventListener('abort', onAbort);
     unsubscribe();

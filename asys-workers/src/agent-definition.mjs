@@ -36,7 +36,7 @@ export function agentResult(message) {
   const text = message.content.filter(part => part.type === 'text').map(part => part.text).join('');
   let result;
   try { result = JSON.parse(text); }
-  catch (cause) { throw new Error('Agent final response must be a JSON object with final and exception', { cause }); }
+  catch (cause) { throw new Error(`Agent final response must be a JSON object with final and exception: ${cause.message}`, { cause }); }
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Agent final response must be a JSON object');
   requiredString(result.final, 'Agent final report');
   if (!Object.hasOwn(result, 'exception')) throw new Error('Agent final response must include exception (null or a reason)');

@@ -14,16 +14,20 @@ this session's job area or disposable copies for probes. Record check side
 effects. Base conclusions on current inputs and configuration; recheck stale
 observations or leave the affected criterion unverified.
 
-Return final and exception:null with:
-"coverage": "complete",
-"criteria": [
-  {"id": "C1", "status": "satisfied",
-   "evidence": [{"source": "Actual artifact/location or executed command",
-                 "observation": "What you observed and what it establishes"}]}
-],
-"resolved_findings": [
-  {"id": "F1", "reason": "The check and observation establishing resolution"}
-]
+Return one JSON object, for example:
+{
+  "final": "Summary of the observed outcome and any remaining gaps.",
+  "exception": null,
+  "coverage": "complete",
+  "criteria": [
+    {"id": "C1", "status": "satisfied",
+     "evidence": [{"source": "Actual artifact/location or executed command",
+                   "observation": "What you observed and what it establishes"}]}
+  ],
+  "resolved_findings": [
+    {"id": "F1", "reason": "The check and observation establishing resolution"}
+  ]
+}
 
 Include every accepted criterion by its existing ID. Status is satisfied, unmet
 or unverified. A reproducible defect is unmet. Missing evidence or an unavailable

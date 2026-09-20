@@ -155,8 +155,11 @@ It can include task-defined fields such as `approved`, measurements, or file
 names. `final` must be nonempty text, and `exception` must be null or a nonempty
 reason the task cannot continue. The worker parses this object, writes the
 runtime result file, and exits with status 1 when it declares an exception.
-Malformed completion fails the job. Execution metadata and conversation remain
-in the transcript, outside the returned task result.
+Malformed completion gets one format correction in the same session, with the
+parser error and previous work still available. An uncorrected response fails
+the job. This correction counts toward any inference step limit; execution errors
+and cancellation retain their normal handling. Execution metadata and conversation
+remain in the transcript, outside the returned task result.
 
 For example, `{"final":"Routing is incomplete","exception":"15 nets remain
 unconnected"}` returns that report and a failing exit status. BPMN can catch it

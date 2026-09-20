@@ -10,14 +10,18 @@ pass condition and a practical way to check it. Group related obligations when
 the same evidence can establish them; avoid a vague blanket "complies" criterion.
 For checking or reporting tools, include relevant false-pass/failure controls.
 
-Return contract alongside final and exception:null, for example:
-"contract": {
-  "criteria": [
-    {"id": "C1", "requirement": "The requested outcome and its pass condition",
-     "basis": "User request or a specific governing source/section",
-     "verification": "What to inspect or execute, and what establishes success"}
-  ],
-  "notes": "Relevant scope decisions or exclusions and their reasons, if any"
+Return one JSON object, for example:
+{
+  "final": "Summary of the proposed criteria and the sources inspected.",
+  "exception": null,
+  "contract": {
+    "criteria": [
+      {"id": "C1", "requirement": "The requested outcome and its pass condition",
+       "basis": "User request or a specific governing source/section",
+       "verification": "What to inspect or execute, and what establishes success"}
+    ],
+    "notes": "Relevant scope decisions or exclusions and their reasons, if any"
+  }
 }
 
 Each criterion is mandatory. Keep optional suggestions outside the criteria.

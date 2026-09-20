@@ -30,7 +30,7 @@ verify and commit those changes before finishing. Include only your task's
 changes; do not create an empty commit. Clone repositories or merge branches
 when the task calls for it.
 
-Finish with a valid JSON object:
+Finish with one valid JSON object, without Markdown fences or surrounding prose:
 
 {
   "final": "A factual account of the outcome, checks, and any unresolved work.",

@@ -271,6 +271,46 @@ test('malformed reports receive one correction opportunity without another imple
   assert.equal((await f.state()).sessions[3].status, 'invalid');
 });
 
+test('invalid definition JSON is corrected in the same session with its work intact', async t => {
+  const f = await fixture(t);
+  const malformed = JSON.stringify(defined).replace('"basis":"', '"basis":');
+  let definitions = 0;
+  const provider = {
+    async listModels() { return { models: [model] }; },
+    async *infer(request) {
+      const { context } = JSON.parse(request.payload);
+      const data = JSON.parse(context.messages[0].content[0].text.split('Assignment data:\n')[1]);
+      let message;
+      if (data.phase === 'define' && ++definitions === 1) {
+        message = assistant([{ type: 'toolCall', id: 'inspect-once', name: 'bash',
+          arguments: { command: 'printf "inspected\\n" >> definition-checks.txt' } }], 'toolUse');
+      } else if (data.phase === 'define' && definitions === 2) {
+        message = assistant([{ type: 'text', text: malformed }]);
+      } else {
+        if (data.phase === 'define') {
+          assert.equal(definitions, 3);
+          assert.equal(context.messages.filter(m => m.role === 'toolResult' && m.toolCallId === 'inspect-once').length, 1);
+          assert.equal(context.messages.at(-2).content[0].text, malformed);
+          assert.match(context.messages.at(-1).content[0].text, /final response was rejected:.*JSON/);
+        }
+        message = assistant([{ type: 'text', text: JSON.stringify(normal(data)) }]);
+      }
+      yield { payload: JSON.stringify({ type: 'done', reason: message.stopReason, message }) };
+    },
+  };
+  const result = await f.run({ provider });
+  assert.equal(result.verified, true);
+  assert.equal(result.attempts, 1);
+  assert.equal(await readFile(join(f.workspace, 'definition-checks.txt'), 'utf8'), 'inspected\n');
+  const state = await f.state();
+  assert.deepEqual(state.sessions.map(session => session.phase), ['define', 'review', 'implement', 'verify']);
+  assert.deepEqual(state.contract.criteria, defined.contract.criteria);
+  const transcript = JSON.parse(await readFile(join(f.directory, state.sessions[0].directory, 'agent.json')));
+  assert.equal(transcript.agent.steps, 3);
+  assert.ok(transcript.agent.session.entries.some(entry => entry.message?.content?.some(part => part.text === malformed)));
+  assert.equal(f.events.filter(event => event.type === 'agent.result_correcting').length, 1);
+});
+
 test('missing, duplicate, unknown and unsupported criteria never claim completion', async t => {
   const invalid = [
     data => ({ ...checked(data), criteria: [] }),
