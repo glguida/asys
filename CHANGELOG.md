@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Strengthen goal prompts to finish actionable implementation before handing off
+  and critically review implementation and test adequacy during verification.
+  Focus checks on unresolved risks and avoid broad reruns when a known gap
+  already prevents acceptance.
 - Give malformed agent completion JSON one format correction in the same session,
   preserving completed work and observations. Include the parser diagnostic and
   show complete JSON examples in goal prompts, so a formatting mistake can be

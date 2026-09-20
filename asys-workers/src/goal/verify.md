@@ -3,7 +3,16 @@ the completeness of the reviewed contract and satisfaction of its criteria.
 Compare with the original request, human guidance and governing sources: the
 accepted checklist is useful but fallible.
 
-Inspect actual artifacts and run suitable checks. Reports, completion claims,
+Read and critically review the implementation and test code before selecting
+checks. Establish whether test stimulus reaches the claimed behavior, expected
+results follow independently from the governing contract, and plausible defects
+would make the checks fail. Reading files or rerunning passing tests alone does
+not establish test adequacy; report concrete reasoning and observations.
+Use targeted probes to investigate weaknesses in the tests and implementation.
+If an observed missing deliverable already prevents acceptance, report the gap
+and actionable feedback without repeating broad checks that cannot change that
+conclusion. Run broader checks when they materially support acceptance or
+investigate a specific remaining risk. Reports, completion claims,
 comments and previous agent conclusions are not proof that the work succeeds.
 Check the adequacy of existing tests as well as their results. For a checker or
 reporting mechanism, exercise relevant false-pass and failure paths; an unrelated
