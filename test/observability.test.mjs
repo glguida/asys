@@ -139,7 +139,10 @@ test('terminal output renders and follows the agent transcript with scrollback',
     ]),
     message('result', 'inspect', 'toolResult', [{ type: 'text', text: 'BOARD CHECK SUCCEEDED' }], { toolName: 'bash' }),
     { type: 'compaction', id: 'compact', parentId: 'result', summary: 'The board has been checked.' },
-    message('final', 'compact', 'assistant', [{ type: 'text', text: Array.from({ length: 70 }, (_, i) => `Transcript line ${i + 1}`).join('\n') + '\nLAST SAVED ANSWER' }]),
+    message('final', 'compact', 'assistant', [{ type: 'text', text: JSON.stringify({
+      final: Array.from({ length: 70 }, (_, i) => `Transcript line ${i + 1}`).join('\n') + '\nLAST SAVED ANSWER',
+      exception: null, goal_status: 'review',
+    }) }]),
     message('discarded', 'result', 'assistant', [{ type: 'text', text: 'UNSELECTED BRANCH' }]),
   ] } } });
   const before = await readFile(checkpoint, 'utf8');

@@ -33,7 +33,8 @@ try:
     assert b'pcb-engineer' in output and b'design_module' in output, output
     if len(sys.argv) > 3:
         curses.setupterm(term='xterm')
-        until(b'Transcript:', b'LAST SAVED ANSWER')
+        until(b'Transcript:', b'LAST SAVED ANSWER', b'Goal status:')
+        assert b'"final"' not in output and b'\\nLAST SAVED ANSWER' not in output, output
         os.write(master, curses.tigetstr('khome'))
         until(b'TRANSCRIPT PROMPT', b'I will inspect the board.', b'printf BOARD_CHECK', b'BOARD CHECK SUCCEEDED')
         assert b'UNSELECTED BRANCH' not in output, output

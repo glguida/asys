@@ -1,9 +1,106 @@
 """Render the saved agent conversation and its currently streaming response."""
+from collections import deque
 import json
 from pathlib import Path
 import textwrap
 
-from .runs import Files, LogReader, tail
+from .runs import Files, JOB_TERMINAL, LogReader, tail
+
+
+def fields(value, indent=""):
+    """Display report fields without JSON quoting or escaped newlines."""
+    if isinstance(value, dict) and value:
+        lines = []
+        for key, item in value.items():
+            label = key.replace("_", " ").capitalize()
+            content = fields(item, indent + "  ")
+            lines += [f"{indent}{label}:", *content]
+        return lines
+    if isinstance(value, list) and value:
+        lines = []
+        for item in value:
+            content = fields(item, indent + "  ")
+            lines += [indent + "- " + content[0][len(indent) + 2:], *content[1:]]
+        return lines
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return [indent + line for line in text.splitlines()] or [indent]
+
+
+def agent_report(text):
+    try:
+        report = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if (isinstance(report, dict) and isinstance(report.get("final"), str) and report["final"].strip()
+            and "exception" in report and (report["exception"] is None
+                or isinstance(report["exception"], str) and report["exception"].strip())):
+        return report
+    return None
+
+
+def message_lines(label, text):
+    report = agent_report(text) if label == "Assistant" else None
+    if report is not None:
+        details = {key: value for key, value in report.items() if key != "final"}
+        return [label, *report["final"].splitlines(), "", *fields(details), ""]
+    return [label, *str(text).splitlines(), ""]
+
+
+class EventOutput:
+    """Readable recent events when a worker transcript is not available yet."""
+    def __init__(self):
+        self.lines = deque(maxlen=100)
+        self.blocks = {}
+        self.session = None
+
+    def live_lines(self):
+        return render_live({"blocks": self.blocks}) if self.blocks else []
+
+    def flush(self):
+        self.lines.extend(self.live_lines())
+        self.blocks.clear()
+        self.session = None
+
+    def read(self):
+        return list(self.lines) + self.live_lines()
+
+    def append(self, line):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        kind = event.get("type") if isinstance(event, dict) else None
+        if not isinstance(kind, str):
+            kind = None
+        if kind == "agent.message_delta":
+            block_kind, index, delta = event.get("kind"), event.get("contentIndex"), event.get("delta")
+            if (isinstance(block_kind, str) and block_kind in {"text", "thinking"}
+                    and type(index) is int and index >= 0 and isinstance(delta, str)):
+                if event.get("session") != self.session:
+                    self.flush()
+                    self.session = event.get("session")
+                block = self.blocks.setdefault(index, (block_kind, []))
+                if block[0] == block_kind:
+                    block[1].append(delta)
+                    return
+            # Invalid or future event payloads remain visible as ordinary output.
+        self.flush()
+        if kind == "agent.message_started":
+            return
+        if kind in {"goal.phase_started", "goal.phase_finished"}:
+            state = "started" if kind.endswith("started") else event.get("status", "finished")
+            self.lines.extend([f"Attempt {event.get('attempt', '?')}: {event.get('phase', '?')} ({state})", ""])
+        elif kind in {"agent.tool_started", "agent.tool_completed"}:
+            state = "started" if kind.endswith("started") else "failed" if event.get("isError") else "completed"
+            self.lines.extend([f"Tool {state}: {event.get('name', 'tool')}", ""])
+        elif kind in {"goal.human_requested", "goal.human_answered", "goal.finished",
+                      "agent.provider_exhausted", "agent.provider_retrying", "agent.model_unavailable",
+                      "agent.compaction_started", "agent.compaction_ended", "agent.result_correcting"}:
+            self.lines.extend([kind.replace(".", " ").replace("_", " ").capitalize(),
+                               *fields({key: value for key, value in event.items()
+                                        if key not in {"type", "time", "session"}}), ""])
+        else:
+            self.lines.append(f"stdout: {line}")
 
 
 def session_entries(session):
@@ -21,13 +118,20 @@ def session_entries(session):
     return list(reversed(branch))
 
 
-def render(agent):
+def render(agent, *, current_turn=False):
     lines = []
 
     def add(label, text):
-        lines.extend([label, *str(text).splitlines(), ""])
+        lines.extend(message_lines(label, text))
 
-    for entry in session_entries(agent.get("session", {})):
+    session = agent.get("session", {})
+    entries = session_entries(session)
+    if current_turn:
+        start = agent.get("sessionStartEntryCount", 0)
+        if isinstance(start, int) and start > 0:
+            previous = {entry.get("id") for entry in session.get("entries", [])[:start]}
+            entries = [entry for entry in entries if entry.get("id") not in previous]
+    for entry in entries:
         if entry.get("type") == "compaction":
             add("Context compacted", entry.get("summary", ""))
             continue
@@ -42,10 +146,17 @@ def render(agent):
         if isinstance(content, str):
             add(label, content)
             continue
+        text = "".join(block.get("text", "") for block in content if block.get("type") == "text")
+        report = text if role == "assistant" and agent_report(text) is not None else None
+        report_added = False
         for block in content:
             kind = block.get("type")
             if kind == "text":
-                add(label, block.get("text", ""))
+                if report is None:
+                    add(label, block.get("text", ""))
+                elif not report_added:
+                    add(label, report)
+                    report_added = True
             elif kind == "thinking" and block.get("thinking"):
                 add("Thinking", block["thinking"])
             elif kind == "toolCall":
@@ -77,6 +188,13 @@ def wrap(lines, width):
     return result
 
 
+def render_live(live):
+    content = [{"type": kind, "text" if kind == "text" else "thinking": "".join(chunks)}
+               for _, (kind, chunks) in sorted(live["blocks"].items())]
+    return render({"session": {"entries": [{"type": "message", "message": {
+        "role": "assistant", "content": content}}]}})
+
+
 class JobOutput:
     def __init__(self):
         self.key = None
@@ -85,6 +203,8 @@ class JobOutput:
         self.files = Files()
         self.reader = None
         self.live = None
+        self.events = EventOutput()
+        self.phase_outputs = {}
 
     def read(self, job):
         directory = Path(job["directory"])
@@ -92,23 +212,22 @@ class JobOutput:
         if self.key != key:
             self.key, self.saved, self.files = key, None, Files()
             self.reader, self.live = LogReader(directory / "stdout.log", None), None
+            self.events, self.phase_outputs = EventOutput(), {}
+        self.read_stream(flush=job.get("status") in JOB_TERMINAL)
         document = self.files.read(directory / "agent.json")
         agent = document.get("agent")
         errors = [f"stderr: {line}" for line in tail(directory / "stderr.log", 100)]
         goal = self.files.read(directory / 'goal.json')
-        if goal.get('version') == 1 and isinstance(goal.get('sessions'), list):
+        if goal.get('version') in (1, 2, 3) and isinstance(goal.get('sessions'), list):
             return 'Goal', self.read_goal(directory, goal) + errors
         if isinstance(agent, dict):
             if self.saved is not document:
                 self.saved, self.lines = document, render(agent)
-            self.read_stream()
             live = []
             if self.live and self.live["parentId"] == agent.get("session", {}).get("leafId"):
-                for _, (kind, chunks) in sorted(self.live["blocks"].items()):
-                    live += ["Assistant" if kind == "text" else "Thinking", *"".join(chunks).splitlines(), ""]
+                live = render_live(self.live) if self.live['blocks'] else []
             return "Transcript", self.lines + live + errors
-        output = [f"stdout: {line}" for line in tail(directory / "stdout.log", 100)]
-        return "Logs", output + errors
+        return "Logs", self.events.read() + errors
 
     def read_goal(self, directory, goal):
         lines = [f"Goal: {goal.get('goal', '')}", f"Status: {goal.get('status', '')}", '']
@@ -121,34 +240,40 @@ class JobOutput:
             lines += [f"Attempt {session['attempt']}: {session['phase']} ({session['status']})", '']
             current = self.files.read(path / 'agent.json').get('agent')
             if isinstance(current, dict):
-                lines += render(current)
+                lines += render(current, current_turn=True)
             elif session.get('result'):
-                lines += [session['result'].get('final', ''), '']
+                lines += message_lines('Assistant', json.dumps(session['result']))
+            else:
+                reader, output = self.phase_outputs.setdefault(path, (LogReader(path / 'stdout.log', None), EventOutput()))
+                for line in reader.read(flush=session.get("status") != "running"):
+                    output.append(line)
+                lines += output.read()
             request = self.files.read(path / 'human.request.json')
             if request:
                 lines += ['Human help', request.get('summary', ''), request.get('prompt', ''), '']
                 answer = self.files.read(path / 'human.result.json')
                 if answer:
                     lines += [f"Human: {answer.get('action', '')}", answer.get('guidance', ''), '']
-        self.read_stream()
         if isinstance(current, dict) and self.live and self.live['parentId'] == current.get('session', {}).get('leafId'):
-            for _, (kind, chunks) in sorted(self.live['blocks'].items()):
-                lines += ['Assistant' if kind == 'text' else 'Thinking', *''.join(chunks).splitlines(), '']
+            lines += render_live(self.live) if self.live['blocks'] else []
         return lines
 
-    def read_stream(self):
-        for line in self.reader.read():
+    def read_stream(self, *, flush=False):
+        for line in self.reader.read(flush=flush):
+            self.events.append(line)
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
             if not isinstance(event, dict):
                 continue
-            if event.get("type") == "agent.message_started":
+            if event.get("type") == "goal.phase_started":
+                self.live = None
+            elif event.get("type") == "agent.message_started":
                 self.live = {"parentId": event.get("parentId"), "blocks": {}}
             elif event.get("type") == "agent.message_delta" and self.live is not None:
                 kind, index, delta = event.get("kind"), event.get("contentIndex"), event.get("delta")
-                if kind not in {"text", "thinking"} or type(index) is not int or index < 0 or not isinstance(delta, str):
+                if not isinstance(kind, str) or kind not in {"text", "thinking"} or type(index) is not int or index < 0 or not isinstance(delta, str):
                     continue
                 block = self.live["blocks"].setdefault(index, (kind, []))
                 if block[0] == kind:
