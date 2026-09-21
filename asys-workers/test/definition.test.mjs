@@ -120,7 +120,7 @@ test('completion accepts only the agreed final JSON and preserves task-specific 
   }
 });
 
-test('the shared simple agent supplies its packaged instructions and model to a real session', async t => {
+test('the shared simple agent uses the shared system prompt without extra role instructions', async t => {
   const root = await mkdtemp(join(tmpdir(), 'asys-system-agent-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const environment = join(root, 'environment'), workspace = join(root, 'work');
@@ -159,7 +159,10 @@ assert 'asys.oneshot' not in sys.modules
     signal: new AbortController().signal,
   }, { provider });
   const packaged = await readFile(new URL('../../python/asys/system_agents/simple/prompt.md', import.meta.url), 'utf8');
-  assert.ok(requests[0].context.systemPrompt.includes(packaged.trim()));
+  assert.equal(packaged, '');
+  const shared = await readFile(new URL('../src/system.md', import.meta.url), 'utf8');
+  assert.ok(requests[0].context.systemPrompt.includes(shared.trim()));
+  assert.doesNotMatch(requests[0].context.systemPrompt, /Agent instructions:/);
   assert.doesNotMatch(requests[0].context.systemPrompt, /UNSELECTED_ENVIRONMENT_AGENT|UNSELECTED_ENVIRONMENT_MEMORY/);
   assert.deepEqual(requests[0].context.messages[0].content, [{ type: 'text', text: 'Complete the assignment.' }]);
   const { agent: state } = JSON.parse(await readFile(join(jobDirectory, 'agent.json'), 'utf8'));

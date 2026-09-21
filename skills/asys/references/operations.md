@@ -63,9 +63,13 @@ RUN/
 ```
 
 Not every manager produces every file; one-shot/goal do not create a BPMN
-workflow database/channel. A goal job adds `goal.json` and separate session
-directories under `attempts/`. Ordinary programs may have no transcript or
-report. State is evidence to inspect, not an invitation to manually mark jobs
+workflow database/channel. A goal job adds `goal.json`, the continuing
+implementation conversation in `implementation/session.jsonl`, and per-turn
+artifacts under `attempts/`. Version 3 goal state supports consecutive work
+turns: `goal_status: continue` schedules another implementation turn; `review`
+starts a fresh verifier. The observer also reads archived version 1 and 2 state,
+which the current worker cannot resume. Ordinary programs may have no transcript
+or report. State is evidence to inspect, not an invitation to manually mark jobs
 successful or edit checkpoints.
 
 Project deliverables belong in the actual workspace. Job directories contain
@@ -116,7 +120,10 @@ Editing the original BPMN file does not modify the saved workflow resumed by
 this command. Run a new workflow if the definition itself must change.
 Completed or explicitly cancelled runs cannot be resumed. One-shot/goal host
 launchers do not expose a resume command; invoke a new job with an appropriate
-assignment if continuation is needed.
+assignment if continuation is needed. A goal worker can restore its controller
+checkpoint and implementation conversation when explicitly re-executed for the
+same job directory. This is separate from BPMN resume or a new goal invocation,
+which create new jobs. Runtime does not automatically re-execute terminal jobs.
 
 ## Cancellation, restart, and lifecycle
 
@@ -149,7 +156,7 @@ copies exported to user/project directories.
 | Fields are null / invalid FEEL | Structured result file, actual types, first-pass optional fields, XML escaping |
 | Agent fails at completion | Last assistant response must be a JSON object with `final` and `exception` |
 | Reviewer says approved but flow repeats | JSON boolean versus string, actual gateway condition/default flow |
-| Goal keeps working | `goal.json`, current unmet criteria, session tool/check evidence; default is unlimited |
+| Goal keeps working | `goal.json`, latest `goal_status`, current findings and tool/check activity; `continue` deliberately skips review and default attempts are unlimited |
 | Agent waiting for capacity | Retry/exhaustion messages and provider reset time; distinguish waiting from a crash |
 | Human job waiting | Same asys/dcomp state/system, `asys-human-prompt`, candidates/claimant, current claim |
 | Human request is incomprehensible | Producing assignment and actual input fields; fix briefing/evidence at the producer |

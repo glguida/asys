@@ -92,10 +92,20 @@ needed to use them.
 - `simple` is supplied by asys. One-shot takes no agent positional argument;
   one-shot and goal use `asys system-model set simple MODEL` or `--model MODEL`.
   Ordinary role jobs select their agent and model in `workers.json`.
-- Goals first define and review success criteria, then implement and verify
-  with no default attempt limit. Each phase uses a fresh session and can request
-  human help. Criteria and unresolved findings persist between attempts.
-  Evidence comes from artifacts and executed checks, not completion claims.
+- Goals retain one implementation conversation across automatic work turns.
+  Successful implementation reports require `goal_status`: `continue` starts
+  another turn; `review` requests a fresh independent verifier. There is no
+  default attempt limit; an explicit limit counts successful implementation
+  turns, including `continue`, with human retries and corrections in the same
+  attempt. The original request and governing sources remain authoritative;
+  no generated contract is required.
+  Verifier findings return to the implementer. Verification receives the request,
+  current workspace, open findings and human guidance without the implementer's
+  completion narrative. Partial progress is allowed; only verification can
+  complete the whole goal. Evidence comes from artifacts and executed checks.
+  Job state and the implementation conversation persist for recovery of the same
+  job. Human retry retains implementation context; verification starts fresh.
+  New jobs, including standalone one-shot assignments, start fresh.
 - Agents can propose lessons in job state. Ordinary execution does not rewrite
   retained agent memory. Promoting lessons into an environment is an explicit
   authoring change.

@@ -101,8 +101,9 @@ The environment Dockerfile is built on each invocation,
 using the current base image and Docker's cache. An environment without a
 Dockerfile uses its current declared image.
 
-The global behavior prompt and the `simple` agent's
-[instructions](../python/asys/system_agents/simple/prompt.md) are supplied by asys.
+The `simple` agent uses asys's shared [system prompt](../asys-workers/src/system.md)
+and reporting guidance, with no additional role-specific instructions. Its empty
+`prompt.md` keeps the agent registered for packaging and launchers.
 The shared [system-agent package](../python/asys/system_agents/__init__.py)
 owns its worker definition and setup, so other launchers can use the same agent.
 `simple` uses the environment's shared resources and has no retained memory. Reports and

@@ -6,7 +6,7 @@ import { writeJSON } from './files.mjs';
 import { requiredString } from './values.mjs';
 import { agentDefinition } from './agent-definition.mjs';
 
-export async function agent({ job, argv, env, signal }, { provider = providerClient(env), definition: suppliedDefinition, event } = {}) {
+export async function agent({ job, argv, env, signal }, { provider = providerClient(env), definition: suppliedDefinition, event, sessionFile } = {}) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     model: { type: 'string' }, agent: { type: 'string' }, extension: { type: 'string', multiple: true },
     'max-steps': { type: 'string' }, timeout: { type: 'string' },
@@ -28,7 +28,7 @@ export async function agent({ job, argv, env, signal }, { provider = providerCli
   const state = { id: job.id };
   const definition = suppliedDefinition ?? agentDefinition(env.ASYS_ENVIRONMENT_DIR, values.agent, env.ASYS_WORKERS_DIR);
   return runAgent({ config, job: state, workspace: job.workspace,
-    jobDirectory: job.directory, definition, extensionPaths: (values.extension ?? []).map(path => resolve(definition.workersDirectory, path)),
+    jobDirectory: job.directory, definition, sessionFile, extensionPaths: (values.extension ?? []).map(path => resolve(definition.workersDirectory, path)),
     signal, provider,
     save: () => writeJSON(transcript, state),
     event: event ?? ((type, data) => console.log(JSON.stringify({ type, time: new Date().toISOString(), ...data }))),

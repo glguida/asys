@@ -1,29 +1,29 @@
 import { parseArgs } from 'node:util';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { makeDirectory, prepareFile } from '../../asys-runtime/javascript/permissions.mjs';
 import { agent } from './agent.mjs';
 import { systemAgentDefinition } from './agent-definition.mjs';
 import { human } from './human.mjs';
-import { writeJSON } from './files.mjs';
+import { readJSON, writeJSON } from './files.mjs';
 import { systemModel } from './system-model.mjs';
 import { requiredString } from './values.mjs';
-import { contract, review, verification, reconcileFindings } from './goal/results.mjs';
+import { implementationResult, verification, reconcileFindings } from './goal/results.mjs';
 
-const instructions = Object.fromEntries(['define', 'review', 'implement', 'verify'].map(phase =>
+const instructions = Object.fromEntries(['implement', 'verify'].map(phase =>
   [phase, readFileSync(new URL(`./goal/${phase}.md`, import.meta.url), 'utf8').trim()]));
-const shared = readFileSync(new URL('./goal/shared.md', import.meta.url), 'utf8').trim();
 const now = () => new Date().toISOString();
-const stages = { define: 'definition', review: 'contract review', implement: 'implementation', verify: 'verification' };
+const stages = { implement: 'implementation', verify: 'verification' };
 
 export function humanRequest(goal, phase, result, attempt) {
-  const stage = stages[phase];
+  const retry = phase === 'implement'
+    ? 'Retry continues the implementation conversation with your guidance.'
+    : 'Retry starts a fresh verification session with your guidance.';
   return {
-    title: `Goal ${stage} needs help`,
-    prompt: `${result.question || result.exception}\n\n` +
-      `Retry starts a fresh ${stage} session on the current workspace with your guidance. ` +
-      'Stop ends this goal without marking it achieved.',
+    title: `Goal ${stages[phase]} needs help`,
+    prompt: `${result.question || result.exception}\n\n${retry} ` +
+      'The workspace is preserved. Stop ends this goal without marking it achieved.',
     summary: result.final,
     files: result.review_files ?? [],
     context: { 'Original goal': goal, 'Observed blocker': result.exception },
@@ -51,47 +51,98 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
   if (maxAttempts !== null && (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1)) throw new Error('maxAttempts must be a positive integer');
   const model = systemModel('simple', values.model, env);
   const definition = systemAgentDefinition(env.ASYS_ENVIRONMENT_DIR, 'simple');
-  const state = { version: 1, goal: original, agent: 'simple', model, maxAttempts,
-    status: 'running', attempt: 0, sessions: [], human: [], contracts: [], contract: null,
-    findings: [], contractChanges: null, startedAt: now() };
-  const save = () => writeJSON(join(job.directory, 'goal.json'), { ...state, updatedAt: now() });
+  const checkpoint = join(job.directory, 'goal.json');
+  const workspace = realpathSync(job.workspace);
+  const state = readJSON(checkpoint, null) ?? {
+    version: 3, goal: original, agent: 'simple', model, workspace, maxAttempts,
+    status: 'running', attempt: 1, nextPhase: 'implement', sessions: [], human: [], findings: [], startedAt: now(),
+  };
+  if (state.version !== 3) throw new Error('This goal checkpoint uses an older workflow; start a new goal to use explicit continuation and completion review');
+  if (state.goal !== original || state.model !== model || state.workspace !== workspace || state.maxAttempts !== maxAttempts) {
+    throw new Error('Goal checkpoint does not match the requested goal, model, workspace or attempt limit');
+  }
+  if (!Array.isArray(state.sessions) || !Array.isArray(state.human) || !Array.isArray(state.findings) ||
+      !Number.isSafeInteger(state.attempt) || state.attempt < 1 || !['implement', 'verify'].includes(state.nextPhase)) {
+    throw new Error('Invalid goal checkpoint');
+  }
+  signal.throwIfAborted();
+  // Re-executing this worker must not reopen a completed goal or override a
+  // human stop or exhausted limit. Interrupted/failed phases can be retried.
+  if (['completed', 'stopped', 'exhausted'].includes(state.status)) {
+    if (!state.result) throw new Error('Terminal goal checkpoint has no result');
+    return state.result;
+  }
+  const save = () => writeJSON(checkpoint, { ...state, updatedAt: now() });
   const finish = (status, final, exception = null) => {
+    signal.throwIfAborted();
     state.status = status;
-    state.final = final;
-    state.exception = exception;
     state.finishedAt = now();
+    state.result = { final, exception, verified: status === 'completed', attempts: state.attempt,
+      ...(state.verification?.attempt === state.attempt ? { criteria: state.verification.criteria } : {}),
+      findings: state.findings.filter(item => item.status === 'open') };
     save();
     event('goal.finished', { status, attempt: state.attempt, verified: status === 'completed' });
-    return { final, exception, verified: status === 'completed', attempts: state.attempt,
-      ...(state.verification?.attempt === state.attempt && state.verification.contractRevision === state.contract?.revision
-        ? { criteria: state.verification.criteria } : {}),
-      findings: state.findings.filter(item => item.status === 'open') };
+    return state.result;
   };
 
   function assignmentData(name) {
-    const context = { phase: name, goal: original, contract: state.contract,
-      unresolvedFindings: state.findings.filter(item => item.status === 'open'),
-      humanGuidance: state.human.map(({ phase, question, answer }) => ({ phase, question, answer })) };
-    if (name === 'define' || name === 'review') {
-      context.proposal = state.proposal ?? null;
-      context.contractChanges = state.contractChanges;
-      context.reviewHistory = state.contracts.filter(item => item.review).map(item =>
-        ({ revision: item.revision, decision: item.review.decision, feedback: item.review.final }));
-    }
-    if (name === 'implement') {
-      context.previousVerification = state.verification ?? null;
-      context.previousImplementation = state.implementation ?? null;
-      context.lessons = state.sessions.filter(item => item.phase === 'implement' && item.lessons).map(item => item.lessons);
-    }
+    const context = { phase: name, goal: original, attempt: state.attempt, maxAttempts,
+      humanGuidance: state.human.map(({ phase, question, answer }) => ({ phase, question, answer })),
+      unresolvedFindings: state.findings.filter(item => item.status === 'open') };
+    // Reviewers get requirements and prior observations, never the implementer's
+    // completion narrative. Only the implementer gets the review's feedback.
+    if (name === 'implement') context.verification = state.verification ?? null;
+    else context.previousCriteria = state.verification?.criteria ?? [];
     return context;
   }
 
+  async function requestHelp(session) {
+    const directory = join(job.directory, session.directory);
+    const request = humanRequest(original, session.phase, session.result, state.attempt);
+    writeJSON(join(directory, 'human.request.json'), request);
+    state.status = 'needs_human';
+    save();
+    let answer = readJSON(join(directory, 'human.result.json'), null);
+    if (!answer) {
+      // A disconnected Human request stays cancelled in the service. A new
+      // wait needs a new ID; a saved answer above is reused without asking.
+      session.humanRequestId = randomUUID();
+      save();
+      event('goal.human_requested', { phase: session.phase, attempt: state.attempt,
+        humanRequestId: session.humanRequestId, reason: session.result.exception });
+      answer = await askHuman({ job: { ...job, input: request }, argv: [], env, signal },
+        { id: session.humanRequestId, metadata: { goal_phase: session.phase, goal_attempt: state.attempt } });
+      signal.throwIfAborted();
+      if (!answer || !['retry', 'stop'].includes(answer.action) ||
+          (answer.guidance !== undefined && typeof answer.guidance !== 'string')) throw new Error('Invalid Human response');
+      writeJSON(join(directory, 'human.result.json'), answer);
+    }
+    if (!['retry', 'stop'].includes(answer.action) ||
+        (answer.guidance !== undefined && typeof answer.guidance !== 'string')) throw new Error('Invalid saved Human response');
+    if (!state.human.some(item => item.session === session.id)) {
+      state.human.push({ phase: session.phase, attempt: state.attempt, session: session.id, question: request.prompt, answer });
+    }
+    session.status = answer.action === 'retry' ? 'retrying' : 'stopped';
+    state.status = 'running';
+    save();
+    event('goal.human_answered', { phase: session.phase, attempt: state.attempt, action: answer.action });
+    return answer.action;
+  }
+
   async function phase(name, validate = result => result) {
-    let correction = null;
     for (;;) {
       signal.throwIfAborted();
-      const retry = state.sessions.filter(item => item.attempt === state.attempt && item.phase === name).length + 1;
-      const relative = `attempts/${state.attempt}/${name}-${retry}`;
+      const previous = state.sessions.filter(item => item.attempt === state.attempt && item.phase === name);
+      const last = previous.at(-1);
+      // Recover a result recorded before the controller advanced its phase.
+      // Completed implementation/tool side effects need not be repeated.
+      if (last?.status === 'completed' && name === 'implement') return validate(last.result);
+      if (last?.status === 'stopped') return null;
+      if (last?.status === 'needs_human' && await requestHelp(last) === 'stop') return null;
+      const invalid = previous.filter(item => item.status === 'invalid');
+      if (invalid.length > 1) throw new Error(invalid.at(-1).error);
+      const correction = last?.status === 'invalid' ? { problem: last.error, previousResult: last.result } : null;
+      const relative = `attempts/${state.attempt}/${name}-${previous.length + 1}`;
       const directory = join(job.directory, relative);
       makeDirectory(directory, { recursive: true, mode: 0o700 });
       const session = { id: randomUUID(), attempt: state.attempt, phase: name, directory: relative,
@@ -100,7 +151,7 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
       state.phase = name;
       state.status = 'running';
       const context = { ...assignmentData(name), ...(correction ? { correction } : {}) };
-      const assignment = { prompt: `${instructions[name]}\n\n${shared}\n\nAssignment data:\n${JSON.stringify(context, null, 2)}` };
+      const assignment = { prompt: `${instructions[name]}\n\nAssignment data:\n${JSON.stringify(context, null, 2)}` };
       writeJSON(join(directory, 'input.json'), assignment);
       const output = join(directory, 'stdout.log');
       prepareFile(output);
@@ -114,104 +165,68 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
       const result = await executeAgent({
         job: { ...job, id: session.id, directory, result: join(directory, 'result.json'), input: assignment },
         argv: ['--agent', 'simple', '--model', model], env, signal,
-      }, { definition, ...(provider ? { provider } : {}), event: emit });
+      }, { definition, ...(provider ? { provider } : {}), event: emit,
+        ...(name === 'implement' ? { sessionFile: join(job.directory, 'implementation/session.jsonl') } : {}) });
       signal.throwIfAborted();
       writeJSON(join(directory, 'result.json'), result);
       session.result = result;
-      session.status = result.exception ? 'needs_human' : 'completed';
       session.finishedAt = now();
+      requiredString(result.final, 'Final report');
+      if (result.exception !== null) requiredString(result.exception, 'Agent exception');
+      session.status = result.exception ? 'needs_human' : 'completed';
       try { session.lessons = readFileSync(join(directory, 'lessons.md'), 'utf8'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
-      let validated, invalid;
+      let validated;
       if (result.exception === null) {
-        try {
-          requiredString(result.final, 'Final report');
-          if (result.contract_changes != null && result.contract_changes !== '') {
-            requiredString(result.contract_changes, 'Proposed contract changes');
-          }
-          validated = validate(result);
-        }
-        catch (error) { invalid = error; session.status = 'invalid'; session.error = error.message; }
+        try { validated = validate(result); }
+        catch (error) { session.status = 'invalid'; session.error = error.message; }
       }
       save();
       event('goal.phase_finished', { phase: name, attempt: state.attempt, status: session.status, session: session.id });
       signal.throwIfAborted();
-      if (invalid) {
-        if (correction) throw invalid;
-        correction = { problem: invalid.message, previousResult: result };
-        continue;
-      }
+      if (session.status === 'invalid') continue;
       if (result.exception === null) return validated;
-      requiredString(result.exception, 'Agent exception');
-      const request = humanRequest(original, name, result, state.attempt);
-      writeJSON(join(directory, 'human.request.json'), request);
-      state.status = 'needs_human';
-      save();
-      event('goal.human_requested', { phase: name, attempt: state.attempt, reason: result.exception });
-      const answer = await askHuman({ job: { ...job, input: request }, argv: [], env, signal },
-        { id: session.id, metadata: { goal_phase: name, goal_attempt: state.attempt, goal_session: session.id } });
-      signal.throwIfAborted();
-      if (!answer || !['retry', 'stop'].includes(answer.action) ||
-          (answer.guidance !== undefined && typeof answer.guidance !== 'string')) throw new Error('Invalid Human response');
-      writeJSON(join(directory, 'human.result.json'), answer);
-      state.human.push({ phase: name, attempt: state.attempt, session: session.id, question: request.prompt, answer });
-      save();
-      event('goal.human_answered', { phase: name, attempt: state.attempt, action: answer.action });
-      if (answer.action === 'stop') return null;
-      correction = null;
+      if (await requestHelp(session) === 'stop') return null;
     }
   }
 
-  async function agreeContract() {
-    for (;;) {
-      const proposal = await phase('define', contract);
-      if (!proposal) return false;
-      const entry = { revision: state.contracts.length + 1, contract: proposal };
-      state.proposal = proposal;
-      state.contracts.push(entry);
-      save();
-      const result = await phase('review', review);
-      if (!result) return false;
-      entry.review = result;
-      if (result.decision === 'accept') {
-        state.contract = { ...proposal, revision: entry.revision };
-        state.contractChanges = null;
-        save();
-        return true;
-      }
-      save();
-    }
-  }
-
+  state.status = 'running';
+  delete state.result;
+  delete state.finishedAt;
   save();
   try {
-    if (!await agreeContract()) return finish('stopped', 'The human stopped the goal while defining success.', 'Stopped by human');
-    for (let attempt = 1; maxAttempts === null || attempt <= maxAttempts; attempt++) {
-      if (state.contractChanges && !await agreeContract()) {
-        return finish('stopped', 'The human stopped the goal while revising success criteria.', 'Stopped by human');
+    for (;;) {
+      let final;
+      if (state.nextPhase === 'implement') {
+        const implementation = await phase('implement', implementationResult);
+        if (!implementation) return finish('stopped', 'The human stopped the goal during implementation.', 'Stopped by human');
+        state.implementation = implementation;
+        final = implementation.final;
+        // A normal turn boundary is not a claim that the whole goal is done.
+        // Persist an explicit handoff before starting an independent reviewer.
+        if (implementation.goal_status === 'review') {
+          state.nextPhase = 'verify';
+          save();
+        }
       }
-      state.attempt = attempt;
-      const implementation = await phase('implement');
-      if (!implementation) return finish('stopped', 'The human stopped the goal during implementation.', 'Stopped by human');
-      state.implementation = implementation;
-      if (implementation.contract_changes) {
-        state.contractChanges = implementation.contract_changes;
-        save();
-        continue;
+      if (state.nextPhase === 'verify') {
+        const result = await phase('verify', result => verification(result, state.findings));
+        if (!result) return finish('stopped', 'The human stopped the goal during verification.', 'Stopped by human');
+        state.verification = { ...result, attempt: state.attempt };
+        reconcileFindings(state.findings, result, state.attempt);
+        if (result.verified) return finish('completed', result.final);
+        final = result.final;
       }
-      const result = await phase('verify', result => verification(result, state.contract, state.findings));
-      if (!result) return finish('stopped', 'The human stopped the goal during verification.', 'Stopped by human');
-      state.verification = { ...result, attempt, contractRevision: state.contract.revision };
-      reconcileFindings(state.findings, result, attempt);
-      state.contractChanges = result.contract_changes || (result.coverage !== 'complete' ? result.final : null);
+      if (maxAttempts !== null && state.attempt >= maxAttempts) {
+        return finish('exhausted', final, `Goal remains unmet after ${maxAttempts} attempts`);
+      }
+      state.attempt++;
+      state.nextPhase = 'implement';
       save();
-      if (result.verified) return finish('completed', result.final);
     }
-    return finish('exhausted', state.implementation?.contract_changes || state.verification?.final || state.implementation.final,
-      `Goal remains unmet after ${maxAttempts} attempts`);
   } catch (error) {
     const current = state.sessions.at(-1);
-    if (current && ['running', 'needs_human'].includes(current.status)) {
+    if (current?.status === 'running') {
       current.status = signal.aborted ? 'cancelled' : 'failed';
       current.error = error.message;
       current.finishedAt = now();

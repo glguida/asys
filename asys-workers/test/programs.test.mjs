@@ -361,13 +361,13 @@ test('human jobs call their dcomp input and publish the answer into their own re
   assert.equal(JSON.parse(await readFile(join(f.queue.executionDirectory('approval'), 'result.json'), 'utf8')), false);
 });
 
-for (const phase of ['define', 'review', 'implement', 'verify']) {
+for (const phase of ['implement', 'verify']) {
   for (const action of ['retry', 'stop', 'cancel']) {
     test(`one runtime goal job handles ${phase} help and human ${action}`, async t => {
       const f = await fixture(t);
       const models = join(f.root, 'models.json');
       await writeFile(models, JSON.stringify({ simple: model.id }));
-      const counts = { define: 0, review: 0, implement: 0, verify: 0 };
+      const counts = { implement: 0, verify: 0 };
       const service = new HumanService(join(f.root, 'human-service'));
       t.after(() => service.close());
       const provider = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
@@ -375,19 +375,23 @@ for (const phase of ['define', 'review', 'implement', 'verify']) {
         async *infer(request) {
           assert.equal(request.model, model.id);
           const { context } = JSON.parse(request.payload);
-          assert.equal(context.messages.length, 1, 'every phase and human retry is a fresh session');
-          const { phase: current } = JSON.parse(context.messages[0].content[0].text.split('Assignment data:\n')[1]);
+          const data = JSON.parse(context.messages.at(-1).content[0].text.split('Assignment data:\n')[1]);
+          const { phase: current } = data;
+          assert.ok(Object.hasOwn(counts, current), 'goals start with implementation and use no contract phases');
+          if (current === 'verify' || counts[current] === 0) {
+            assert.equal(context.messages.length, 1, 'verification remains fresh, including human retries');
+          } else {
+            assert.equal(context.messages.length, 3, 'the implementation human retry retains its earlier conversation');
+            assert.match(JSON.stringify(context.messages[1].content), /Input missing/);
+          }
+          if (counts[current] > 0) assert.equal(data.humanGuidance[0].answer.guidance, 'The input is now available.');
           const help = ++counts[current] === 1 && current === phase;
           const result = help
             ? { final: 'Checked the workspace. The required input is unavailable.', exception: 'Input missing', question: 'Please supply the input.' }
             : {
-              define: { final: 'Defined the required artifact.', exception: null, contract: { criteria: [
-                { id: 'C1', requirement: 'Produce an artifact', basis: 'User request', verification: 'Inspect artifact.txt' },
-              ] } },
-              review: { final: 'Criteria cover the request.', exception: null, decision: 'accept' },
-              implement: { final: 'Implementation finished.', exception: null },
+              implement: { final: 'Implementation finished.', exception: null, goal_status: 'review' },
               verify: { final: 'Inspected the required artifact.', exception: null, coverage: 'complete',
-                criteria: [{ id: 'C1', status: 'satisfied',
+                criteria: [{ id: 'C1', requirement: 'Produce an artifact', basis: 'Original user request', status: 'satisfied',
                   evidence: [{ source: 'artifact.txt', observation: 'Inspected its complete contents.' }] }] },
             }[current];
           yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
@@ -413,12 +417,110 @@ for (const phase of ['define', 'review', 'implement', 'verify']) {
       if (action === 'retry') {
         assert.equal(outcome.result.verified, true);
         assert.equal(counts[phase], 2);
+        const directory = f.queue.executionDirectory('design');
+        const goalState = JSON.parse(await readFile(join(directory, 'goal.json'), 'utf8'));
+        const retried = goalState.sessions.filter(session => session.phase === phase);
+        assert.equal(retried.length, 2);
+        const transcripts = await Promise.all(retried.map(session =>
+          readFile(join(directory, session.directory, 'agent.json'), 'utf8').then(JSON.parse)));
+        if (phase === 'implement') {
+          assert.equal(transcripts[0].agent.session.header.id, transcripts[1].agent.session.header.id);
+          assert.ok(transcripts[1].agent.sessionStartEntryCount > 0);
+        } else assert.notEqual(transcripts[0].agent.session.header.id, transcripts[1].agent.session.header.id);
       } else if (action === 'stop') {
         assert.equal(outcome.result.verified, false);
         assert.equal(outcome.error, 'Stopped by human');
       } else await until(() => service.getTask({ id: task.id }).task.status === 'cancelled');
     });
   }
+}
+
+test('a runtime goal continues ordinary implementation turns and reviews only the explicit final claim', async t => {
+  const f = await fixture(t);
+  const models = join(f.root, 'models.json');
+  await writeFile(models, JSON.stringify({ simple: model.id }));
+  let implementations = 0, reviews = 0;
+  const phases = [];
+  const provider = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
+    listModels() { return { models: [model] }; },
+    async *infer(request) {
+      const { context } = JSON.parse(request.payload);
+      const data = JSON.parse(context.messages.at(-1).content[0].text.split('Assignment data:\n')[1]);
+      phases.push(data.phase);
+      let result;
+      if (data.phase === 'implement') {
+        implementations++;
+        assert.equal(reviews, 0, 'progress reports must not schedule a reviewer');
+        assert.equal(context.messages.length, implementations * 2 - 1);
+        if (implementations > 1) assert.match(JSON.stringify(context.messages), /FIRST_PROGRESS_MARKER/);
+        result = { final: implementations === 1 ? 'FIRST_PROGRESS_MARKER' : 'Further work performed.', exception: null,
+          goal_status: implementations === 3 ? 'review' : 'continue' };
+      } else {
+        assert.equal(data.phase, 'verify');
+        reviews++;
+        assert.equal(context.messages.length, 1);
+        assert.doesNotMatch(JSON.stringify(context.messages), /FIRST_PROGRESS_MARKER/);
+        result = { final: 'Observed the complete artifact.', exception: null, coverage: 'complete',
+          criteria: [{ id: 'C1', requirement: 'Produce an artifact', basis: 'Original user request', status: 'satisfied',
+            evidence: [{ source: 'artifact.txt', observation: 'All required contents are present.' }] }] };
+      }
+      yield { payload: JSON.stringify({ type: 'done', reason: 'stop',
+        message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
+    },
+  }); } }));
+  f.start({ ASYS_SYSTEM_MODELS: models,
+    DCOMP_IN_INFERENCE: await listen(t, provider, join(f.root, 'provider.sock')) });
+  await f.queue.submit('goal', 'continuing', { input: { goal: 'Produce an artifact', maxAttempts: 3 } });
+  const outcome = await f.queue.wait('continuing', { timeoutMs: 10000 });
+  assert.equal(outcome.status, 'done', outcome.error);
+  assert.equal(outcome.result.verified, true);
+  assert.equal(outcome.result.attempts, 3);
+  assert.deepEqual(phases, ['implement', 'implement', 'implement', 'verify']);
+  assert.equal(reviews, 1);
+});
+
+for (const corrected of [true, false]) {
+  test(`a runtime goal ${corrected ? 'repairs' : 'rejects'} an invalid verification report without human escalation`, async t => {
+    const f = await fixture(t);
+    const models = join(f.root, 'models.json');
+    await writeFile(models, JSON.stringify({ simple: model.id }));
+    let implementations = 0, verifications = 0;
+    const provider = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
+      listModels() { return { models: [model] }; },
+      async *infer(request) {
+        const { context } = JSON.parse(request.payload);
+        assert.equal(context.messages.length, 1, 'each verification correction is independent');
+        const data = JSON.parse(context.messages[0].content[0].text.split('Assignment data:\n')[1]);
+        let result;
+        if (data.phase === 'implement') {
+          implementations++;
+          result = { final: 'Implementation ready for inspection.', exception: null, goal_status: 'review' };
+        } else {
+          assert.equal(data.phase, 'verify');
+          verifications++;
+          if (verifications === 2) {
+            assert.match(data.correction.problem, /basis/);
+            assert.equal(data.correction.previousResult.criteria[0].basis, undefined);
+          }
+          result = { final: 'Inspected artifact.txt.', exception: null, coverage: 'complete',
+            criteria: [{ id: 'C1', requirement: 'Produce an artifact', status: 'satisfied',
+              ...(corrected && verifications === 2 ? { basis: 'Original user request' } : {}),
+              evidence: [{ source: 'artifact.txt', observation: 'The required artifact exists.' }] }] };
+        }
+        yield { payload: JSON.stringify({ type: 'done', reason: 'stop',
+          message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
+      },
+    }); } }));
+    f.start({ ASYS_SYSTEM_MODELS: models,
+      DCOMP_IN_INFERENCE: await listen(t, provider, join(f.root, 'provider.sock')) });
+    await f.queue.submit('goal', 'invalid-review', { input: { goal: 'Produce an artifact', maxAttempts: 1 } });
+    const outcome = await f.queue.wait('invalid-review', { timeoutMs: 10000 });
+    assert.equal(outcome.status, corrected ? 'done' : 'failed', outcome.error);
+    assert.equal(outcome.result.verified, corrected);
+    assert.equal(implementations, 1);
+    assert.equal(verifications, 2, 'phase protocol gets exactly one corrective session');
+    if (!corrected) assert.match(outcome.error, /basis/);
+  });
 }
 
 test('program jobs execute a supplied command, preserve input, and propagate failures', async t => {

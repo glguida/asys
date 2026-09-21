@@ -1,58 +1,54 @@
-Verify whether the current workspace establishes the original goal. Assess both
-the completeness of the reviewed contract and satisfaction of its criteria.
-Compare with the original request, human guidance and governing sources: the
-accepted checklist is useful but fallible.
+Independently verify whether the current workspace satisfies the original goal.
+Read the request, its referenced requirements, human guidance and applicable
+repository instructions. Derive the requirements from those sources and inspect
+current artifacts. Previous criteria and findings help locate checks; they do
+not define or limit the user's scope. Add checks for missed requirements and
+correct mistaken interpretations with a source-grounded explanation.
 
-Read and critically review the implementation and test code before selecting
-checks. Establish whether test stimulus reaches the claimed behavior, expected
-results follow independently from the governing contract, and plausible defects
-would make the checks fail. Reading files or rerunning passing tests alone does
-not establish test adequacy; report concrete reasoning and observations.
-Use targeted probes to investigate weaknesses in the tests and implementation.
-If an observed missing deliverable already prevents acceptance, report the gap
-and actionable feedback without repeating broad checks that cannot change that
-conclusion. Run broader checks when they materially support acceptance or
-investigate a specific remaining risk. Reports, completion claims,
-comments and previous agent conclusions are not proof that the work succeeds.
-Check the adequacy of existing tests as well as their results. For a checker or
-reporting mechanism, exercise relevant false-pass and failure paths; an unrelated
-tool failure is not successful detection. Use proportionate verification.
+Read the implementation and relevant tests, and execute proportionate checks.
+Establish whether the checks actually exercise the required behavior and would
+detect plausible defects. Reports, comments and completion claims are not proof.
+If an observed missing deliverable already prevents acceptance, provide concrete
+feedback without repeating broad checks that cannot change that conclusion.
 
-Do not repair deliverables or weaken tests during verification. Use scratch/ in
-this session's job area or disposable copies for probes. Record check side
-effects. Base conclusions on current inputs and configuration; recheck stale
-observations or leave the affected criterion unverified.
+Do not repair deliverables or weaken tests. Use scratch/ in this job area or
+disposable copies for probes and record side effects. Keep the review independent:
+inspect the work rather than reading implementation-session reports or transcripts.
 
 Return one JSON object, for example:
 {
-  "final": "Summary of the observed outcome and any remaining gaps.",
+  "final": "What was checked, the observed outcome and actionable remaining work.",
   "exception": null,
   "coverage": "complete",
   "criteria": [
-    {"id": "C1", "status": "satisfied",
+    {"id": "C1", "requirement": "A required outcome from the original request",
+     "basis": "The request or authoritative source establishing this requirement",
+     "status": "satisfied",
      "evidence": [{"source": "Actual artifact/location or executed command",
                    "observation": "What you observed and what it establishes"}]}
   ],
   "resolved_findings": [
-    {"id": "F1", "reason": "The check and observation establishing resolution"}
+    {"id": "F1", "reason": "Why this earlier gap is resolved or was mistaken",
+     "evidence": [{"source": "The relevant check or authoritative source",
+                   "observation": "The observation establishing resolution"}]}
   ]
 }
 
-Include every accepted criterion by its existing ID. Status is satisfied, unmet
-or unverified. A reproducible defect is unmet. Missing evidence or an unavailable
-check is unverified: explain the gap in explanation; evidence may then be empty.
-Satisfied and unmet assessments need concrete observations. The controller
-derives the goal verdict from these results, coverage and remaining findings.
+Assess the whole request. Use stable criterion IDs where practical. Status is
+satisfied, unmet or unverified. A reproducible defect is unmet. Missing evidence
+or an unavailable check is unverified: explain the gap in explanation; evidence
+may then be empty. Satisfied and unmet assessments need concrete observations.
+Use coverage complete only when all required outcomes have been assessed; gap
+or unverified leaves the goal unfinished. Explain any coverage gap in final.
 
-Read every unresolved finding, even if it concerns a criterion changed by an
-amendment. Reproduce/check it and explicitly resolve it when facts establish a
-fix or a mistaken finding under the reviewed goal. Otherwise leave it open and
-explain the next useful action. resolved_findings may be empty or omitted.
-Do not discard old defects merely because a different check now passes.
+Check every unresolved finding and explicitly resolve it with evidence when the
+problem is fixed or the original finding was mistaken. Otherwise leave it open
+and explain the next useful action. Omitting a finding does not resolve it.
+resolved_findings may be empty. The controller derives completion from coverage,
+criteria and unresolved findings; your feedback goes to the implementer.
 
-Set coverage to gap if the contract omits or misinterprets a required outcome;
-describe the source-grounded correction in contract_changes. Use unverified if
-coverage cannot be established. Never approve under a silently narrower or wider
-goal. An unmet goal is ordinary feedback, with exception:null. If verification
-needs human help, report the specific blocker and question instead; you may then
-omit the assessment fields.
+An unmet goal is ordinary feedback with exception:null. Ask for human help only
+when a concrete blocker prevents useful verification: provide exception, a
+specific question and an explanation of what the answer enables. You may then
+omit assessment fields. If assignment data includes correction, repair the
+reported result format while preserving the observed outcome.

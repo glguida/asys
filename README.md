@@ -158,7 +158,7 @@ The [simple agent's prompt](python/asys/system_agents/simple/prompt.md) and
 worker setup belong to the shared asys system-agent package. Other launchers
 can use that agent independently of one-shot.
 
-To implement a goal and verify it in a fresh session, use the
+To work toward a goal with independent verification, use the
 [goal launcher](asys-goal/README.md):
 
 ```sh
@@ -166,12 +166,14 @@ asys-goal ./env/development "Implement the requested behavior and its tests" \
   --workspace ./project
 ```
 
-It defines and reviews success criteria, then repeats implementation and
-verification until the goal is verified, preserving findings between attempts.
-There is no default attempt limit. Any phase can ask for human help through
-`asys-human-prompt`. The loop lives in the workers program, so BPMN can use it
-as an ordinary `goal` job too. It uses the configured `simple` model;
-`--model MODEL` overrides it for a run.
+It keeps one implementation conversation across automatic work turns. The
+implementer explicitly requests review; each verifier starts fresh and returns
+findings until the whole original request is verified. There is no mandatory
+contract-definition stage or default attempt limit. An optional limit counts
+implementation turns, including those that continue without review. Either role
+can ask for human help through `asys-human-prompt`. The loop lives in the workers
+program, so BPMN can use it as an ordinary `goal` job too.
+It uses the configured `simple` model; `--model MODEL` overrides it for a run.
 
 A workflow takes the same kind of environment and a Markdown request file:
 

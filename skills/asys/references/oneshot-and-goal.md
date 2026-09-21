@@ -33,40 +33,62 @@ asys-goal ./env/development \
   --workspace ./project
 ```
 
-Use a concrete goal with observable criteria and the location of its inputs.
-Avoid making the verifier infer success from prose like “the task is done.”
-The goal worker uses four roles:
+Use a concrete goal with observable outcomes and the location of its inputs.
+The original request and its governing sources determine scope. There is no
+mandatory preliminary planner, generated contract, or separate commit stage.
 
-1. Definition reads the goal and governing sources, then proposes a concise
-   contract of required outcomes, their source basis and how to verify them.
-2. An independent review checks coverage, scope and the proposed checks. Material
-   problems return to definition; acceptance permits implementation.
-3. Implementation works against that contract with previous findings, progress
-   and lessons available.
-4. Verification checks current artifacts and behavior against every criterion,
-   reconciles earlier findings and checks that the contract covers the whole goal.
+The goal worker uses two roles with the same selected model and built-in
+`simple` definition:
 
-Unmet work starts another implementation attempt. A material contract correction
-returns to definition and review. All phases use fresh sessions with the same
-chosen model and the shared `simple` definition, and can ask a human for help.
-Verification receives the original goal, contract, human guidance and unresolved
-findings, without the implementer's completion narrative. Earlier defects remain
-open until a verifier explains their resolution; omissions do not erase them.
+1. Implementation inspects, plans, edits and checks the work in one continuing
+   conversation. It retains its observations and receives verifier findings
+   and human guidance in later turns. Pi compacts context normally when needed.
+   A successful report requires `goal_status: "continue"` to start another
+   implementation turn automatically, or `goal_status: "review"` to request
+   independent verification.
+2. A fresh verifier starts only after an explicit `review` report. It checks
+   the current workspace independently against the original request. It receives
+   governing references, previous criteria for continuity, open findings and
+   human guidance, without the implementer's
+   completion narrative. It can identify missing requirements; earlier criteria
+   do not replace or narrow the original goal.
 
-Verification is instructed to inspect facts, including actual file contents,
-commands and outputs. Documentation may establish requirements. Comments, commit
-messages and agent reports can identify things to check, but claims do not
-establish that the goal is met. The verifier is instructed not to repair the work. Its normal
-workspace access is still available for checks; this is not an OS-enforced
-read-only role.
+Unmet work and the verification result return to the continuing implementer.
+It can take further work turns before requesting another fresh review.
+Implementation can return useful partial progress with `continue`; this does
+not launch a verifier or complete the goal. Only independent verification
+can establish that the whole requested outcome is complete. Findings stay open
+until a verifier explicitly explains their resolution.
+
+Verification inspects actual artifacts and behavior. Documentation may establish
+requirements. Comments, commit messages and agent reports can identify things to
+check, but completion claims do not prove success. The verifier is instructed
+not to repair the work; its normal workspace access remains available for
+checks. Separation of assignments is not an OS-enforced restriction on which
+workspace files it can read.
 
 There is **no default attempt limit**. Set `--max-attempts N` only when an
-explicit limit is wanted. A cycle is implementation plus verification; retries
-of a blocked phase after human help stay in that cycle. Initial definition and
-review do not consume attempts; an implementation requesting an amendment does.
-Missing or invalid phase fields get one corrective session before failing the job.
-Execution failures can still fail the job: unlimited attempts do not silently
-retry every transport/parser failure forever.
+explicit limit is wanted. Each successfully reported implementation turn counts
+as an attempt, including a `continue` turn. Human retries and protocol
+corrections stay in the same attempt. A `review` on the last permitted turn still
+launches verification and can succeed; a final `continue` exhausts the limit.
+
+Malformed completion JSON gets one correction in the same session. A missing
+or invalid `goal_status` gets one correction in the same implementation
+conversation. Invalid verification fields get one fresh verification session to
+correct the report within the current attempt. Execution failures and
+uncorrected reports can fail the job: unlimited attempts do not silently retry
+every transport or parser failure forever.
+
+The implementation status uses the existing final-response protocol; no new
+goal-management tool is required. For example:
+
+```json
+{"final":"Completed the first component; integration remains.","exception":null,"goal_status":"continue"}
+```
+
+Change the status to `review` when requesting independent whole-goal
+verification. A status claim alone can never set `verified: true`.
 
 ## Use the goal worker from BPMN
 
@@ -100,11 +122,12 @@ launchers snapshot system-model defaults for workers at
 
 The goal worker explicitly loads the packaged `simple` agent, plus shared
 environment resources. An environment's `agents/simple/` does not replace it
-or give it retained memory.
+or give it retained memory. The implementation conversation belongs to the
+current goal job; later goals do not inherit it.
 
 ## Human escalation
 
-Any phase can finish with a non-null `exception`, explaining why it cannot
+Either role can finish with a non-null `exception`, explaining why it cannot
 continue. Include a concrete `question` and workspace `review_files` when
 useful. The worker composes a Human request and waits for retry guidance or stop.
 
@@ -116,57 +139,43 @@ Use the same asys/dcomp state as the run. Goal launchers wire the shared Human
 input automatically; `-L human=COMPONENT.OUTPUT` selects another service.
 BPMN can also use `--human` for a terminal attached to that run.
 
-Retry launches the same phase in a fresh session with the human question and
-answer preserved. Stop ends the goal unsuccessfully. A human answer cannot
-directly mark the goal verified. Malformed completion JSON gets one format
-correction in the same agent session; invalid phase fields get one fresh session
-to correct the report. Uncorrected reports and service/transport failures fail
-the job instead of opening a Human request. Cancellation interrupts an active
-session or withdraws a waiting Human request.
+Retry preserves the human question and answer. Implementation continues in its
+existing conversation; verification starts a fresh session. Stop ends the goal
+unsuccessfully. A human answer cannot directly mark the goal verified.
+Uncorrected reports and service/transport failures fail the job instead of
+opening a Human request. Cancellation interrupts an active session or withdraws
+a waiting Human request.
 
 ## Results, evidence, and retained state
 
-Successful result shape:
+A successful result contains `verified: true`, `exception: null`, a factual
+`final` report, the attempt count, criterion evidence and no open findings.
+Verification uses a coverage judgment of `complete`, `gap` or `unverified` and
+a nonempty list of criteria. Each criterion identifies its requirement and
+source basis, with a status of `satisfied`, `unmet` or `unverified` and recorded
+evidence. An unverified criterion must explain what remains unverified.
 
-```json
-{
-  "final": "The required behavior was observed in the built program and checks.",
-  "exception": null,
-  "verified": true,
-  "attempts": 2,
-  "criteria": [
-    {
-      "id": "C1",
-      "requirement": "Reject an empty identifier",
-      "status": "satisfied",
-      "satisfied": true,
-      "evidence": [
-        {"source": "python3 -m unittest tests.test_identifier", "observation": "The empty-identifier test passed against the modified parser."}
-      ]
-    }
-  ],
-  "findings": []
-}
-```
+The controller permits completion only when coverage is complete, all criteria
+are satisfied with evidence and all earlier findings have been resolved.
+Resolutions refer to finding IDs, explain why they are resolved and include
+observed evidence with a source and observation. Omitting a finding from a
+later report does not close it. Previous criteria help maintain
+continuity; they are not a separate accepted contract. The verifier must still
+check that the criteria cover the original request and governing sources.
 
-This is illustrative, not evidence that this command was run in your project.
-The worker checks that verification covers the accepted criterion IDs, coverage
-is complete, each criterion is satisfied with evidence, and all earlier findings
-are resolved. A criterion can instead be unmet or unverified; missing evidence
-leaves the goal open. The public satisfied boolean is derived from status.
-The agents judge scope, appropriate checks and evidence; the controller tracks
-the accepted criteria and unfinished work.
-
-An explicit attempt limit reached with unmet criteria, human stop, or execution
+An explicit attempt limit reached with unfinished work, human stop, or execution
 failure returns an unsuccessful job. BPMN can use ordinary boundary errors.
 Inspect the saved result rather than expecting successful JSON on stdout after
-a host failure.
+a host failure. Agents judge scope, appropriate checks and evidence; structural
+result checks alone do not prove an implementation correct.
 
-`JOB/goal.json` preserves the original goal, selected model, accepted contract,
-proposal/review history, findings, attempts, session results, lessons and human
-replies. Per-phase files live under `attempts/ATTEMPT/PHASE-SESSION/`:
-input, result, transcript, stdout, report, proposed lessons and scratch. Human
-request/answer files stay beside the session that needed them.
+`JOB/goal.json` version 3 preserves the original goal, selected model, current
+phase, findings, attempts, session results and human replies. The implementer's
+Pi conversation persists in `JOB/implementation/session.jsonl`. Per-turn files
+remain under `attempts/ATTEMPT/implement-SESSION/` and
+`attempts/ATTEMPT/verify-SESSION/`: input, result, transcript, report, proposed
+lessons and scratch. Human request/answer files stay beside the turn that
+needed them.
 
 ```sh
 asys status latest --json
@@ -174,7 +183,15 @@ asys logs latest goal
 asys top
 ```
 
-Lessons remain available in run state for later review; the system agent does
-not rewrite its own definition. Another invocation starts a new goal job, not
-an automatic continuation of the old transcript. BPMN resume likewise restarts
-a failed goal task as a new job while retaining workspace files and old records.
+Re-executing the goal worker for the **same job and saved job directory**
+restores its implementation conversation and controller progress. Interrupted
+verification restarts fresh. Runtime does not automatically rerun terminal jobs,
+and the host launcher does not expose a goal resume command. A new goal
+invocation starts a new job and conversation. BPMN resume likewise submits a
+new job for a failed goal task, retaining workspace files and old run records.
+Do not describe either operation as restoration of the old conversation.
+
+Lessons remain in run state for later review; ordinary execution does not
+rewrite the system agent's definition. Version 1 and 2 goal state cannot be
+resumed by this controller; keep those records for inspection and start a new
+job. The observer continues to display all three versions.

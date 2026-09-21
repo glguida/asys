@@ -194,16 +194,30 @@ these events with the saved transcript without changing execution state.
 
 The [goal worker](../asys-goal/README.md) is another ordinary program:
 `/opt/asys/asys-workers/tools/asys-goal`. It runs the built-in `simple` agent
-in fresh sessions to define and review success criteria, then implement and
-verify until the goal is met. Criteria and unresolved findings persist between
-attempts. There is no default attempt limit, and every phase can ask for help
-through the Human input. Its job
-input contains `goal` and optional `maxAttempts`; its model defaults to the
-`simple` system-model setting supplied by the launcher, with an optional
-`--model MODEL` command override. BPMN can bind a task to a `goal` job type
-without implementing the loop itself. The default environment declares this
-job type alongside agent, program, and human jobs.
+against the original request, retaining one implementation conversation across
+automatic work turns. Successful implementation reports require `goal_status`:
+`continue` starts another work turn; `review` launches a fresh independent
+verifier. There is no preliminary generated contract or mandatory planning or
+commit stage. Verification sees the request,
+governing sources, current workspace, open findings and human guidance, without
+the implementer's completion narrative. Its findings return to the continuing
+implementer; partial implementation progress is allowed, but only verification
+can complete the whole goal.
 
+The implementation conversation and controller state persist in the job
+storage, so re-executing that same job can restore progress. Pi provides normal
+compaction. Human retries retain the implementer's conversation and start fresh
+verifiers. A new job or standalone one-shot still starts fresh.
+
+There is no default attempt limit. An optional limit counts successfully
+reported implementation turns, including `continue` turns. Human retries and
+protocol corrections remain within the same attempt; a review requested on the
+last permitted turn still runs. Either role can ask for help through the Human
+input. Its job input contains `goal` and optional `maxAttempts`; its model
+defaults to the `simple` system-model setting supplied by the launcher, with an
+optional `--model MODEL` command override. BPMN can bind a task to a `goal` job
+type without implementing the loop itself. The default environment declares
+this job type alongside agent, program, and human jobs.
 
 `asys-program` executes the assignment's complete argument vector directly.
 Use an explicit shell when shell syntax is needed. Ordinary programs use

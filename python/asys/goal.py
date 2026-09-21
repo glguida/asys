@@ -12,7 +12,7 @@ def arguments(argv):
     parser = job_parser('asys-goal', 'goal',
         'Implement and independently verify a goal with the simple system agent.')
     parser.add_argument('--max-attempts', type=int, metavar='N',
-                        help='optional cap on implementation/verification cycles (default: unlimited)')
+                        help='optional cap on implementation turns, including continuations (default: unlimited)')
     args = validate_assignment(parser, parser.parse_intermixed_args(argv), 'goal')
     if args.max_attempts is not None and args.max_attempts < 1:
         parser.error('max-attempts must be a positive integer')

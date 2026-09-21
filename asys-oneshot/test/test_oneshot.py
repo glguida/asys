@@ -26,7 +26,7 @@ if '--agent' in sys.argv:
     assert sys.argv[sys.argv.index('--agent') + 1] == 'simple'
     assert sys.argv[sys.argv.index('--model') + 1] == 'fixture/model'
     agent = pathlib.Path(os.environ['ASYS_WORKERS_DIR']) / 'agents/simple'
-    assert 'You are the simple system agent supplied by asys.' in (agent / 'prompt.md').read_text()
+    assert (agent / 'prompt.md').read_text() == ''
     assert not (agent / 'memory.md').exists()
 assert (pathlib.Path(os.environ['ASYS_ENVIRONMENT_DIR']) / 'shared.txt').read_text() == 'environment resource'
 request = json.load(sys.stdin)

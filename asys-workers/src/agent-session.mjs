@@ -1,6 +1,6 @@
 import { makeDirectory, prepareFile } from '../../asys-runtime/javascript/permissions.mjs';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { clone, requiredString } from './values.mjs';
 import { agentResult } from './agent-definition.mjs';
@@ -8,8 +8,8 @@ import { workerPrompt } from './system-prompt.mjs';
 import { agentModel } from './agent-model.mjs';
 
 // Pi owns the agent loop, local tools, context management, and session format.
-// Each job starts a new session; snapshots are its transcript.
-export async function runAgent({ config, job, signal, provider, workspace: cwd, jobDirectory, definition, extensionPaths = [], save, event, customTools = [] }) {
+// Ordinary jobs are fresh. A goal may explicitly retain its implementer's session.
+export async function runAgent({ config, job, signal, provider, workspace: cwd, jobDirectory, definition, sessionFile, extensionPaths = [], save, event, customTools = [] }) {
   signal.throwIfAborted();
   const agentDir = join(jobDirectory, '.pi');
   makeDirectory(agentDir, { recursive: true, mode: 0o700 });
@@ -21,7 +21,12 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
     steps: 0,
   };
   const state = job.agent;
-  const sessionManager = SessionManager.inMemory(cwd);
+  const sessionManager = openSession(cwd, sessionFile);
+  if (sessionFile !== undefined) {
+    state.sessionFile = sessionManager.getSessionFile();
+    state.sessionStartEntryCount = sessionManager.getEntries().length;
+    state.sessionStartLeafId = sessionManager.getLeafId();
+  }
   snapshot();
   const { modelRuntime, model } = await agentModel({ config, agentDir, provider, signal, event,
     beforeRequest(context) {
@@ -45,7 +50,11 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
   if (extensionErrors.length) throw new Error(`Pi extension loading failed: ${extensionErrors.map(e => `${e.path}: ${e.error}`).join('; ')}`);
   const { session } = await createAgentSession({ cwd, agentDir, modelRuntime, model,
     resourceLoader, sessionManager, settingsManager, customTools });
-  const onAbort = () => { void session.abort(); };
+  const onAbort = () => {
+    session.abortCompaction();
+    session.abortBranchSummary();
+    void session.abort();
+  };
   signal.addEventListener('abort', onAbort, { once: true });
   let compactionError;
   const unsubscribe = session.subscribe(e => {
@@ -81,8 +90,8 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
     }
     if (['message_end', 'tool_execution_end'].includes(e.type)) queueMicrotask(snapshot);
   });
-  function snapshot() {
-    if (signal.aborted) return;
+  function snapshot(force = false) {
+    if (signal.aborted && !force) return;
     state.session = clone({ header: sessionManager.getHeader(), entries: sessionManager.getEntries(), leafId: sessionManager.getLeafId() });
     save();
   }
@@ -110,9 +119,42 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
   } finally {
     signal.removeEventListener('abort', onAbort);
     unsubscribe();
-    session.dispose();
+    try { snapshot(true); }
+    finally { session.dispose(); }
   }
   function isFinalAnswer(message) {
     return message?.role === 'assistant' && message.stopReason === 'stop' && !message.content.some(c => c.type === 'toolCall');
   }
+}
+
+function openSession(cwd, sessionFile) {
+  if (sessionFile === undefined) return SessionManager.inMemory(cwd);
+  if (typeof sessionFile !== 'string' || !isAbsolute(sessionFile)) throw new Error('sessionFile must be an absolute path');
+  makeDirectory(dirname(sessionFile), { recursive: true, mode: 0o700 });
+  prepareFile(sessionFile);
+  const content = readFileSync(sessionFile, 'utf8');
+  if (content) {
+    // Pi tolerates malformed JSONL by dropping records. Continuation must fail
+    // visibly instead of silently losing completed work or changing its context.
+    if (!content.endsWith('\n')) throw new Error(`Incomplete session record in ${sessionFile}`);
+    let entries;
+    try { entries = content.split('\n').filter(line => line.trim()).map(line => JSON.parse(line)); }
+    catch { throw new Error(`Invalid session record in ${sessionFile}`); }
+    const header = entries[0];
+    if (header?.type !== 'session' || typeof header.id !== 'string' || typeof header.cwd !== 'string') {
+      throw new Error(`Invalid session header in ${sessionFile}`);
+    }
+    if (realpathSync(header.cwd) !== realpathSync(cwd)) throw new Error(`Session workspace does not match ${cwd}`);
+    const ids = new Set();
+    for (const entry of entries.slice(1)) {
+      if (!entry || typeof entry.id !== 'string' || ids.has(entry.id) || entry.type === 'session' ||
+          (entry.parentId !== null && !ids.has(entry.parentId))) {
+        throw new Error(`Invalid session history in ${sessionFile}`);
+      }
+      ids.add(entry.id);
+    }
+  }
+  // Opening the explicitly prepared empty file writes its header immediately.
+  // Subsequent completed messages, tool results and compactions are appended by Pi.
+  return SessionManager.open(sessionFile, dirname(sessionFile), cwd);
 }
