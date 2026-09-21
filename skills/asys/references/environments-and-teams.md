@@ -62,6 +62,7 @@ project/
   request.md
   env/development/
     workers.json
+    tools.md
     component.dcomp
     Dockerfile
     agents/
@@ -79,6 +80,29 @@ in different repositories. One workflow run uses one environment, including
 called processes and ad-hoc children. The workspace is independently selected
 by `--workspace`. A run does not turn the environment source directory into the
 workspace unless that is the path you choose.
+
+## Environment tool list
+
+Optionally add `tools.md` beside the environment's `workers.json`. Asys includes
+its contents in every agent's system prompt, including the built-in `simple`
+agent used by one-shot and goal, and agents from an external worker bundle.
+It reads the file from `ASYS_ENVIRONMENT_DIR`, not from the workspace or the
+external bundle. Missing or blank files add nothing; no configuration flag is
+needed. Package the file in the environment image with the other resources.
+
+Keep it a short inventory of installed software and libraries: names, versions,
+and essential availability constraints. For example, if the image installs
+these versions:
+
+```markdown
+- Python 3.12
+- GCC 13.2
+- CMake 3.28
+```
+
+Keep the list current when rebuilding the image. It is author-provided context,
+not an automatic capability probe, and does not install software or register
+callable agent tools. Put usage instructions in tool documentation or skills.
 
 ## workers.json
 
@@ -184,7 +208,8 @@ retain the same workspace access as other agents.
 
 Shared environment skills and selected-agent skills are discovered together;
 other agents' private skills are not loaded. The prompt includes asys's global
-instructions, the selected role definition/memory, actual resources, and the
+instructions, the environment's optional tool list, the selected role
+definition/memory, actual resources, and the
 job assignment. Files in the workspace do not automatically replace this system
 prompt or install extensions.
 

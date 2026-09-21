@@ -24,8 +24,10 @@ function loadDefinition(environmentDirectory, name, workersDirectory, agentParen
   const memory = existsSync(memoryPath) ? readFileSync(memoryPath, 'utf8').trim() : '';
   const promptPath = join(directory, 'prompt.md');
   const prompt = existsSync(promptPath) ? readFileSync(promptPath, 'utf8').trim() : '';
+  const toolsPath = join(environment, 'tools.md');
+  const tools = existsSync(toolsPath) ? readFileSync(toolsPath, 'utf8').trim() : '';
   const resources = kind => [...new Set([environment, workersDirectory, directory])].map(root => join(root, kind)).filter(existsSync);
-  return { name, environment, workersDirectory, directory, prompt, memory,
+  return { name, environment, workersDirectory, directory, prompt, memory, tools,
     promptHash: createHash('sha256').update(prompt).digest('hex'),
     memoryHash: createHash('sha256').update(memory).digest('hex'),
     skills: resources('skills'), extensions: resources('extensions').flatMap(root =>

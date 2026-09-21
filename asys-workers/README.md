@@ -19,6 +19,7 @@ env/kicad/
   Dockerfile
   component.dcomp
   workers.json
+  tools.md             # optional installed tool list included in agent prompts
   agents/
     schematic/
       prompt.md        # optional stable agent instructions
@@ -33,6 +34,15 @@ env/kicad/
   extensions/          # shared Pi extension files
   programs/            # environment-specific commands
 ```
+
+An optional `tools.md` beside the environment's `workers.json` lists installed
+software and libraries, their versions, and essential availability constraints.
+Asys includes its contents in every agent's system prompt, including the built-in
+`simple` agent used by one-shot and goal. Missing or blank files add nothing.
+Keep this inventory short and current with the image; usage instructions belong
+in tool documentation or skills. This file describes installed software; it does
+not install software or register callable agent tools. See the
+[environment authoring guide](../skills/asys/references/environments-and-teams.md#environment-tool-list).
 
 The global behavioral prompt is [src/system.md](src/system.md), supplied by asys.
 It emphasizes inquiry, independent judgment, and responsibility for the requested
@@ -126,7 +136,8 @@ exit status. It does not prepare artifact dependencies or decide the next job.
 ## Agent execution and completion
 
 `asys-agent --agent NAME --model MODEL` constructs the session using the global
-system prompt, the selected agent's `prompt.md` and memory, its actual skills and tools, and
+system prompt, the environment's optional `tools.md`, the selected agent's
+`prompt.md` and memory, its actual skills and tools, and
 the supplied task and execution locations. Project files in the workspace do
 not configure the agent's system prompt or automatically install extensions.
 

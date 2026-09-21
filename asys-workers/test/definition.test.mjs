@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { agentDefinition, agentResult } from '../src/agent-definition.mjs';
+import { agentDefinition, agentResult, systemAgentDefinition } from '../src/agent-definition.mjs';
 import { runAgent } from '../src/agent-session.mjs';
 import { agent } from '../src/agent.mjs';
 import { assistant, model } from './helpers.mjs';
@@ -24,6 +24,7 @@ test('named agents share environment resources and load their own memory and ski
   }
   await mkdir(join(environment, 'skills', 'common'), { recursive: true });
   await writeFile(join(environment, 'skills', 'common', 'SKILL.md'), '---\nname: common\ndescription: Common techniques\n---\nCommon procedure');
+  await writeFile(join(environment, 'tools.md'), '- board-tool 1.2\n- board-library 3.4');
   const requests = [], job = { id: 'board' };
   const provider = {
     async listModels() { return { models: [model] }; },
@@ -39,6 +40,7 @@ test('named agents share environment resources and load their own memory and ski
     signal: new AbortController().signal, save() {}, event() {} });
   assert.deepEqual(result, { final: 'Board complete', exception: null, approved: false });
   const prompt = requests[0].context.systemPrompt;
+  assert.match(prompt, /Installed environment tools:\n- board-tool 1\.2\n- board-library 3\.4/);
   assert.match(prompt, /pcb retained lesson/);
   assert.match(prompt, /pcb base instructions/);
   assert.match(prompt, /Common techniques/);
@@ -75,6 +77,9 @@ test('an external agent uses its own prompt and memory alongside shared environm
     await mkdir(join(directory, 'skills', name), { recursive: true });
     await writeFile(join(directory, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} techniques\n---\nProcedure`);
   }
+  await writeFile(join(environment, 'tools.md'), '- environment-tool 2.0');
+  await writeFile(join(external, 'tools.md'), 'UNSELECTED_BUNDLE_TOOLS');
+  await writeFile(join(workspace, 'tools.md'), 'UNSELECTED_WORKSPACE_TOOLS');
   await writeFile(join(external, 'extra.mjs'), `export default pi => {
     pi.on('before_agent_start', event => ({ systemPrompt: event.systemPrompt + '\\nExternal explicit extension' }));
   };`);
@@ -100,6 +105,8 @@ test('an external agent uses its own prompt and memory alongside shared environm
     'environment-common techniques', 'bundle-common techniques', 'reviewer-specific techniques']) {
     assert.ok(context.systemPrompt.includes(text), text);
   }
+  assert.match(context.systemPrompt, /Installed environment tools:\n- environment-tool 2\.0/);
+  assert.doesNotMatch(context.systemPrompt, /UNSELECTED_BUNDLE_TOOLS|UNSELECTED_WORKSPACE_TOOLS/);
   assert.doesNotMatch(context.systemPrompt, /Builtin reviewer instructions|Builtin private memory/);
   assert.deepEqual(context.messages[0].content, [{ type: 'text', text: 'Review the latest result.' }]);
   const state = JSON.parse(await readFile(join(jobDirectory, 'agent.json'), 'utf8'));
@@ -127,6 +134,7 @@ test('the shared simple agent uses the shared system prompt without extra role i
   const run = join(root, 'run'), jobDirectory = join(run, 'job');
   await mkdir(workspace);
   await mkdir(join(environment, 'agents/simple'), { recursive: true });
+  await writeFile(join(environment, 'tools.md'), '- shared-tool 5.0');
   await writeFile(join(environment, 'agents/simple/prompt.md'), 'UNSELECTED_ENVIRONMENT_AGENT');
   await writeFile(join(environment, 'agents/simple/memory.md'), 'UNSELECTED_ENVIRONMENT_MEMORY');
   await writeFile(join(environment, 'workers.json'), JSON.stringify({ version: 1, name: 'test',
@@ -162,6 +170,7 @@ assert 'asys.oneshot' not in sys.modules
   assert.equal(packaged, '');
   const shared = await readFile(new URL('../src/system.md', import.meta.url), 'utf8');
   assert.ok(requests[0].context.systemPrompt.includes(shared.trim()));
+  assert.match(requests[0].context.systemPrompt, /Installed environment tools:\n- shared-tool 5\.0/);
   assert.doesNotMatch(requests[0].context.systemPrompt, /Agent instructions:/);
   assert.doesNotMatch(requests[0].context.systemPrompt, /UNSELECTED_ENVIRONMENT_AGENT|UNSELECTED_ENVIRONMENT_MEMORY/);
   assert.deepEqual(requests[0].context.messages[0].content, [{ type: 'text', text: 'Complete the assignment.' }]);
@@ -169,3 +178,32 @@ assert 'asys.oneshot' not in sys.modules
   assert.equal(state.name, 'simple');
   assert.equal(state.model, model.id);
 });
+
+for (const [label, contents] of [['absent', null], ['empty', ' \n\t'], ['populated', '- compiler 1.0']]) {
+  test(`built-in agent receives the selected environment's ${label} tool list`, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'asys-environment-tools-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const environment = join(root, 'environment'), workspace = join(root, 'work');
+    await mkdir(environment);
+    await mkdir(workspace);
+    await writeFile(join(workspace, 'tools.md'), 'UNSELECTED_WORKSPACE_TOOLS');
+    if (contents !== null) await writeFile(join(environment, 'tools.md'), contents);
+    const requests = [];
+    const provider = {
+      async listModels() { return { models: [model] }; },
+      async *infer(request) {
+        requests.push(JSON.parse(request.payload));
+        yield { payload: JSON.stringify({ type: 'done', reason: 'stop',
+          message: assistant([{ type: 'text', text: '{"final":"Done","exception":null}' }]) }) };
+      },
+    };
+    await runAgent({ config: { model: model.id, prompt: 'Complete the assignment.', options: {} },
+      job: { id: 'tools' }, workspace, jobDirectory: join(root, 'job'),
+      definition: systemAgentDefinition(environment, 'simple'), provider,
+      signal: new AbortController().signal, save() {}, event() {} });
+    const prompt = requests[0].context.systemPrompt;
+    if (contents?.trim()) assert.match(prompt, /Installed environment tools:\n- compiler 1\.0/);
+    else assert.doesNotMatch(prompt, /Installed environment tools:/);
+    assert.doesNotMatch(prompt, /UNSELECTED_WORKSPACE_TOOLS/);
+  });
+}

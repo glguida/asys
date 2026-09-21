@@ -165,6 +165,15 @@ configures Human as an input in the run's workers definition. It corrects an
 omitted input or an output declaration without editing the source environment.
 Custom programs that call Human need the declaration shown above.
 
+### List installed tools
+
+Add an optional `tools.md` beside `workers.json` with a short list of installed
+software, versions, and essential availability constraints. Asys includes this
+list in agent system prompts, including the built-in agent used by one-shot and
+goal. Missing or blank files add nothing. Keep it current with the environment
+image; usage instructions belong in tool documentation or skills. See the
+[environment tool-list reference](../skills/asys/references/environments-and-teams.md#environment-tool-list).
+
 ### Put tool knowledge in skills
 
 Pi discovers skills in the selected environment's `skills/` directory. Each skill

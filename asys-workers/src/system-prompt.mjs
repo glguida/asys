@@ -10,6 +10,7 @@ export function workerPrompt({ definition, jobDirectory, workspace }) {
     appendSystemPrompt: [
       `When the assignment calls for a structured human decision request or review briefing, read ${JSON.stringify(reportingGuide)} for its reporting guidance.`,
       `Agent: ${definition.name}. Its definition is in ${JSON.stringify(definition.directory)}. Read its resources as needed; do not modify the agent definition or environment during this job.`,
+      definition.tools && `Installed environment tools:\n${definition.tools}`,
       definition.prompt && `Agent instructions:\n${definition.prompt}`,
       definition.memory && `Agent memory:\n${definition.memory}`,
       `Job area: ${JSON.stringify(jobDirectory)}. Keep temporary files in scratch/ there. Write your factual report to report.md there, and any concise lessons supported by this job to lessons.md there. Lessons are proposals for later review, not changes to agent memory.`,
