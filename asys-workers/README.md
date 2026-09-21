@@ -34,11 +34,12 @@ env/kicad/
   programs/            # environment-specific commands
 ```
 
-The global behavioral prompt includes [src/system.md](src/system.md) and the
-short [Reporting to humans guide](src/reporting-to-humans.md), supplied by asys.
-The guide is included in every agent's system prompt, so reporting guidance
-does not depend on an individual workflow repeating it. Agent memory contains
-retained lessons and principles. Agents read their
+The global behavioral prompt is [src/system.md](src/system.md), supplied by asys.
+It emphasizes inquiry, independent judgment, and responsibility for the requested
+outcome. The system prompt links the [Reporting to humans guide](src/reporting-to-humans.md)
+for assignments that call for structured human decisions or review briefings;
+ordinary assignments receive concise reporting guidance in the core prompt.
+Agent memory contains retained lessons and principles. Agents read their
 definitions during jobs; reports and proposed lessons go into job storage.
 Several workers components can use the same environment concurrently. A later
 review process can evaluate their evidence and propose a new environment

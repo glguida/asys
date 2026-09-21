@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const instructions = ['system.md', 'reporting-to-humans.md']
-  .map(name => readFileSync(new URL(name, import.meta.url), 'utf8').trim()).join('\n\n');
+const instructions = readFileSync(new URL('system.md', import.meta.url), 'utf8').trim();
+const reportingGuide = fileURLToPath(new URL('reporting-to-humans.md', import.meta.url));
 
 export function workerPrompt({ definition, jobDirectory, workspace }) {
   return {
     systemPrompt: instructions,
     appendSystemPrompt: [
+      `When the assignment calls for a structured human decision request or review briefing, read ${JSON.stringify(reportingGuide)} for its reporting guidance.`,
       `Agent: ${definition.name}. Its definition is in ${JSON.stringify(definition.directory)}. Read its resources as needed; do not modify the agent definition or environment during this job.`,
       definition.prompt && `Agent instructions:\n${definition.prompt}`,
       definition.memory && `Agent memory:\n${definition.memory}`,
