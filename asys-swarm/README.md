@@ -178,6 +178,11 @@ writes and terminal exports before publishing a result. Package changes reject
 recovery. There is currently no CLI command to restart an entire terminated host
 launch; `resume` only unpauses a live run.
 
+World state may occupy 2 MiB while individual observations and decisions remain
+limited to 256 KiB. Aggregate turns, checkpoints and terminal exports have
+separate [payload budgets](AUTHORING.md#implement-the-world) checked before commit;
+larger populations do not enlarge each agent's view or private memory.
+
 Use trusted experiment and environment code. The package is mounted read-only
 and authoritative controller state is not mounted in workers. Jobs within one
 worker environment share a container and workspace; this is not adversarial

@@ -172,12 +172,27 @@ The callback contracts are:
   callback cannot simply return arbitrary host file paths for the engine to copy.
 
 All inputs and returns are JSON copies. Observation and evaluation cannot mutate
-the authoritative state through their arguments. Each callback argument/result
-is limited to 256 KiB in compact and indented JSON; schemas/configurations are
-limited to 128 KiB. Aggregate in-progress controller state is limited to 2 MiB
-before decisions are submitted or a new turn is committed. This first version
-is intended for compact worlds and references to larger artifacts, rather than
-embedding source repositories or datasets in every observation.
+the authoritative state through their arguments. Payload limits apply to both
+compact and indented UTF-8 JSON:
+
+| Payload | Limit |
+| --- | --- |
+| World state, including the state returned by `step` | 2 MiB |
+| Aggregate `step` action input or complete `{state, events}` result | 4 MiB |
+| Individual observation, decision, or evaluation | 256 KiB |
+| Action schema or configuration | 128 KiB |
+| `artifacts` result, including its deepest checkpoint indentation | 1 MiB |
+| In-progress checkpoint before job submission or turn commit | 4 MiB |
+| Complete durable checkpoint, including the publication outbox | 7 MiB |
+
+Private memory keeps the configured `memoryBytes` limit. The controller also
+reserves room for terminal publication: the terminal checkpoint without
+artifacts must fit 5 MiB, leaving space for the artifact copies in the result
+and outbox. Aggregate limits can reject a combination of individually valid
+payloads. Oversized observations fail before new jobs are submitted; oversized
+transitions, including their tick and snapshot events, fail before changing the
+committed world. Keep observations local and export focused artifacts rather
+than embedding entire repositories or datasets in each agent's input.
 
 Callbacks run in the controller container and must terminate promptly. Store all
 evolving information in `state`, not module globals. Avoid wall-clock-dependent

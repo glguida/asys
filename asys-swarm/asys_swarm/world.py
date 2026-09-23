@@ -6,6 +6,7 @@ import sys
 from jsonschema import Draft7Validator
 
 from .config import digest, json_value, package_file
+from .limits import ARTIFACT_BYTES, STEP_BYTES, WORLD_BYTES
 
 
 CALLBACKS = ('initialize', 'observe', 'step', 'evaluate', 'artifacts', 'action_schema')
@@ -48,7 +49,28 @@ class World:
 
     def call(self, name, *args):
         # Evaluation/observation cannot accidentally mutate authoritative state.
-        return json_value(getattr(self.module, name)(*(json_value(arg) for arg in args)))
+        copied = []
+        for index, arg in enumerate(args):
+            if name in {'observe', 'step', 'evaluate', 'artifacts'} and index == 0:
+                copied.append(json_value(arg, limit=WORLD_BYTES))
+            elif name == 'step' and index == 1:
+                copied.append(json_value(arg, limit=STEP_BYTES))
+            else:
+                copied.append(json_value(arg))
+        result = getattr(self.module, name)(*copied)
+        if name == 'initialize':
+            return json_value(result, limit=WORLD_BYTES)
+        if name == 'step':
+            result = json_value(result, limit=STEP_BYTES)
+            if isinstance(result, dict) and 'state' in result:
+                json_value(result['state'], limit=WORLD_BYTES)
+            return result
+        if name == 'artifacts':
+            # Budget the deepest durable embedding, not just the standalone
+            # object: indentation must not consume the terminal outbox reserve.
+            envelope = {'outbox': [{'data': {'output': {'artifacts': result}}}]}
+            return json_value(envelope, limit=ARTIFACT_BYTES)['outbox'][0]['data']['output']['artifacts']
+        return json_value(result)
 
     def evaluation(self, state, objective):
         value = self.call('evaluate', state, objective or {})

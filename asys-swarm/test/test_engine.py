@@ -12,6 +12,7 @@ from asys_runtime.environment import Environment, describe
 from asys_runtime.files import read_json, write_json
 from asys_swarm.config import load_config, validate_config
 from asys_swarm.engine import Engine
+from asys_swarm.limits import PUBLICATION_CHECKPOINT_BYTES, WORLD_BYTES
 from asys_swarm.replay import replay
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -315,7 +316,7 @@ class EngineTests(unittest.TestCase):
         self.assertIn('exceeds', self.engine.state['result']['error'])
 
     def test_aggregate_pending_limit_fails_cleanly_before_submitting(self):
-        self.config['agents']['count'] = 20
+        self.config['agents']['count'] = 40
         self.start()
         # Roll forward to a fresh run setup with large but individually valid
         # observations. This exercises the aggregate checkpoint guard.
@@ -327,6 +328,115 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.engine.state['status'], 'failed')
         self.assertEqual(len(self.engine.queue.list()), existing)
         self.assertTrue((self.storage / 'result.json').is_file())
+
+    def large_world(self, *, state_bytes=1200 * 1024, observation_bytes=90 * 1024,
+                    artifact_bytes=900 * 1024, event_bytes=0):
+        (self.package / 'world.py').write_text(WORLD + f'''
+def action_schema():
+    return {{"type":"object","properties":{{"add":{{"type":"integer"}},"payload":{{"type":"string"}}}},"required":["add","payload"],"additionalProperties":False}}
+def initialize(settings, agents, seed):
+    return {{"total":0,"turn":0,"payload":"w" * {state_bytes}}}
+def observe(state, agent):
+    return {{"context":"o" * {observation_bytes}}}
+def step(state, actions):
+    state["total"] += sum(action["add"] for action in actions.values())
+    state["turn"] += 1
+    return {{"state":state,"events":[{{"payload":"e" * {event_bytes}}}]}}
+def artifacts(state):
+    return {{"payload":"a" * {artifact_bytes},"total":state["total"]}}
+''')
+        # No run has started, so replace the controller's package fingerprint.
+        self.engine = Engine(self.root, self.storage, self.workspace, self.package)
+
+    def test_large_world_sixteen_decisions_recovery_and_replay(self):
+        self.large_world()
+        self.config.update(agents={'count': 16}, objective={'target': 32})
+        self.config['limits'].update(concurrency=16, turns=2)
+        self.start()
+        self.assertEqual(len(self.engine.queue.list()), 16)
+        self.assertGreater(self.engine.checkpoint.stat().st_size, 2 * 1024 * 1024)
+        job_ids = {job['id'] for job in self.engine.queue.list()}
+        self.recover()
+        self.engine.pump()
+        self.assertEqual({job['id'] for job in self.engine.queue.list()}, job_ids)
+        action = {'add': 1, 'payload': 'd' * (24 * 1024)}
+        self.answer([action])
+        self.assertEqual(self.engine.state['world']['total'], 16)
+        self.assertGreater(len(json.dumps(self.events()[-2]['data']['actions'])), 256 * 1024)
+        self.engine.pump()
+        self.answer([action])
+        self.engine.pump()
+        self.assertEqual(self.engine.state['status'], 'completed')
+        self.assertEqual(self.engine.state['result']['output']['decisions'], 32)
+        self.assertEqual(len(read_json(self.workspace / 'swarm-runs/test-run/artifacts.json')['payload']), 900 * 1024)
+        self.assertTrue(replay(self.package, self.engine.state['config'], self.engine.journal)['verified'])
+
+    def test_large_terminal_outbox_recovery_preserves_artifacts(self):
+        self.large_world(state_bytes=WORLD_BYTES - 1024, observation_bytes=0,
+                         artifact_bytes=1024 * 1024 - 1024)
+        self.config['agents']['count'] = 1
+        self.config['limits']['turns'] = 1
+        self.start()
+        self.answer([{'add': 1, 'payload': ''}])
+        with patch.object(self.engine.outbound, 'send', side_effect=OSError('crash')):
+            with self.assertRaisesRegex(OSError, 'crash'):
+                self.engine.finish('completed', 'turn_limit')
+        saved = read_json(self.engine.checkpoint)
+        self.assertEqual(saved['status'], 'completed')
+        self.assertEqual([event['type'] for event in saved['outbox']],
+                         ['swarm.completed', 'swarm.snapshot', 'run.result'])
+        checkpoint_bytes = self.engine.checkpoint.stat().st_size
+        self.assertGreater(checkpoint_bytes, 5 * 1024 * 1024)
+        self.assertLess(checkpoint_bytes, PUBLICATION_CHECKPOINT_BYTES)
+        self.recover()
+        self.recover()
+        self.assertEqual(sum(row['type'] == 'run.result' for row in self.events()), 1)
+        messages = Reader(direction_root(self.root, 'swarm', 'out')).read(0)
+        self.assertEqual(sum(row['type'] == 'run.result' for row in messages), 1)
+        exported = read_json(self.workspace / 'swarm-runs/test-run/artifacts.json')
+        self.assertEqual(exported, saved['result']['output']['artifacts'])
+        self.assertTrue(replay(self.package, self.engine.state['config'], self.engine.journal)['verified'])
+
+    def test_large_step_outbox_rejected_before_world_commit(self):
+        # The callback result fits 4 MiB, but events appear in both tick and
+        # snapshot; the complete durable publication must also fit its budget.
+        self.large_world(state_bytes=1024 * 1024, observation_bytes=0,
+                         artifact_bytes=0, event_bytes=3 * 1024 * 1024 - 1024)
+        self.config['agents']['count'] = 1
+        self.start()
+        self.answer([{'add': 1, 'payload': ''}])
+        self.assertEqual(self.engine.state['status'], 'failed')
+        self.assertEqual(self.engine.state['world']['total'], 0)
+        self.assertEqual(self.engine.state['turn'], 0)
+        self.assertFalse(any(row['type'] == 'swarm.tick' for row in self.events()))
+        self.assertIn(str(PUBLICATION_CHECKPOINT_BYTES), self.engine.state['result']['error'])
+        self.assertTrue((self.storage / 'result.json').is_file())
+
+    def test_world_and_artifact_caps_are_still_enforced(self):
+        self.large_world(state_bytes=WORLD_BYTES, observation_bytes=0, artifact_bytes=0)
+        self.start()
+        self.assertIsNone(self.engine.state)
+        messages = Reader(direction_root(self.root, 'swarm', 'out')).read(0)
+        self.assertEqual(messages[-1]['type'], 'rejected')
+        self.assertIn('exceeds', messages[-1]['data']['message'])
+        self.large_world(state_bytes=300 * 1024, observation_bytes=0,
+                         artifact_bytes=1024 * 1024)
+        self.config['agents']['count'] = 1
+        self.config['limits']['turns'] = 1
+        self.start()
+        self.answer([{'add': 1, 'payload': ''}])
+        self.engine.pump()
+        self.assertEqual(self.engine.state['status'], 'failed')
+        self.assertIn('exceeds', self.engine.state['result']['error'])
+
+    def test_individual_decision_cap_is_unchanged(self):
+        self.large_world(state_bytes=300 * 1024, observation_bytes=0, artifact_bytes=0)
+        self.config['agents']['count'] = 1
+        self.start()
+        self.answer([{'add': 1, 'payload': 'd' * (256 * 1024)}])
+        self.assertEqual(self.engine.state['status'], 'failed')
+        self.assertEqual(self.engine.state['world']['total'], 0)
+        self.assertIn(str(256 * 1024), self.engine.state['result']['error'])
 
     def test_config_validation_does_not_execute_module(self):
         (self.package / 'world.py').write_text('raise RuntimeError("must not import")')

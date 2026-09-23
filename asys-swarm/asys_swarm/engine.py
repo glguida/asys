@@ -13,6 +13,8 @@ from asys_runtime.permissions import mkdir
 from asys_runtime.queue import Queue, TERMINAL as JOB_TERMINAL
 
 from .config import digest, json_value, validate_config
+from .limits import (ACTIVE_CHECKPOINT_BYTES, ERROR_CHARACTERS,
+                     PUBLICATION_CHECKPOINT_BYTES, TERMINAL_BASE_BYTES)
 from .world import World, package_digest
 
 
@@ -76,12 +78,23 @@ class Engine:
 
     def save(self):
         if self.state:
+            json_value(self.state, limit=PUBLICATION_CHECKPOINT_BYTES)
             write_json(self.checkpoint, self.state)
 
-    def event(self, kind, data):
-        self.state['sequence'] += 1
-        self.state['outbox'].append({'sequence': self.state['sequence'], 'type': kind,
-                                    'time': timestamp(), 'data': {'runId': self.state['id'], **data}})
+    def event(self, kind, data, *, state=None):
+        value = self.state if state is None else state
+        value['sequence'] += 1
+        value['outbox'].append({'sequence': value['sequence'], 'type': kind,
+                               'time': timestamp(), 'data': {'runId': value['id'], **data}})
+
+    def validate_active(self, value):
+        json_value(value, limit=ACTIVE_CHECKPOINT_BYTES)
+        # Pending jobs disappear at termination, but memories/queued plans and
+        # the committed world remain. Ensure a later failure can always publish
+        # that state and the bounded artifacts without exceeding runtime files.
+        terminal = self.terminal_state({**value, 'outbox': []}, 'failed', 'error',
+                                       '\0' * ERROR_CHARACTERS, {})
+        json_value(terminal, limit=TERMINAL_BASE_BYTES)
 
     def flush(self):
         if not self.state:
@@ -109,13 +122,13 @@ class Engine:
             self.state['outbox'] = []
             self.save()
 
-    def snapshot(self, events=()):
-        value = self.state
+    def snapshot(self, events=(), *, state=None):
+        value = self.state if state is None else state
         self.event('swarm.snapshot', {'turn': value['turn'], 'state': value['world'],
             'metrics': value['evaluation']['metrics'], 'evaluation': value['evaluation'],
             'status': value['status'], 'decisions': value['decisions'], 'usage': value['usage'],
             'events': list(events), 'mission': value['config']['mission'],
-            'objective': value['config']['objective']})
+            'objective': value['config']['objective']}, state=value)
 
     def start(self, data):
         validate_name('run ID', data.get('id'))
@@ -139,7 +152,7 @@ class Engine:
             raise ValueError('initialize() must return a JSON object')
         evaluation = self.world.evaluation(state, config['objective'])
         self.queue = Queue(environment_root(self.root, environment))
-        self.state = {'version': 1, 'id': data['id'], 'signature': signature,
+        initial = {'version': 1, 'id': data['id'], 'signature': signature,
             'packageHash': self.package_hash, 'config': config, 'environment': environment,
             'environmentDefinition': descriptor['definition'], 'status': 'running',
             'turn': 0, 'decisions': 0, 'world': state, 'agents': agents,
@@ -147,6 +160,8 @@ class Engine:
             'pending': None, 'evaluation': evaluation, 'startedAt': timestamp(),
             'deadline': time.time() + config['limits']['seconds'], 'pauseRequested': False,
             'usage': {'input': 0, 'output': 0, 'totalTokens': 0}, 'sequence': 0, 'outbox': []}
+        self.validate_active(initial)
+        self.state = initial
         self.event('swarm.started', {'mission': config['mission'], 'objective': config['objective'],
             'config': config, 'packageHash': self.package_hash, 'stateHash': digest(state)})
         self.snapshot()
@@ -241,7 +256,7 @@ class Engine:
             self.finish('completed', 'decision_limit')
             return False
         pending = {'turn': value['turn'], 'decisions': decisions, 'inactive': inactive}
-        json_value({**value, 'pending': pending}, limit=2 * 1024 * 1024)
+        self.validate_active({**value, 'pending': pending})
         value['decisions'] += len(decisions)
         value['pending'] = pending
         self.save()  # Persist identities and inputs before publishing any job.
@@ -283,7 +298,7 @@ class Engine:
                                          memory_bytes=limits['memoryBytes'])
             candidate = deepcopy(value)
             candidate['pending']['decisions'][agent].update(status='completed', result=result)
-            json_value(candidate, limit=2 * 1024 * 1024)
+            self.validate_active(candidate)
             decision.update(status='completed', result=result)
             # Charge completed calls immediately, even if a later agent fails
             # or the host cancels before this turn can be committed.
@@ -331,16 +346,20 @@ class Engine:
             raise ValueError('step().events must be an array of objects')
         evaluation = self.world.evaluation(stepped['state'], value['config']['objective'])
         committed = {**value, 'world': stepped['state'], 'plans': plans, 'memories': memories,
-                     'evaluation': evaluation, 'turn': value['turn'] + 1, 'pending': None}
-        json_value(committed, limit=2 * 1024 * 1024)
+                     'evaluation': evaluation, 'turn': value['turn'] + 1, 'pending': None,
+                     'outbox': list(value['outbox'])}
+        self.validate_active(committed)
+        if committed['pauseRequested']:
+            committed['status'] = 'paused'
+            self.event('swarm.paused', {'turn': committed['turn']}, state=committed)
+        self.event('swarm.tick', {'turn': committed['turn'], 'actions': actions, 'events': events,
+            'stateHash': digest(committed['world']), 'metrics': evaluation['metrics']}, state=committed)
+        self.snapshot(events, state=committed)
+        # A large aggregate event batch can exceed the publication budget even
+        # when every callback payload fits. Reject it before committing actions.
+        json_value(committed, limit=PUBLICATION_CHECKPOINT_BYTES)
         value.update(committed)
         self.last_tick = time.monotonic()
-        if value['pauseRequested']:
-            value['status'] = 'paused'
-            self.event('swarm.paused', {'turn': value['turn']})
-        self.event('swarm.tick', {'turn': value['turn'], 'actions': actions, 'events': events,
-            'stateHash': digest(value['world']), 'metrics': evaluation['metrics']})
-        self.snapshot(events)
         self.flush()
 
     def cancel_jobs(self):
@@ -367,6 +386,14 @@ class Engine:
                 raise ValueError('artifacts() must return an object')
         except Exception as failure:
             status, reason, error = 'failed', 'error', error or str(failure)
+        terminal = self.terminal_state(value, status, reason, error, artifacts)
+        json_value(terminal, limit=PUBLICATION_CHECKPOINT_BYTES)
+        value.update(terminal)
+        self.flush()
+
+    def terminal_state(self, value, status, reason, error, artifacts):
+        """Construct the entire terminal publication without mutating live state."""
+        error = error[:ERROR_CHARACTERS]
         relative = Path('swarm-runs') / value['id']
         evaluation = value['evaluation']
         output = {'runId': value['id'], 'mission': value['config']['mission'],
@@ -378,11 +405,13 @@ class Engine:
         if error:
             output['error'] = error
         result = {'runId': value['id'], 'status': status, 'output': output, 'error': error}
-        value.update(status=status, result=result, finishedAt=timestamp())
-        self.event(f'swarm.{status}', {'turn': value['turn'], 'reason': reason, 'achieved': output['achieved']})
-        self.snapshot()
-        self.event('run.result', result)
-        self.flush()
+        terminal = {**value, 'status': status, 'result': result, 'finishedAt': timestamp(),
+                    'pending': None, 'outbox': list(value['outbox'])}
+        self.event(f'swarm.{status}', {'turn': value['turn'], 'reason': reason, 'achieved': output['achieved']},
+                   state=terminal)
+        self.snapshot(state=terminal)
+        self.event('run.result', result, state=terminal)
+        return terminal
 
     def export_result(self):
         value = self.state
