@@ -320,7 +320,7 @@ def main():
                                for port in worker['inputs'])
                     assert not any(port['name'] == 'human' for port in worker['outputs'])
                     assert record['links']['human'] == record['components']['human'] + '.human'
-                    session_file = max((state_file.parent / 'human').glob('*/session.json'), key=lambda path: path.stat().st_mtime)
+                    session_file = max((terminal_root / 'human').glob('*/session.json'), key=lambda path: path.stat().st_mtime)
                     assert json.loads(session_file.read_text())['global'] is None
                     # F4 focuses the response editor; Ctrl-S explicitly submits.
                     os.write(master, b'\x1bOS')
