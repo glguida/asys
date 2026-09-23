@@ -136,3 +136,20 @@ test('the goal launcher installs independently of one-shot and uses the simple d
     { cwd: root, env: { ...process.env, ASYS_STATE_ROOT: join(root, 'empty-state') } }),
     error => error.code === 1 && /asys system-model set simple MODEL/.test(error.stderr));
 });
+
+test('the senate launcher installs independently and validates its roster before creating a run', async t => {
+  const { root, project } = await checkout(t, ['asys-senate/Makefile', 'asys-senate/tools']);
+  await exec('make', ['--no-print-directory', '-C', join(project, 'asys-senate'), 'install-host', 'PREFIX=/opt/asys', `DESTDIR=${root}/staged`]);
+  await rm(project, { recursive: true });
+  const binary = join(root, 'staged/opt/asys/bin/asys-senate');
+  const { stdout: help } = await exec('python3', ['-I', '-S', binary, '--help'], { cwd: root });
+  assert.match(help, /ENVIRONMENT_DIRECTORY TOPIC/);
+  assert.match(help, /--senate FILE/);
+  assert.match(help, /--model MODEL/);
+  assert.doesNotMatch(help, /--max-attempts|--external/);
+  const roster = join(root, 'senate.json');
+  await writeFile(roster, JSON.stringify({ version: 1, princeps: { name: 'Cicero' }, senators: [] }));
+  await assert.rejects(exec('python3', ['-I', '-S', binary, 'absent-environment', 'Choose a policy', '--senate', roster],
+    { cwd: root, env: { ...process.env, ASYS_STATE_ROOT: join(root, 'empty-state') } }),
+    error => error.code === 1 && /senators must be a nonempty array/.test(error.stderr));
+});

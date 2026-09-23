@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from asys.transcript import JobOutput, render
+from asys.progress import AgentProgress
 
 
 class TranscriptTest(unittest.TestCase):
@@ -234,6 +235,58 @@ class TranscriptTest(unittest.TestCase):
         goal["sessions"][0]["result"] = report
         (self.root / "goal.json").write_text(json.dumps(goal))
         self.assertEqual(lines, self.output.read(self.job)[1])
+
+    def test_senate_turns_show_speakers_without_repeating_conversation_history(self):
+        self.checkpoint.unlink()
+        phase = self.root / 'phases/3-intervene'
+        phase.mkdir(parents=True)
+        agent = {'sessionStartEntryCount': 1, 'session': {'leafId': 'answer', 'entries': [
+            {'type': 'message', 'id': 'old', 'parentId': None,
+             'message': {'role': 'assistant', 'content': 'Previous round already displayed.'}},
+            {'type': 'message', 'id': 'answer', 'parentId': 'old', 'message': {'role': 'assistant',
+             'content': json.dumps({'final': 'The research supports option A.', 'exception': None})}},
+        ]}}
+        (phase / 'agent.json').write_text(json.dumps({'agent': agent}))
+        (self.root / 'senate.json').write_text(json.dumps({'version': 1, 'topic': 'Choose an option',
+            'status': 'running', 'sessions': [
+                {'round': 0, 'phase': 'introduce', 'participant': 'Princeps', 'status': 'completed',
+                 'directory': 'phases/1-introduce', 'result': {'final': 'Consider both options.', 'exception': None}},
+                {'round': 2, 'phase': 'intervene', 'participant': 'Cicero', 'status': 'running',
+                 'directory': 'phases/3-intervene'}]}))
+        title, lines = self.output.read(self.job)
+        text = '\n'.join(lines)
+        self.assertEqual(title, 'Senate')
+        self.assertIn('Topic: Choose an option', text)
+        self.assertIn('Round 0: Princeps introduce (completed)', text)
+        self.assertIn('Consider both options.', text)
+        self.assertIn('Round 2: Cicero intervene (running)', text)
+        self.assertIn('The research supports option A.', text)
+        self.assertNotIn('Previous round already displayed.', text)
+        self.emit('started', parentId='answer')
+        self.emit('delta', kind='text', contentIndex=0, delta='A current observation.')
+        self.assertIn('A current observation.', '\n'.join(self.output.read(self.job)[1]))
+        with self.log.open('a') as stream:
+            stream.write(json.dumps({'type': 'senate.phase_started', 'round': 2,
+                'participant': 'Princeps', 'phase': 'assess'}) + '\n')
+        self.assertNotIn('A current observation.', '\n'.join(self.output.read(self.job)[1]))
+
+    def test_senate_progress_and_event_fallback_identify_current_participant(self):
+        self.checkpoint.unlink()
+        progress = AgentProgress()
+        with self.log.open('w') as stream:
+            stream.write(json.dumps({'type': 'senate.phase_started', 'round': 2,
+                'participant': 'Cato', 'phase': 'intervene'}) + '\n')
+        self.assertEqual(progress.observe(self.job)['detail'], 'round 2 Cato intervene: started')
+        self.assertIn('Round 2: Cato intervene (started)', '\n'.join(self.output.read(self.job)[1]))
+        with self.log.open('a') as stream:
+            stream.write(json.dumps({'type': 'agent.tool_started', 'name': 'web_search', 'round': 2,
+                'participant': 'Cato', 'phase': 'intervene'}) + '\n')
+        self.assertEqual(progress.observe(self.job)['detail'], 'round 2 Cato intervene: agent working')
+        with self.log.open('a') as stream:
+            stream.write(json.dumps({'type': 'senate.finished', 'status': 'completed', 'rounds': 3,
+                'consensus': False, 'decision': 'princeps'}) + '\n')
+        self.assertEqual(progress.observe(self.job)['detail'], 'senate completed: princeps')
+        self.assertIn('Senate finished', '\n'.join(self.output.read(self.job)[1]))
 
 
 if __name__ == "__main__":

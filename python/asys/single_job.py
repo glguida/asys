@@ -74,15 +74,19 @@ class SingleJob(EnvironmentHost):
     def run_fields(self):
         return {}
 
+    def resolve_model(self):
+        return system_model(AGENT, self.args.model, root=self.args.root)
+
     def worker_models(self):
         # The explicit override must work even when default settings are broken.
-        return {AGENT: self.record['model']}
+        model = self.record['model']
+        return {AGENT: model} if model is not None else {}
 
     def poll(self):
         pass
 
     def setup(self):
-        model = system_model(AGENT, self.args.model, root=self.args.root)
+        model = self.resolve_model()
         environment = self.args.environment.expanduser().resolve(strict=True)
         definition = Environment(environment, external=self.args.external)
         if self.args.external is not None and self.job_type not in definition.types:

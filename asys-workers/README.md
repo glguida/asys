@@ -215,6 +215,26 @@ these events with the saved transcript without changing execution state.
 
 ## Programs and humans
 
+The [Senate worker](../asys-senate/README.md) is an ordinary program at
+`/opt/asys/asys-workers/tools/asys-senate`. Its input contains `topic` and a
+parsed `senate` configuration describing the Princeps and senators. The Princeps
+introduces the topic, senators intervene in order, and the Princeps assesses
+consensus after each round. A consensus returns the answer immediately. After
+three rounds without consensus, the Princeps makes a final decision.
+
+Participants run through the same agent execution library and Provider input.
+They can select named environment agents or use the built-in `simple` agent,
+with optional participant prompts and models. Separate participant conversations
+and the shared discussion transcript persist in the job directory. Models fall
+back to the worker's `--model` and then the `simple` system-model default.
+No default is needed when every participant specifies a model.
+
+Each senator inherits `asys-agent`'s existing web-search capabilities and the
+selected agent's ordinary tools, skills and extensions. The environment's normal
+egress and tool configuration applies. There is no Quaestor or additional Senate
+search setup. The host Senate launcher and BPMN submit the same `senate` job;
+the controller and three-round limit live in the worker.
+
 The [goal worker](../asys-goal/README.md) is another ordinary program:
 `/opt/asys/asys-workers/tools/asys-goal`. It runs the built-in `simple` agent
 against the original request, retaining one implementation conversation across

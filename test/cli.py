@@ -41,11 +41,13 @@ class ArgumentTests(unittest.TestCase):
     def test_all_job_launchers_select_the_same_system_root(self):
         from asys.goal import arguments as goal_arguments
         from asys.oneshot import arguments as oneshot_arguments
+        from asys.senate import arguments as senate_arguments
         from asys.human_service import SharedHumanService
         bpmn_arguments = runpy.run_path(str(ROOT / 'asys-bpmn/tools/asys-bpmn'))['arguments']
         with patch.dict(os.environ, {'ASYS_STATE_ROOT': '/ambient/state'}):
             for parse, argv in [(goal_arguments, ['env', 'goal']),
                                 (oneshot_arguments, ['env', 'prompt']),
+                                (senate_arguments, ['env', 'topic', '--senate', 'senate.json']),
                                 (bpmn_arguments, ['run', 'workflow.bpmn', 'env'])]:
                 self.assertEqual(parse(argv).root, Path('/ambient/state'))
                 selected = parse([*argv, '--root', '/explicit/state'])

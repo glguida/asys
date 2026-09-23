@@ -62,6 +62,19 @@ beginning, and End follows the latest messages. Program jobs and agents without
 a saved conversation show stdout and stderr. Encrypted reasoning cannot be
 displayed as readable text.
 
+### Senate deliberation
+
+A Senate appears as one job. Select it in `top` to read the discussion with phase,
+round and participant headings, including the agents' tool activity. Its job
+directory contains `senate.json` with the ordered completed speeches and final
+outcome; full conversations live under `phases/` and `participants/`. Find that
+directory with `asys status RUN --json`. The standalone launcher's run-level
+`senate.json` is only the input roster snapshot.
+
+`logs` shows execution logs; Markdown export is optional manual postprocessing.
+See the [Senate guide](../asys-senate/README.md#read-the-debate) for the saved layout
+and a script that writes `deliberation.md` in the job directory.
+
 ## Saved records
 
 Each run directory contains `run.json`, describing the instance: `id`, `name`,

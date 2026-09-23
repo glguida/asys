@@ -17,6 +17,9 @@
     "goal": {
       "command": ["/opt/asys/asys-workers/tools/asys-goal"]
     },
+    "senate": {
+      "command": ["/opt/asys/asys-workers/tools/asys-senate"]
+    },
     "program": {
       "command": [
         "/opt/asys/asys-workers/tools/asys-program"

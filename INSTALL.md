@@ -48,6 +48,8 @@ installs the shared `asys` command and requires no Docker. Use
 and builds the shared worker images.
 `make -C asys-goal install` installs the goal launcher and human handler and
 builds the worker and Human images.
+`make -C asys-senate install` installs the Senate launcher and observer and
+builds the shared worker images.
 `make -C asys-human-interface install` builds the human interface component and
 installs the `asys-human-prompt` terminal handler; its `install-host` target
 installs just the host tool when the image is already available.
@@ -73,6 +75,7 @@ package installation is needed to use them. The optional standalone
 | `bin/asys-bpmn` | BPMN workflow launcher |
 | `bin/asys-oneshot` | Run an assignment with the simple system agent in an environment |
 | `bin/asys-goal` | Implement and verify a goal, repeating with the simple system agent |
+| `bin/asys-senate` | Ask configured senators for a consensus or Princeps decision in up to three rounds |
 | `bin/asys-human-prompt` | Foreground human handler with a queue of text questions |
 | `share/asys/python/` | Shared observation, environment launch, and runtime queue packages |
 | `share/asys/python/asys/system_agents/` | Built-in agent prompts and worker setup shared by launchers |
@@ -227,6 +230,19 @@ verification, and using the goal worker from BPMN. Host launchers supply a
 read-only snapshot of model defaults to workers; reinstall and rebuild the
 workers image to make the new program and built-in agent prompts available.
 
+To deliberate with a configured group of agents:
+
+```sh
+asys-senate ./env/research "Which option best satisfies our requirements?" \
+  --senate ./senate.json --workspace ./project
+```
+
+The [Senate guide](asys-senate/README.md) describes the participant file and
+ordinary `senate` worker job. Each participant can select a model; missing
+models use `--model` or the `simple` system-model default. Senators inherit
+`asys-agent`'s existing web-search capabilities and environment configuration.
+Reinstall and rebuild the workers image to include the Senate worker.
+
 ## Start the inference server
 
 Create a machine once, then start it:
@@ -269,7 +285,8 @@ uses the `simple` entry unless `--model MODEL` is supplied. If neither is set,
 it exits before creating a run and prints the command to configure it.
 `asys system-model list --json` prints the mapping as JSON, including unset
 system models as `null`. Add `--root DIRECTORY` to either configuration command
-to select another asys state base; a launcher's `--root` selects saved runs only.
+to select another asys system root. Launchers and observation commands use the
+same root: runs live under `ROOT/runs` and model defaults in `ROOT/config.json`.
 
 The inference server continues running after the command exits and exports
 `@inference_endpoint` in the `asys` dcomp system by default. See the

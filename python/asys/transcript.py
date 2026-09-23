@@ -90,10 +90,14 @@ class EventOutput:
         if kind in {"goal.phase_started", "goal.phase_finished"}:
             state = "started" if kind.endswith("started") else event.get("status", "finished")
             self.lines.extend([f"Attempt {event.get('attempt', '?')}: {event.get('phase', '?')} ({state})", ""])
+        elif kind in {"senate.phase_started", "senate.phase_finished"}:
+            state = "started" if kind.endswith("started") else event.get("status", "finished")
+            self.lines.extend([f"Round {event.get('round', '?')}: {event.get('participant', '?')} "
+                               f"{event.get('phase', '?')} ({state})", ""])
         elif kind in {"agent.tool_started", "agent.tool_completed"}:
             state = "started" if kind.endswith("started") else "failed" if event.get("isError") else "completed"
             self.lines.extend([f"Tool {state}: {event.get('name', 'tool')}", ""])
-        elif kind in {"goal.human_requested", "goal.human_answered", "goal.finished",
+        elif kind in {"goal.human_requested", "goal.human_answered", "goal.finished", "senate.finished",
                       "agent.provider_exhausted", "agent.provider_retrying", "agent.model_unavailable",
                       "agent.compaction_started", "agent.compaction_ended", "agent.result_correcting"}:
             self.lines.extend([kind.replace(".", " ").replace("_", " ").capitalize(),
@@ -220,6 +224,10 @@ class JobOutput:
         goal = self.files.read(directory / 'goal.json')
         if goal.get('version') in (1, 2, 3) and isinstance(goal.get('sessions'), list):
             return 'Goal', self.read_goal(directory, goal) + errors
+        senate = self.files.read(directory / 'senate.json')
+        if senate.get('version') == 1 and isinstance(senate.get('sessions'), list):
+            lines = [f"Topic: {senate.get('topic', '')}", f"Status: {senate.get('status', '')}", '']
+            return 'Senate', lines + self.read_phases(directory, senate['sessions'], senate=True) + errors
         if isinstance(agent, dict):
             if self.saved is not document:
                 self.saved, self.lines = document, render(agent)
@@ -231,13 +239,19 @@ class JobOutput:
 
     def read_goal(self, directory, goal):
         lines = [f"Goal: {goal.get('goal', '')}", f"Status: {goal.get('status', '')}", '']
+        return lines + self.read_phases(directory, goal['sessions'])
+
+    def read_phases(self, directory, sessions, *, senate=False):
+        lines = []
         current = None
-        for session in goal['sessions']:
+        for session in sessions:
             relative = session.get('directory', '')
             path = (directory / relative).resolve()
             if not relative or not path.is_relative_to(directory.resolve()):
                 continue
-            lines += [f"Attempt {session['attempt']}: {session['phase']} ({session['status']})", '']
+            heading = (f"Round {session['round']}: {session['participant']}" if senate
+                       else f"Attempt {session['attempt']}:")
+            lines += [f"{heading} {session['phase']} ({session['status']})", '']
             current = self.files.read(path / 'agent.json').get('agent')
             if isinstance(current, dict):
                 lines += render(current, current_turn=True)
@@ -267,7 +281,7 @@ class JobOutput:
                 continue
             if not isinstance(event, dict):
                 continue
-            if event.get("type") == "goal.phase_started":
+            if event.get("type") in ("goal.phase_started", "senate.phase_started"):
                 self.live = None
             elif event.get("type") == "agent.message_started":
                 self.live = {"parentId": event.get("parentId"), "blocks": {}}

@@ -77,7 +77,9 @@ filesystem job protocol, with a job directory and workspace prepared for each
 assignment.
 
 BPMN is one orchestration engine in this system. `asys-oneshot` uses the same
-worker execution libraries for a single assignment, and `asys` reads saved
+worker execution libraries for a single assignment. `asys-goal` and
+`asys-senate` submit jobs whose worker programs control implementation and review
+or group deliberation. `asys` reads saved
 runs independently of the engine. Other orchestration programs can reuse the
 runtime and workers. The BPMN engine accepts BPMN 2.0 XML with a small asys
 execution binding; see its [format and scope](asys-bpmn/README.md#bpmn-binding).
@@ -174,6 +176,21 @@ implementation turns, including those that continue without review. Either role
 can ask for human help through `asys-human-prompt`. The loop lives in the workers
 program, so BPMN can use it as an ordinary `goal` job too.
 It uses the configured `simple` model; `--model MODEL` overrides it for a run.
+
+To ask a group of agents for one answer, use the
+[Senate launcher](asys-senate/README.md) with a file describing its participants:
+
+```sh
+asys-senate ./env/research "Which option best satisfies our requirements?" \
+  --senate ./senate.json --workspace ./project
+```
+
+The Princeps introduces the topic, senators intervene one by one, and the
+Princeps checks for consensus after each round. After three rounds without
+agreement, the Princeps decides. Participants can select named environment
+agents and different models through the common Provider interface. Each can
+research online through `asys-agent`'s existing capabilities. Like goal, Senate
+is an ordinary workers job available to BPMN too.
 
 A workflow takes the same kind of environment and a Markdown request file:
 
@@ -277,6 +294,8 @@ The full command is `asys init DIR [--dcomp DIR] [--group GROUP]`; it creates
 | --- | --- |
 | [asys](docs/monitoring.md) | Supply system agents; initialize host state; configure models; inspect runs, logs, results, and agent transcripts. |
 | [asys-oneshot](asys-oneshot/README.md) | Run an assignment with the shared simple agent against a project workspace. |
+| [asys-goal](asys-goal/README.md) | Continue implementation until independent verification accepts the requested outcome. |
+| [asys-senate](asys-senate/README.md) | Deliberate through sequential senator interventions and return a consensus or Princeps decision. |
 | [asys-bpmn](asys-bpmn/README.md) | Execute BPMN workflows, handle control flow, and resume failed runs. |
 | [asys-workers](asys-workers/README.md) | Define worker environments, agent memory, skills, tools, and execution behavior. |
 | [asys-runtime](asys-runtime/README.md) | Execute filesystem jobs, supervise processes, and record their outcomes. |

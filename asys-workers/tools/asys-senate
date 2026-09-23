@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+import { program } from '../src/program.mjs';
+import { senate } from '../src/senate.mjs';
+
+program(senate).catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -39,6 +39,7 @@ build: host
 	$(MAKE) -C asys-bpmn build
 	$(MAKE) -C asys-oneshot host
 	$(MAKE) -C asys-goal host
+	$(MAKE) -C asys-senate host
 	$(MAKE) -C asys-human-interface build
 
 install:
@@ -46,6 +47,7 @@ install:
 	$(MAKE) -C asys-bpmn install
 	$(MAKE) -C asys-oneshot install-host
 	$(MAKE) -C asys-goal install-host
+	$(MAKE) -C asys-senate install-host
 	$(MAKE) -C asys-human-interface install
 
 test-deps:
@@ -59,6 +61,7 @@ test:
 	$(NODE) --test --test-concurrency=1 'asys-runtime/test/*.test.mjs'
 	$(MAKE) -C asys-oneshot test
 	$(MAKE) -C asys-goal test
+	$(MAKE) -C asys-senate test
 	@set -e; for directory in $(JS_PACKAGES); do (cd "$$directory" && $(NODE) --test --test-concurrency=1 'test/*.test.mjs'); done
 
 help:
