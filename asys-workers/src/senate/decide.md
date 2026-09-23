@@ -8,3 +8,10 @@ Return one JSON object with a nonempty `final` containing your complete decision
 and `exception: null`. If you cannot proceed, report a factual `final` and a
 nonempty `exception` explaining the blocker. Do not use Markdown fences around
 the JSON.
+
+Include any structured result fields requested by the original topic (such as
+approved, reason, findings or artifacts) at the top level of the same object,
+alongside final and exception. Use ordinary JSON values; keep final as readable
+prose rather than encoding a second JSON document in it. This terminal report
+becomes the Senate job result. The controller supplies consensus, rounds and
+decision; do not use those names for task-specific results.

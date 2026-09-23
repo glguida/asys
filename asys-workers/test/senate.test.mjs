@@ -122,6 +122,26 @@ test('consensus in the third round completes without a deciding turn', async t =
   assert.equal(result.decision, 'consensus');
 });
 
+for (const decision of ['consensus', 'princeps']) {
+  test(`the ${decision} answer preserves structured results and authoritative Senate metadata`, async t => {
+    const f = await fixture(t);
+    const verdict = { approved: false, reason: 'The numerical reference check failed.',
+      findings: [{ criterion: 'uncertainty', observed: 0, expected: 0.25 }],
+      artifacts: ['check.json'], optional: null };
+    const result = await f.run({ async executeAgent(context) {
+      const data = assignment(context);
+      const terminal = decision === 'consensus' ? data.phase === 'assess' : data.phase === 'decide';
+      if (!terminal) return { ...response(data, false), preliminary: 'Do not export intermediate fields.', approved: true };
+      return { ...response(data), ...verdict, consensus: true, rounds: 99, decision: 'invented' };
+    } });
+    assert.deepEqual(result, { final: `${decision === 'consensus' ? 'assess:1' : 'decide:3'}:Cicero`,
+      exception: null, ...verdict, consensus: decision === 'consensus',
+      rounds: decision === 'consensus' ? 1 : 3, decision });
+    assert.deepEqual((await f.state()).result, result, 'checkpoint retains structured fields');
+    assert.deepEqual(await f.run({ executeAgent() { assert.fail('completed structured result must replay unchanged'); } }), result);
+  });
+}
+
 test('participant models take precedence over the launch model and selected environment agents retain their persona', async t => {
   const config = configuration();
   config.princeps.model = 'fixture/chair';
@@ -229,12 +249,15 @@ test('a participant exception stops the senate without becoming a speech or a hu
     const result = await f.run({ async executeAgent(context) {
       const data = assignment(context);
       calls.push(label(data));
-      return data.phase === failedPhase ? { final: 'Unable to complete this assignment.', exception: 'Source unavailable' }
+      return data.phase === failedPhase ? { final: 'Unable to complete this assignment.', exception: 'Source unavailable',
+        diagnostics: { source: 'reference.csv', retryable: false }, consensus: true, rounds: 99, decision: 'invented' }
         : response(data, false);
     }, askHuman() { assert.fail('senate exceptions do not create human tasks'); } });
     assert.match(result.exception, /Source unavailable/);
     assert.equal(result.decision, null);
     assert.equal(result.consensus, false);
+    assert.notEqual(result.rounds, 99);
+    assert.deepEqual(result.diagnostics, { source: 'reference.csv', retryable: false });
     assert.equal((await f.state()).status, 'failed');
     assert.equal((await f.state()).transcript.length, calls.length - 1);
     assert.deepEqual(await f.run({ executeAgent() { assert.fail('an explicit participant failure is terminal'); } }), result);
