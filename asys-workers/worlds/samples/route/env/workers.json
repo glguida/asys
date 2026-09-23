@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "route-sample",
+  "types": {
+    "route-member": {
+      "command": [
+        "python3",
+        "/opt/asys/asys-workers/worlds/samples/route/participant.py"
+      ]
+    },
+    "route-global": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/route-global.json"
+      ]
+    },
+    "route-local": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/route-local.json"
+      ]
+    }
+  }
+}

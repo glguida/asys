@@ -19,6 +19,22 @@ PROVIDER = 'cyclo.provider.v1.Provider'
 HUMAN = 'asys.human.v1.Human'
 
 
+def human_workers(environment, config, selected=None):
+    """Resolve authoring metadata here; the runtime remains a command executor."""
+    if selected and selected.get('kind') == 'goal':
+        return True
+    from .worker_definitions import definition_command, definition_path, validate_definition
+    for name, worker in config['types'].items():
+        if Path(worker['command'][0]).name in {'asys-human', 'asys-goal'}:
+            return True
+        if worker['command'] == definition_command(name):
+            value = json.loads(definition_path(environment, name).read_text())
+            if isinstance(value, dict) and value.get('kind') == 'goal':
+                validate_definition(value, environment)
+                return True
+    return False
+
+
 def execution_options(parser):
     parser.add_argument('--workspace', type=Path, default=Path.cwd(), metavar='DIRECTORY',
                         help='actual project directory to work in (default: current directory)')
@@ -75,7 +91,7 @@ class EnvironmentHost(ComponentHost):
             system.write_text('system execution-preview\ncomponent environment environment\n')
             component = self.document('view', '--json', str(system))['components'][0]
         inputs = {entry['name']: entry['service'] for entry in component['inputs']}
-        human_worker = any(Path(worker['command'][0]).name in {'asys-human', 'asys-goal'} for worker in config['types'].values())
+        human_worker = human_workers(environment, config, getattr(self, 'worker_definition', None))
         if human_target is not None or human_worker:
             for entry in component['inputs'] + component['outputs']:
                 if entry['name'] == 'human' and entry['service'] != HUMAN:

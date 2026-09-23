@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -95,6 +95,59 @@ test('models without function tools receive a schema and return strict JSON', as
   assert.match(f.requests[0].frame.context.systemPrompt, /"maxItems":2/);
   assert.match(f.requests[0].frame.context.systemPrompt, /"enum":\["move","rest"\]/);
   assert.equal(JSON.parse(f.requests[0].frame.context.messages[0].content[0].text).objective, null);
+});
+
+test('shared and selected-agent skill instructions reach Provider without resources or unrelated agents', async t => {
+  const f = await fixture(t);
+  for (const [root, name, text] of [
+    [f.environment, 'evidence', 'SHARED_SKILL: Compare evidence before revising a plan.'],
+    [f.workers, 'coordination', 'WORKER_SKILL: Coordinate through observed artifacts.'],
+    [f.definition, 'local', 'SELECTED_SKILL: Preserve useful private memory.'],
+    [join(f.workers, 'agents', 'unselected'), 'secret', 'UNRELATED_AGENT_SKILL'],
+    [f.job.workspace, 'project', 'WORKSPACE_SKILL'],
+  ]) {
+    const path = join(root, 'skills', name);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'SKILL.md'), text);
+    await writeFile(join(path, 'resource.txt'), 'RESOURCE_CONTENT_MUST_NOT_LOAD');
+  }
+  await f.run();
+  const prompt = f.requests[0].frame.context.systemPrompt;
+  assert.match(prompt, /SHARED_SKILL/);
+  assert.match(prompt, /WORKER_SKILL/);
+  assert.match(prompt, /SELECTED_SKILL/);
+  assert.doesNotMatch(prompt, /UNRELATED_AGENT_SKILL|WORKSPACE_SKILL|RESOURCE_CONTENT_MUST_NOT_LOAD/);
+  assert.deepEqual(f.requests[0].frame.context.tools.map(tool => tool.name), ['submit_plan']);
+  assert.equal((await f.saved()).agent.skills.length, 3);
+});
+
+test('oversized or escaping skill instructions fail before inference', async t => {
+  for (const problem of ['oversize', 'symlink']) await t.test(problem, async t => {
+    const f = await fixture(t);
+    const directory = join(f.definition, 'skills', 'bounded');
+    await mkdir(directory, { recursive: true });
+    if (problem === 'oversize') await writeFile(join(directory, 'SKILL.md'), 'x'.repeat(16385));
+    else {
+      const outside = join(f.job.workspace, 'instructions.md');
+      await writeFile(outside, 'PRIVATE_WORKSPACE');
+      await symlink(outside, join(directory, 'SKILL.md'));
+    }
+    await assert.rejects(f.run(), /Swarm instruction/);
+    assert.equal(f.requests.length, 0);
+  });
+});
+
+test('aggregate skill instructions and file count are bounded', async t => {
+  for (const problem of ['bytes', 'count']) await t.test(problem, async t => {
+    const f = await fixture(t);
+    for (let i = 0; i < (problem === 'bytes' ? 5 : 17); i++) {
+      const path = join(f.definition, 'skills', `skill-${i}`);
+      await mkdir(path, { recursive: true });
+      await writeFile(join(path, 'SKILL.md'), problem === 'bytes' ? 'x'.repeat(16384) : 'small');
+    }
+    await assert.rejects(f.run(), problem === 'bytes' ? /exceed 65536 bytes/ : /at most 16 skills/);
+    assert.equal(f.requests.length, 0);
+  });
 });
 
 test('local action schema references keep their meaning inside the function tool schema', async t => {

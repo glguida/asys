@@ -1,36 +1,58 @@
 # Program a swarm toward a goal
 
-A swarm is one worker job. You supply its mission, member policy and an
-independent world service. The world defines what agents can observe and do,
+A swarm is one worker job. Its named definition supplies a member policy and
+world executable; each run supplies a request. The world defines what agents can observe and do,
 what their actions actually change, how success is measured and what to export.
 A prompt alone does not create capabilities or establish correctness.
 
 | Input | Where it belongs |
 | --- | --- |
-| Mission and population | Swarm configuration passed as job data |
+| Request | `asys-run ENVIRONMENT NAME REQUEST`, or BPMN job input |
+| Population, limits and measured target | `ENVIRONMENT/workers/NAME.json` |
 | Agent prompts, models and tools | Worker environment |
 | Private member memory and turn scheduling | Swarm worker algorithm |
 | Rules, observations, objective evaluation | World program on a runtime channel |
 | Browser presentation | Optional host-served view assets |
 
-## Configure the job
+## Configure the named worker
+
+Run `asys-workers ENVIRONMENT add swarm NAME` to create a definition and editable
+member prompt, evaluator scaffold and renderer. Edit it with `asys-workers
+ENVIRONMENT edit NAME`. The complete definition has this shape:
 
 ```json
 {
   "version": 1,
-  "name": "Reach the target",
-  "mission": "Cooperate to reach the measured target using permitted actions.",
-  "world": {"channel": "world", "settings": {}, "timeoutSeconds": 30},
-  "objective": {"target": 8},
-  "agents": {"count": 4, "type": "swarm-step"},
-  "limits": {"turns": 20, "concurrency": 2, "decisions": 80},
-  "seed": 7
+  "kind": "swarm",
+  "config": {
+    "version": 1,
+    "world": {
+      "command": ["python3", "/opt/asys/environment/worlds/counter/serve.py"],
+      "view": "worlds/counter/view.mjs",
+      "settings": {},
+      "timeoutSeconds": 30
+    },
+    "objective": {"target": 8},
+    "agents": {"count": 4, "type": "swarm-step"},
+    "limits": {"turns": 20, "concurrency": 2, "decisions": 80},
+    "seed": 7
+  }
 }
 ```
 
-The configuration is data. There is no world module, executable import path or
-scenario directory mounted into workers. The launcher selects the world process
-separately through `--world`, `--world-command` or `--world-external`.
+Install the world program and its dependencies in the environment image. The
+configured executable receives `ASYS_RUNTIME_ROOT` and `ASYS_WORLD_CHANNEL` and
+is supervised within the swarm job. The dispatcher assigns private channels for
+each job. It does not import world code. A custom world may call a remote service
+or another runtime component while preserving the synchronous world contract.
+
+```sh
+asys-run ENVIRONMENT NAME "Cooperate to reach the measured target" --view
+```
+
+The request becomes the swarm's `mission`. The standalone scenario launcher
+continues accepting the inner config directly and can manage separate host or
+component worlds using its existing world options.
 
 `mission` is natural-language guidance; `objective` is data for the world. Set
 `objective` to `null` for exploration with no pass/fail goal. The members can
@@ -63,8 +85,9 @@ The swarm writes `out`; the world reads `out` and writes replies to `in`.
 Request IDs correlate responses; run IDs identify the experiment. Both
 endpoints must see the same channel directory.
 
-Use one swarm client and one world service per channel. Concurrent runs need
-distinct channel directories; replay needs its own channel or a stopped run.
+Use one swarm client and one world service per channel. Named dispatch assigns
+distinct channels automatically. Direct integrations and replay need their own
+channel directories, or a stopped run.
 Runtime's acknowledgement cursor belongs to that consumer.
 
 The protocol supports a description containing implementation identity and an
@@ -139,7 +162,7 @@ Service(os.environ["ASYS_RUNTIME_ROOT"], rules, identity="counter-v1",
         channel=os.environ.get("ASYS_WORLD_CHANNEL", "world")).serve()
 ```
 
-For a component deployment, package the program and its dependencies in its
+For a separately managed component deployment, package the program and its dependencies in its
 image and declare it in `component.dcomp`. Accept `--root` and `--channel` so the
 launcher can pass the runtime location, and supply the Docker health check
 required by dcomp. The complete

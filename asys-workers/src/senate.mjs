@@ -29,7 +29,7 @@ export async function senate({ job, argv, env, signal }, { executeAgent = agent,
   const { values } = parseArgs({ args: argv, options: { model: { type: 'string' } } });
   const input = job.input;
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Senate input must be a JSON object');
-  const topic = requiredString(input.topic, 'Senate topic');
+  const topic = requiredString(input.topic ?? input.request, 'Senate topic');
   const config = senateConfig(input.senate, values.model, env);
   const participants = [config.princeps, ...config.senators].map((participant, index) => {
     const base = participant.agent === null ? systemAgentDefinition(env.ASYS_ENVIRONMENT_DIR, 'simple')

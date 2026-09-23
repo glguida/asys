@@ -18,12 +18,47 @@ flowchart LR
     H <-->|Runtime control and events| S
 ```
 
-The world can run as a host process or a separate component. Both use the same
-versioned JSON protocol over an asys-runtime channel. The swarm does not import
-world code, receive a Python module path, or mount a scenario source directory.
-World implementations can use any language that implements the protocol.
+Named swarms select an environment-installed world executable. Workers supervise
+it inside the parent job and communicate through a private synchronous runtime
+channel. World implementations can use any language that implements the protocol.
+Direct runtime integrations may also manage a world on the host or in a separate
+component using that same protocol.
+
+## Run a named swarm
+
+The [worker tools](../docs/workers-and-environments.md) create and inspect multiple
+named definitions in one environment:
+
+```sh
+asys-workers ./env/development add swarm explore
+asys-workers ./env/development edit explore
+asys-run ./env/development explore "Find a candidate passing the configured check" --view
+```
+
+Implement the generated evaluator and configure its initial candidate before
+running. The scaffold blocks model calls until that check is ready. The member
+prompt, executable, world settings and renderer are explicit editable files.
+
+For a complete example needing no model, use the
+[delivery-route environment](../asys-workers/worlds/README.md):
+
+```sh
+asys-run ./asys-workers/worlds/samples/route/env route-global \
+  "Find the shortest valid delivery loop" --view
+asys-run ./asys-workers/worlds/samples/route/env route-local \
+  "Explore nearby candidates for a shorter delivery loop" --view
+```
+
+The two named swarms use the same algorithm and independently checked artifact
+format. Their worlds expose either global rankings or local torus observations.
+`top_k: 0` exposes every retained artifact; a positive value exposes that many
+best artifacts. The host embeds a renderer module, with shared controls and
+recorded playback. This deterministic example verifies the mechanism; its
+scripted members do not demonstrate model intelligence.
 
 ## Try Rainkeepers
+
+The existing scenario launcher also supports separately managed world services.
 
 The [terrarium example](examples/terrarium) is a complete world service, browser
 view and two worker environments. Eight inhabitants build gardens and water
@@ -93,7 +128,8 @@ inside workers, not another orchestration service or a reasoning leader.
 
 ## Goals and results
 
-`mission` explains what members should pursue. `objective` supplies machine-
+For a named swarm, the run's request becomes `mission`, explaining what members
+should pursue. `objective` in the definition supplies machine-
 readable criteria to the world. Only the world's `evaluate` result can report
 success. With `objective: null`, the swarm explores until a budget ends and
 reports `achieved: null`. A completed run can therefore have an unmet objective.
@@ -115,8 +151,11 @@ asys-swarm resume RUN
 asys-swarm cancel RUN
 ```
 
-Use the same `--root` run-directory setting for these commands. Pause finishes
-the current turn before stopping scheduling. Cancellation stops pending member
+Use the same `--root` system-state setting for these commands. Pause finishes
+the current turn before stopping scheduling. In 0.2.0, `--root` denotes the
+system directory, with runs under `ROOT/runs`, matching `asys-run` and `asys`.
+For an older custom run directory, pass its parent or select a full run path.
+Cancellation stops pending member
 work and preserves the last committed world. Browser controls use runtime
 channels; the view reads saved snapshots and never calls world code.
 Cancellation and the wall-clock limit do not wait for another world operation;

@@ -21,7 +21,8 @@ from asys_runtime.queue import Queue, TERMINAL as JOB_TERMINAL
 from asys_swarm.config import load_config, package_file
 from .execution import EnvironmentHost, execution_options, prepare_run
 from .lifecycle import Interrupted, LaunchError
-from .runs import Runs, default_root
+from .runs import Runs
+from .state import state_root
 from .swarm_view import CHANNEL, TERMINAL, Viewer, control
 
 
@@ -64,7 +65,7 @@ def snapshot_package(source, destination, *, exclude=()):
 
 def arguments(argv):
     common = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    common.add_argument('--root', type=Path, default=default_root(), metavar='DIRECTORY', help='saved run state directory')
+    common.add_argument('--root', type=Path, default=state_root(), metavar='DIRECTORY', help='asys system root; runs are saved under ROOT/runs')
     global_args, remaining = common.parse_known_args(argv)
     parser = argparse.ArgumentParser(prog='asys-swarm', parents=[common], allow_abbrev=False,
                                      description='Run swarms defined by ordinary configuration and world files.')
@@ -229,7 +230,7 @@ class Launcher(EnvironmentHost):
         self.config = load_config(config_path)
         if self.config['world']['channel'] == CHANNEL:
             raise LaunchError('The world channel must differ from the swarm control channel')
-        self.id, self.directory, workspace = prepare_run(self.args.root, self.args.workspace)
+        self.id, self.directory, workspace = prepare_run(state_root('runs', root=self.args.root), self.args.workspace)
         self.lease = (self.directory / 'launcher.lock').open('xb')
         fcntl.flock(self.lease, fcntl.LOCK_EX)
         name = re.sub(r'[^a-z0-9-]+', '-', config_path.stem.lower()).strip('-')[:32] or 'swarm'
@@ -405,7 +406,7 @@ def main(argv=None):
     if args.command != 'run':
         viewer = None
         try:
-            directory = Runs(args.root).select(args.run)
+            directory = Runs(state_root('runs', root=args.root)).select(args.run)
             if args.command != 'view':
                 event = control(directory, args.command)
                 print(json.dumps(event, ensure_ascii=False))

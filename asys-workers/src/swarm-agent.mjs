@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import { dirname, join } from 'node:path';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import Ajv from 'ajv';
 import { providerClient } from './provider.mjs';
@@ -8,6 +8,7 @@ import { groupModels, streamProvider } from './provider-adapter.mjs';
 import { systemModel } from './system-model.mjs';
 import { writeJSON } from './files.mjs';
 import { requiredString } from './values.mjs';
+import { inside, instructionFile, swarmSkills } from './swarm-skills.mjs';
 
 // A swarm decision is one bounded inference, not a coding-agent session. The
 // only tool describes a proposed plan; the controller world validates and applies it.
@@ -33,6 +34,8 @@ export async function swarmAgent({ job, argv = [], env = process.env, signal }, 
     state = { id: job.id, agent: { kind: 'swarm', model: modelId, name: definition.name,
       directory: definition.directory, environment: definition.environment,
       promptHash: createHash('sha256').update(definition.prompt).digest('hex'),
+      skills: definition.skills.map(skill => ({ path: skill.path,
+        hash: createHash('sha256').update(skill.text).digest('hex') })),
       prompt: input.mission, steps: 0, session } };
     save();
     const client = provider ?? providerClient(env);
@@ -56,6 +59,8 @@ export async function swarmAgent({ job, argv = [], env = process.env, signal }, 
       'Memory replaces your previous memory. Retain the useful facts you will need on subsequent turns.',
       definition.prompt,
       definition.tools,
+      definition.skills.length ? 'The following explicitly installed skills provide instructions for this decision. Linked resources are not loaded; only the supplied world actions are available.' : '',
+      ...definition.skills.map(skill => `Skill ${skill.path}:\n${skill.text}`),
       toolsSupported
         ? 'Call submit_plan exactly once. Its arguments must include actions and memory. Do not call any other tool.'
         : `Return exactly one JSON object matching this schema, with no Markdown or surrounding prose:\n${JSON.stringify(parameters)}`,
@@ -164,13 +169,16 @@ function swarmDefinition(env, name) {
   if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)) throw new Error('Agent name is required (--agent NAME)');
   const environment = realpathSync(requiredString(env.ASYS_ENVIRONMENT_DIR, 'ASYS_ENVIRONMENT_DIR'));
   const workers = realpathSync(env.ASYS_WORKERS_DIR ?? environment);
-  const directory = realpathSync(join(workers, 'agents', name));
+  const selected = join(workers, 'agents', name);
+  if (lstatSync(selected).isSymbolicLink()) throw new Error('Selected swarm agent directory must not use a symlink');
+  const directory = realpathSync(selected);
+  inside(join(workers, 'agents'), directory);
   if (!statSync(directory).isDirectory()) throw new Error(`Agent ${name} must be a directory`);
-  const read = path => existsSync(path) ? readFileSync(path, 'utf8').trim() : '';
-  // Deliberately read just these two instruction files. No resource discovery,
-  // extension import, shell, or filesystem tools are available to the model.
-  return { name, directory, environment, prompt: read(join(directory, 'prompt.md')),
-    tools: read(join(environment, 'tools.md')) };
+  // Only designated instruction roots are read. Skill resources, extensions,
+  // workspace files and other agents' definitions are never loaded.
+  return { name, directory, environment, prompt: instructionFile(directory, join(directory, 'prompt.md')),
+    tools: instructionFile(environment, join(environment, 'tools.md')),
+    skills: swarmSkills([environment, workers, directory]) };
 }
 
 function planSchema(input) {

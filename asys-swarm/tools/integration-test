@@ -73,7 +73,7 @@ def main():
                     '--world-command', json.dumps([sys.executable, str(DEMO / 'world/serve.py')])]
                 with stdout.open('w') as output, stderr.open('w') as errors:
                     process = subprocess.Popen([str(CLI), 'run', str(root / 'swarm.json'),
-                        str(DEMO / 'env/scripted'), *world_args, '--root', str(root / 'runs'),
+                        str(DEMO / 'env/scripted'), *world_args, '--root', str(root),
                         '--workspace', str(workspace), '--system', system,
                         '--dcomp-state-root', str(root / 'dcomp'), '--runtime-root', str(root / 'proxy'),
                         '--view'], stdout=output, stderr=errors)

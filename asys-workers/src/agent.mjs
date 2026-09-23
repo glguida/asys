@@ -4,20 +4,21 @@ import { runAgent } from './agent-session.mjs';
 import { providerClient } from './provider.mjs';
 import { writeJSON } from './files.mjs';
 import { requiredString } from './values.mjs';
-import { agentDefinition } from './agent-definition.mjs';
+import { agentDefinition, systemAgentDefinition } from './agent-definition.mjs';
+import { systemModel } from './system-model.mjs';
 import { DEFAULT_INFERENCE_IDLE_TIMEOUT_MS } from './provider-adapter.mjs';
 
 export async function agent({ job, argv, env, signal }, { provider = providerClient(env), definition: suppliedDefinition, event, sessionFile } = {}) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     model: { type: 'string' }, agent: { type: 'string' }, extension: { type: 'string', multiple: true },
-    'max-steps': { type: 'string' },
+    'max-steps': { type: 'string' }, 'system-agent': { type: 'boolean' },
   } });
   const input = job.input ?? {};
   if (typeof input !== 'object' || Array.isArray(input)) throw new Error('Agent input must be a JSON object');
   const maxSteps = values['max-steps'] ?? input.maxSteps;
   const config = {
-    model: requiredString(values.model, 'Agent model (--model)'),
-    prompt: requiredString(positionals.length ? positionals.join(' ') : input.prompt, 'Agent prompt'),
+    model: systemModel('simple', values.model, env),
+    prompt: requiredString(positionals.length ? positionals.join(' ') : input.prompt ?? input.request, 'Agent prompt'),
     maxSteps: maxSteps == null ? undefined : Number(maxSteps),
     inferenceIdleTimeoutMs: Number(env.ASYS_INFERENCE_IDLE_TIMEOUT_MS ?? DEFAULT_INFERENCE_IDLE_TIMEOUT_MS),
     options: input.options ?? {},
@@ -29,7 +30,10 @@ export async function agent({ job, argv, env, signal }, { provider = providerCli
   if (!config.options || typeof config.options !== 'object' || Array.isArray(config.options)) throw new Error('Agent options must be an object');
   const transcript = join(dirname(job.result), 'agent.json');
   const state = { id: job.id };
-  const definition = suppliedDefinition ?? agentDefinition(env.ASYS_ENVIRONMENT_DIR, values.agent, env.ASYS_WORKERS_DIR);
+  if (values['system-agent'] && values.agent !== 'simple') throw new Error('Only simple is a built-in agent');
+  const definition = suppliedDefinition ?? (values['system-agent']
+    ? systemAgentDefinition(env.ASYS_ENVIRONMENT_DIR, values.agent)
+    : agentDefinition(env.ASYS_ENVIRONMENT_DIR, values.agent, env.ASYS_WORKERS_DIR));
   return runAgent({ config, job: state, workspace: job.workspace,
     jobDirectory: job.directory, definition, sessionFile, extensionPaths: (values.extension ?? []).map(path => resolve(definition.workersDirectory, path)),
     signal, provider,

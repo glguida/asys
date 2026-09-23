@@ -23,6 +23,49 @@ const coordinator = fileURLToPath(new URL('./coordinator.py', import.meta.url));
 const binding = (type = 'program', attrs = '') => `<bpmn:extensionElements><asys:job type="${type}" ${attrs}/></bpmn:extensionElements>`;
 const programTask = (id, extra = '') => `<bpmn:task id="${id}">${binding('program', `input="= {step: &quot;${id}&quot;${extra}}"`)}</bpmn:task>`;
 
+test('BPMN runs a named swarm as one job and branches on its independently measured result', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  const workers = fileURLToPath(new URL('../../asys-workers/', import.meta.url));
+  const definition = JSON.parse(await readFile(join(workers, 'worlds/samples/route/env/workers/route-global.json'), 'utf8'));
+  definition.config.world.command = ['python3', join(workers, 'worlds/leaderboard/serve.py'), '--evaluator',
+    JSON.stringify(['python3', join(workers, 'worlds/samples/route/evaluate.py')])];
+  const directory = join(f.root, 'env/routes');
+  await mkdir(join(directory, 'workers'), { recursive: true });
+  const path = join(directory, 'workers/route-global.json');
+  await writeFile(path, JSON.stringify(definition));
+  const queue = await f.addEnvironment('routes', {
+    'route-global': { command: ['python3', join(workers, 'tools/asys-worker'), '--definition', path] },
+    'route-member': { command: ['python3', join(workers, 'worlds/samples/route/participant.py')] },
+  });
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: await readFile(new URL('./fixtures/named-swarm.bpmn', import.meta.url), 'utf8') });
+  const request = 'Find the shortest valid delivery loop.';
+  await f.runtime.startRun({ environment: 'routes', id: 'run', workflowId,
+    variablesJson: JSON.stringify({ request }) });
+  const run = await finished(f, 'run', { timeout: 25000 });
+  const result = JSON.parse(run.outputJson).searchResult;
+  assert.equal(result.exception, null);
+  assert.equal(result.output.mission, request);
+  assert.equal(result.output.achieved, true);
+  assert.equal(result.output.metrics.baselineScore, 44);
+  assert.equal(result.output.metrics.bestScore, 16);
+  assert.equal(result.output.usage.totalTokens, 0);
+  const jobs = Object.values(f.runtime.record('run').jobs);
+  assert.equal(jobs.length, 1, 'member attempts are internal to one runtime job');
+  const job = jobs[0], directoryPath = join(f.root, 'jobs', job.id);
+  assert.equal(job.type, 'route-global');
+  assert.deepEqual((await queue.request(job.id)).input, { request });
+  const queueState = await queue.state(job.id);
+  assert.equal(queueState.status, 'done');
+  assert.deepEqual(queueState.result, result);
+  assert.deepEqual(await readdir(join(f.environments.directory('routes'), 'jobs')), [job.id]);
+  const metadata = JSON.parse(await readFile(join(directoryPath, 'worker.json'), 'utf8'));
+  assert.equal(metadata.control_channel, `swarm-${job.id}`);
+  assert.equal(metadata.world_channel, `world-${job.id}`);
+  const attempts = await readdir(join(directoryPath, 'swarm/world'));
+  assert.equal(attempts.length, 1);
+  assert.equal(JSON.parse(await readFile(join(directoryPath, 'swarm/world', attempts[0], 'state.json'), 'utf8')).status, 'stopped');
+});
+
 for (const verified of [true, false]) {
   test(`BPMN runs the goal worker as one ordinary job with verified=${verified}`, async t => {
     const f = await fixture(t);
@@ -467,11 +510,11 @@ async function senateFixture(t, response) {
   return f;
 }
 
-async function finished(f, id = 'run') {
+async function finished(f, id = 'run', options) {
   const run = await until(() => {
     const run = f.runtime.getRun({ id }).run;
     return ['completed', 'failed', 'cancelled'].includes(run.status) && run;
-  });
+  }, options);
   assert.equal(run.status, 'completed', run.error);
   return run;
 }

@@ -1,5 +1,50 @@
 # Environments and teams
 
+## Author named workers and environment resources
+
+Keep worker definitions separate from installed tools and shared skills. One
+environment has one Dockerfile and can contain multiple agents, goals, Senates
+and swarms:
+
+```sh
+asys-workers ./env/development add agent editor
+asys-workers ./env/development add goal repair
+asys-workers ./env/development add senate review
+asys-workers ./env/development add swarm explore
+asys-workers ./env/development list
+asys-workers ./env/development describe review
+asys-workers ./env/development edit review
+asys-environment ./env/development add-skill ./skills/testing
+asys-environment ./env/development dockerfile ./Development.Dockerfile
+asys-environment ./env/development edit
+asys-run ./env/development editor "Improve error handling" --workspace ./project
+```
+
+Definitions use `{"version":1,"kind":"agent","config":{"agent":"editor"}}`
+in `workers/NAME.json`, with prompts in `agents/editor/`. Goal configuration
+accepts `model` and `maxAttempts`. Senate configuration contains `version:1`,
+`princeps` and `senators`. Swarm configuration selects member type/count, world
+executable/settings, measured target and budgets. The generated swarm evaluator
+must be implemented before execution; it blocks inference while unconfigured.
+
+Authoring creates the corresponding ordinary command binding in `workers.json`.
+Both host and BPMN pass `{"request":"..."}` to that named type; optional
+`parameters` accept `maxSteps` for agents or `maxAttempts` for goals. Commands and
+world programs are trusted configuration, never request parameters. A BPMN
+binding can use `<asys:job type="review" input="= {request: request}"/>`.
+The existing direct command formats below remain supported.
+
+`simple` and `goal` are available without creating a named definition unless a
+user definition or type already owns those names. The environment still provides
+the tools, skills and component interfaces. `asys-run` uses the current directory
+as workspace by default; an existing worktree is an ordinary selectable workspace.
+
+Shared skills are copied completely into `skills/`, including supporting assets.
+Normal agents and goal/Senate participants discover shared and selected-agent
+skills. Bounded swarm members receive only those `SKILL.md` instructions, limited
+to 16 files, 16 KiB each and 64 KiB combined; linked resources are not opened by
+that adapter. Available swarm actions come from the world contract.
+
 ## Design responsibilities before role names
 
 A team is a set of role definitions and job contracts, coordinated by a workflow.

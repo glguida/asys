@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from asys.transcript import JobOutput, render
 from asys.progress import AgentProgress
+from asys.runs import Runs
 
 
 class TranscriptTest(unittest.TestCase):
@@ -325,6 +326,89 @@ class SwarmTranscriptTest(unittest.TestCase):
             with log.open('a') as out:
                 out.write(json.dumps({'type': 'swarm.completed', 'data': {'reason': 'objective'}}) + '\n')
             self.assertEqual(progress.observe(job)['detail'], 'swarm completed: objective')
+
+
+class NamedWorkerMonitorTest(unittest.TestCase):
+    """Exercise the saved-job path used by top with arbitrary runtime names."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='asys-named-monitor-')
+        self.addCleanup(temporary.cleanup)
+        self.run = Path(temporary.name) / 'run'
+        self.jobs = self.run / 'runtime/environments/example/jobs'
+        self.jobs.mkdir(parents=True)
+        self.runs = Runs(self.run)
+
+    def job(self, name, kind=None):
+        runtime = self.jobs / name
+        runtime.mkdir()
+        execution = self.run / 'jobs' / name
+        execution.mkdir(parents=True)
+        (runtime / 'state.json').write_text(json.dumps({
+            'id': name, 'type': name, 'status': 'running'}))
+        (runtime / 'request.json').write_text(json.dumps({
+            'id': name, 'type': name, 'metadata': {'name': name},
+            'directory': '../../../jobs/' + name,
+            'workspace': '../../../workspaces/' + name}))
+        if kind:
+            (execution / 'worker.json').write_text(json.dumps({
+                'version': 1, 'kind': kind,
+                'definition': f'/opt/asys/environment/workers/{name}.json'}))
+        return execution
+
+    def test_named_algorithms_keep_rich_transcripts_and_live_progress(self):
+        cases = [
+            ('repair', 'goal', 'Goal', 'attempt 2 implement: started',
+             {'type': 'goal.phase_started', 'attempt': 2, 'phase': 'implement'}),
+            ('review', 'senate', 'Senate', 'round 1 Reviewer intervene: started',
+             {'type': 'senate.phase_started', 'round': 1, 'participant': 'Reviewer', 'phase': 'intervene'}),
+            ('explore', 'swarm', 'Swarm', 'swarm turn 3 committed',
+             {'type': 'swarm.tick', 'data': {'turn': 3}}),
+        ]
+        for name, kind, title, detail, event in cases:
+            with self.subTest(name=name, kind=kind):
+                directory = self.job(name, kind)
+                (directory / 'stdout.log').write_text(json.dumps(event) + '\n')
+                if kind == 'swarm':
+                    phase = directory / 'swarm/decisions/decision-3'
+                    phase.mkdir(parents=True)
+                    (directory / 'swarm/checkpoint.json').write_text(json.dumps({
+                        'version': 2, 'agents': ['agent-001'], 'status': 'running',
+                        'turn': 3, 'decisions': 3, 'config': {'mission': 'Explore alternatives'}}))
+                    (phase / 'state.json').write_text(json.dumps({
+                        'id': 'decision-3', 'agent': 'agent-001', 'turn': 3, 'status': 'running'}))
+                else:
+                    phase = directory / 'phases/current'
+                    phase.mkdir(parents=True)
+                    session = {'directory': 'phases/current', 'phase': event['phase'], 'status': 'running'}
+                    checkpoint = {'status': 'running', 'sessions': [session]}
+                    if kind == 'goal':
+                        checkpoint.update(version=3, goal='Repair the failing check')
+                        session['attempt'] = 2
+                    else:
+                        checkpoint.update(version=1, topic='Review the proposed repair')
+                        session.update(round=1, participant='Reviewer')
+                    (directory / f'{kind}.json').write_text(json.dumps(checkpoint))
+                (phase / 'agent.json').write_text(json.dumps({'agent': {'session': {'entries': [
+                    {'type': 'message', 'message': {'role': 'assistant', 'content': f'{name} participant response'}}
+                ]}}}))
+                job = next(job for job in self.runs.jobs(self.run) if job['id'] == name)
+                self.assertEqual(job['type'], name, 'the runtime type must remain the named definition')
+                self.assertEqual(job['detail'], detail)
+                actual_title, lines = JobOutput().read(job)
+                self.assertEqual(actual_title, title)
+                self.assertIn(f'{name} participant response', '\n'.join(lines))
+
+    def test_plain_program_names_and_metadata_do_not_invent_transcripts(self):
+        for name, kind in [('repair', None), ('review', None), ('explore', None),
+                           ('goal', None), ('pending-review', 'senate')]:
+            with self.subTest(name=name, kind=kind):
+                directory = self.job(name, kind)
+                (directory / 'stdout.log').write_text('ordinary program output\n')
+                job = next(job for job in self.runs.jobs(self.run) if job['id'] == name)
+                self.assertEqual(job['detail'], 'ordinary program output')
+                self.assertNotIn('agent', job)
+                self.assertEqual(JobOutput().read(job), ('Logs', ['stdout: ordinary program output']))
 
 
 if __name__ == "__main__":

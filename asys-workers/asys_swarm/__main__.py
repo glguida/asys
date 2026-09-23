@@ -10,6 +10,7 @@ from asys_runtime.channel import channel_root
 
 from .engine import Engine, TERMINAL, TimeLimit
 from .config import validate_config
+from .world_process import WorldProcess
 
 
 def runtime_root(environment):
@@ -45,7 +46,7 @@ def main(argv=None, *, environment=None):
         stopping = True
 
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
-    engine, output, code = None, None, 1
+    engine, output, code, world_process = None, None, 1, None
     channel_leases = []
     try:
         payload = read_json(environment['ASYS_INPUT'])
@@ -67,7 +68,11 @@ def main(argv=None, *, environment=None):
         workers = Path(environment.get('ASYS_WORKERS_DIR', definition)).resolve()
         engine = Engine(root, state_directory,
                         environment['ASYS_WORKSPACE'], definition, channel=payload.get('channel', 'swarm'),
-                        external=workers if workers != definition else None, stopping=lambda: stopping)
+                        external=workers if workers != definition else None, stopping=lambda: stopping,
+                        health=lambda: world_process.check() if world_process else None)
+        if configuration['world'].get('command') and (not engine.state or engine.state['status'] not in TERMINAL):
+            world_process = WorldProcess(state_directory / 'world', configuration['world']['command'],
+                                         environment, root, configuration['world']['channel'])
         engine.start(payload)
         while not stopping and engine.state['status'] not in TERMINAL:
             engine.pump()
@@ -95,8 +100,12 @@ def main(argv=None, *, environment=None):
                   'status': 'interrupted' if isinstance(error, InterruptedError) else 'failed'}
     finally:
         try:
-            if engine is not None:
-                engine.close(interrupted=stopping or engine.state is None or engine.state['status'] not in TERMINAL)
+            try:
+                if engine is not None:
+                    engine.close(interrupted=stopping or engine.state is None or engine.state['status'] not in TERMINAL)
+            finally:
+                if world_process is not None:
+                    world_process.close()
             if output is not None:
                 write_json(environment['ASYS_RESULT'], output)
         finally:

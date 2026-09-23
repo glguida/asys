@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "kind": "swarm",
+  "description": "Deterministic delivery-route sample with independent measurement",
+  "config": {
+    "version": 1,
+    "world": {
+      "command": [
+        "python3",
+        "/opt/asys/asys-workers/worlds/torus/serve.py",
+        "--evaluator",
+        "[\"python3\", \"/opt/asys/asys-workers/worlds/samples/route/evaluate.py\"]"
+      ],
+      "view": "worlds/torus/view.mjs",
+      "settings": {
+        "problem": {
+          "name": "Delivery loop",
+          "cities": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              4,
+              0
+            ],
+            [
+              4,
+              2
+            ],
+            [
+              4,
+              4
+            ],
+            [
+              2,
+              4
+            ],
+            [
+              0,
+              4
+            ],
+            [
+              0,
+              2
+            ]
+          ],
+          "initial": {
+            "tour": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ]
+          }
+        },
+        "width": 4,
+        "height": 4,
+        "radius": 1
+      }
+    },
+    "agents": {
+      "count": 4,
+      "type": "route-member"
+    },
+    "objective": {
+      "scoreAtMost": 16
+    },
+    "limits": {
+      "turns": 16,
+      "decisions": 64,
+      "concurrency": 4,
+      "seconds": 120,
+      "jobSeconds": 10,
+      "actions": 1
+    },
+    "seed": 0
+  }
+}

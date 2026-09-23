@@ -175,7 +175,7 @@ the parsed configuration in `senate_config`:
 
 Declare `xmlns:asys="urn:asys:workflow:1"` on the BPMN definitions. Here,
 `senate_config` is a workflow variable containing the JSON object, not a filename.
-For example, an earlier program task can read a roster packaged in the environment
+For example, an earlier program task can read a configuration packaged in the environment
 and return it into that variable. The host's `--senate FILE` option is specific to
 `asys-senate`; a BPMN task supplies the parsed object in its input. See
 [workflow authoring](../asys-bpmn/AUTHORING.md) for environment and data bindings.
@@ -265,7 +265,7 @@ layout is:
 
 ```text
 RUN_DIRECTORY/
-  senate.json                       # standalone host's input roster snapshot
+  senate.json                       # standalone host's input configuration snapshot
   jobs/JOB_ID/
     senate.json                     # controller state and completed debate
     result.json                     # the Senate's returned result
@@ -283,7 +283,7 @@ RUN_DIRECTORY/
       ...
 ```
 
-The run-level `senate.json` is only the standalone launcher's roster copy; the
+The run-level `senate.json` is only the standalone launcher's configuration copy; the
 job-level file contains the discussion. Its `transcript` array stores completed
 contributions in speaking order, each with `phase`, `round`, `participant` and
 `final`, plus `consensus` on assessments. The full tool conversations are in the
@@ -338,7 +338,7 @@ recovery or cancellation; it does not consume a discussion round. Permanent
 agent exceptions still fail the Senate.
 
 Re-executing an interrupted job against its existing directory restores saved
-controller state and participant conversations. The topic, resolved roster and
+controller state and participant conversations. The topic, resolved configuration and
 workspace must match. Checkpointed contributions are retained; the interrupted
 turn may continue with partial tool effects already present. Recovery is not a
 rollback or a guarantee that every tool operation runs exactly once.

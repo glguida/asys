@@ -69,7 +69,7 @@ round and participant headings, including the agents' tool activity. Its job
 directory contains `senate.json` with the ordered completed speeches and final
 outcome; full conversations live under `phases/` and `participants/`. Find that
 directory with `asys status RUN --json`. The standalone launcher's run-level
-`senate.json` is only the input roster snapshot.
+`senate.json` is only the input configuration snapshot.
 
 `logs` shows execution logs; Markdown export is optional manual postprocessing.
 See the [Senate guide](../asys-senate/README.md#read-the-debate) for the saved layout

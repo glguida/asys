@@ -27,13 +27,14 @@ class TimeLimit(TimeoutError):
 
 class Engine:
     def __init__(self, root, state, workspace, environment, *, channel='swarm', external=None,
-                 executor_factory=Executor, world_factory=World, stopping=lambda: False):
+                 executor_factory=Executor, world_factory=World, stopping=lambda: False, health=lambda: None):
         self.root, self.directory, self.workspace = (
             Path(path).resolve() for path in (root, state, workspace))
         self.environment = Environment(environment, external=external)
         self.world_factory = world_factory
         self.channel = channel
         self.stopping = stopping
+        self.health = health
         self.cancel_requested = False
         self.finishing = False
         self.starting_id = None
@@ -72,6 +73,7 @@ class Engine:
         deadline = self.state['deadline'] if self.state else self.start_deadline
         if deadline is not None and time.time() >= deadline:
             raise TimeLimit('Swarm time limit expired while waiting for the world')
+        self.health()
 
     def _published_sequence(self):
         if not self.state:
@@ -179,6 +181,12 @@ class Engine:
         if (config['agents']['type'] == 'swarm' or any(Path(argument).name == 'asys-swarm' for argument in command)
                 or any(command[index:index + 2] == ['-m', 'asys_swarm'] for index in range(len(command) - 1))):
             raise ValueError('A swarm member type cannot recursively run the swarm worker')
+        if any(Path(argument).name == 'asys-worker' for argument in command) and '--definition' in command:
+            path = Path(command[command.index('--definition') + 1])
+            if not path.is_absolute():
+                path = self.environment.workers_directory / path
+            if read_json(path).get('kind') == 'swarm':
+                raise ValueError('A swarm member type cannot recursively run a named swarm worker')
         expired = self.state and (self.state['status'] in TERMINAL or time.time() >= self.start_deadline)
         if self.world is None and not expired:
             self.world = self.world_factory(self.root, config, data['id'], poll=self.world_poll)
@@ -273,6 +281,7 @@ class Engine:
             if time.time() >= self.state['deadline']:
                 self.finish('completed', 'time_limit')
                 return
+            self.health()
             if self.state['status'] == 'paused':
                 return
             if self.state['pending'] is None:

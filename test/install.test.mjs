@@ -16,7 +16,7 @@ async function checkout(t, extra = []) {
   const project = join(root, 'checkout');
   await mkdir(project);
   for (const path of ['Makefile', 'LICENSE', 'tools', 'python', 'skills', 'asys-runtime/asys_runtime',
-    'asys-runtime/LICENSE.multiagent', ...extra]) {
+    'asys-runtime/LICENSE.multiagent', 'asys-workers/asys_swarm', 'asys-workers/worlds', ...extra]) {
     await cp(join(source, path), join(project, path), { recursive: true });
   }
   return { root, project, library: join(root, 'staged/opt/asys/share/asys/python') };
@@ -62,6 +62,34 @@ print(json.dumps({'agents': agent_names(), 'prompt': agent_prompt('simple'),
   assert.deepEqual(definition.workers.types, { agent: { command: [
     '/opt/asys/asys-workers/tools/asys-agent', '--agent', 'simple', '--model', 'account/model',
   ] } });
+});
+
+test('worker and environment authoring install with the shared runner and world resources', async t => {
+  const { root, project } = await checkout(t);
+  const prefix = join(root, 'staged/opt/asys');
+  await exec('make', ['--no-print-directory', '-C', project, 'install-host', 'PREFIX=/opt/asys', `DESTDIR=${root}/staged`]);
+  await rm(project, { recursive: true });
+  const invoke = (tool, ...args) => exec('python3', ['-I', '-S', join(prefix, 'bin', tool), ...args], { cwd: root });
+  const environment = join(root, 'environment');
+  await invoke('asys-workers', environment, 'add', 'agent', 'editor');
+  await invoke('asys-workers', environment, 'add', 'goal', 'repair');
+  await invoke('asys-workers', environment, 'add', 'senate', 'review');
+  await invoke('asys-workers', environment, 'add', 'swarm', 'explore');
+  const { stdout: listed } = await invoke('asys-workers', environment, 'list');
+  for (const name of ['editor', 'repair', 'review', 'explore', 'simple', 'goal']) assert.match(listed, new RegExp(name));
+  const config = JSON.parse(await readFile(join(environment, 'workers/explore.json')));
+  const renderer = join(environment, config.config.world.view);
+  assert.match(await readFile(renderer, 'utf8'), /export function mount/);
+  const skill = join(root, 'checking');
+  await mkdir(skill);
+  await writeFile(join(skill, 'SKILL.md'), '---\nname: checking\ndescription: Check the project.\n---\nUse the checking instructions.\n');
+  await writeFile(join(skill, 'reference.txt'), 'Complete imported asset.\n');
+  await invoke('asys-environment', environment, 'add-skill', skill);
+  assert.equal(await readFile(join(environment, 'skills/checking/reference.txt'), 'utf8'), 'Complete imported asset.\n');
+  const { stdout: help } = await invoke('asys-run', '--help');
+  assert.match(help, /ENVIRONMENT WORKER REQUEST/);
+  assert.match(help, /--workspace DIRECTORY/);
+  assert.match(help, /--model MODEL/);
 });
 
 test('the portable skill exports from a staged installation without the source checkout or agent configuration', async t => {
@@ -137,7 +165,7 @@ test('the goal launcher installs independently of one-shot and uses the simple d
     error => error.code === 1 && /asys system-model set simple MODEL/.test(error.stderr));
 });
 
-test('the senate launcher installs independently and validates its roster before creating a run', async t => {
+test('the senate launcher installs independently and validates its configuration before creating a run', async t => {
   const { root, project } = await checkout(t, ['asys-senate/Makefile', 'asys-senate/tools']);
   await exec('make', ['--no-print-directory', '-C', join(project, 'asys-senate'), 'install-host', 'PREFIX=/opt/asys', `DESTDIR=${root}/staged`]);
   await rm(project, { recursive: true });
@@ -147,9 +175,9 @@ test('the senate launcher installs independently and validates its roster before
   assert.match(help, /--senate FILE/);
   assert.match(help, /--model MODEL/);
   assert.doesNotMatch(help, /--max-attempts|--external/);
-  const roster = join(root, 'senate.json');
-  await writeFile(roster, JSON.stringify({ version: 1, princeps: { name: 'Cicero' }, senators: [] }));
-  await assert.rejects(exec('python3', ['-I', '-S', binary, 'absent-environment', 'Choose a policy', '--senate', roster],
+  const configuration = join(root, 'senate.json');
+  await writeFile(configuration, JSON.stringify({ version: 1, princeps: { name: 'Cicero' }, senators: [] }));
+  await assert.rejects(exec('python3', ['-I', '-S', binary, 'absent-environment', 'Choose a policy', '--senate', configuration],
     { cwd: root, env: { ...process.env, ASYS_STATE_ROOT: join(root, 'empty-state') } }),
     error => error.code === 1 && /senators must be a nonempty array/.test(error.stderr));
 });

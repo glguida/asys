@@ -98,11 +98,11 @@ class SenateHostTests(unittest.TestCase):
         (self.environment / 'component.dcomp').write_text('docker fixture\n')
         self.workspace = self.root / 'workspace'
         self.workspace.mkdir()
-        self.roster = {'version': 1, 'princeps': {'name': 'Cicero', 'prompt': 'Seek a clear agreement.'},
+        self.configuration = {'version': 1, 'princeps': {'name': 'Cicero', 'prompt': 'Seek a clear agreement.'},
                        'senators': [{'name': 'Cato', 'agent': 'researcher', 'model': 'fixture/research'},
                                     {'name': 'Seneca', 'prompt': 'Consider long-term effects.'}]}
         self.senate = self.root / 'senate.json'
-        self.senate.write_text(json.dumps(self.roster))
+        self.senate.write_text(json.dumps(self.configuration))
         self.addCleanup(patch.stopall)
         patch.dict(os.environ, {'ASYS_STATE_ROOT': str(self.state)}).start()
         self.human = patch('asys.execution.ensure_human').start()
@@ -114,7 +114,7 @@ class SenateHostTests(unittest.TestCase):
         self.addCleanup(launcher.close)
         return launcher
 
-    def test_one_senate_job_snapshots_roster_and_model_and_uses_environment_provider(self):
+    def test_one_senate_job_snapshots_configuration_and_model_and_uses_environment_provider(self):
         launcher = self.launcher()
         launcher.setup()
         self.assertEqual(launcher.directory.parent, self.state / 'runs')
@@ -129,9 +129,9 @@ class SenateHostTests(unittest.TestCase):
         self.assertEqual(len(launcher.queue.list()), 1)
         request = launcher.queue.request(launcher.job_id)
         self.assertEqual(request['type'], 'senate')
-        self.assertEqual(request['input'], {'topic': 'Choose the next experiment', 'senate': self.roster})
-        self.assertEqual(json.loads((launcher.directory / 'senate.json').read_text()), self.roster)
-        self.assertEqual(json.loads((launcher.directory / 'run.json').read_text())['senate'], self.roster)
+        self.assertEqual(request['input'], {'topic': 'Choose the next experiment', 'senate': self.configuration})
+        self.assertEqual(json.loads((launcher.directory / 'senate.json').read_text()), self.configuration)
+        self.assertEqual(json.loads((launcher.directory / 'run.json').read_text())['senate'], self.configuration)
         self.assertEqual(json.loads((launcher.directory / 'system-models.json').read_text()), {'simple': 'fixture/default'})
         self.assertIn('inference=@inference_endpoint', launcher.launch_arguments)
         self.assertIn('--egress', launcher.launch_arguments)
@@ -151,7 +151,7 @@ class SenateHostTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             launcher.execute()
         self.assertEqual(json.loads(output.getvalue())['models'], {'simple': 'fixture/override'})
-        self.assertEqual(launcher.queue.request(launcher.job_id)['input']['senate'], self.roster)
+        self.assertEqual(launcher.queue.request(launcher.job_id)['input']['senate'], self.configuration)
         self.assertEqual(self.config.read_text(), 'broken')
 
     def test_explicit_root_selects_models_and_runs_for_launcher_and_observer(self):
@@ -179,9 +179,9 @@ class SenateHostTests(unittest.TestCase):
         self.assertFalse((ambient / 'runs').exists())
 
     def test_all_explicit_models_need_no_default_and_network_policy_is_preserved(self):
-        for index, participant in enumerate([self.roster['princeps'], *self.roster['senators']]):
+        for index, participant in enumerate([self.configuration['princeps'], *self.configuration['senators']]):
             participant['model'] = f'fixture/participant-{index}'
-        self.senate.write_text(json.dumps(self.roster))
+        self.senate.write_text(json.dumps(self.configuration))
         self.config.write_text('broken')
         self.workers['egress'] = False
         (self.environment / 'workers.json').write_text(json.dumps(self.workers))
@@ -204,13 +204,13 @@ class SenateHostTests(unittest.TestCase):
         self.assertFalse((self.state / 'runs').exists())
 
     def test_invalid_config_fails_before_creating_a_run(self):
-        variants = [None, {}, {**self.roster, 'version': True}, {**self.roster, 'senators': []},
-                    {**self.roster, 'endpoint': 'https://example.test'},
-                    {**self.roster, 'princeps': {'name': ' Cato '}},
-                    {**self.roster, 'princeps': {'name': 'Cicero', 'model': None}},
-                    {**self.roster, 'princeps': {'name': 'Cicero', 'agent': '../escape'}},
-                    {**self.roster, 'princeps': {'name': 'Cicero', 'prompt': None}},
-                    {**self.roster, 'princeps': {'name': 'Cicero', 'apiKey': 'unsupported'}}]
+        variants = [None, {}, {**self.configuration, 'version': True}, {**self.configuration, 'senators': []},
+                    {**self.configuration, 'endpoint': 'https://example.test'},
+                    {**self.configuration, 'princeps': {'name': ' Cato '}},
+                    {**self.configuration, 'princeps': {'name': 'Cicero', 'model': None}},
+                    {**self.configuration, 'princeps': {'name': 'Cicero', 'agent': '../escape'}},
+                    {**self.configuration, 'princeps': {'name': 'Cicero', 'prompt': None}},
+                    {**self.configuration, 'princeps': {'name': 'Cicero', 'apiKey': 'unsupported'}}]
         for config in variants:
             with self.subTest(config=config):
                 self.senate.write_text(json.dumps(config))
@@ -227,12 +227,12 @@ class SenateHostTests(unittest.TestCase):
     def test_nul_is_rejected_in_all_participant_strings(self):
         for field in ('name', 'prompt', 'agent', 'model'):
             with self.subTest(field=field):
-                roster = copy.deepcopy(self.roster)
-                roster['princeps'][field] = 'value\0suffix'
+                configuration = copy.deepcopy(self.configuration)
+                configuration['princeps'][field] = 'value\0suffix'
                 with self.assertRaises(ValueError):
-                    validate_senate(roster)
+                    validate_senate(configuration)
 
-    def test_public_arguments_require_a_topic_and_roster_without_round_override(self):
+    def test_public_arguments_require_a_topic_and_configuration_without_round_override(self):
         with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit):
             arguments(['--help'])
         self.assertIn('ENVIRONMENT_DIRECTORY TOPIC', output.getvalue())

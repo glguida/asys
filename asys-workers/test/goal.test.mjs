@@ -85,6 +85,16 @@ test('implementation starts directly and receives review findings; verification 
   }
 });
 
+test('canonical request supplies a goal when the legacy goal field is absent', async t => {
+  const f = await fixture(t, { goal: undefined, request: 'Produce the required output' });
+  const result = await f.run({ async executeAgent(context) {
+    const data = assignment(context);
+    assert.equal(data.goal, 'Produce the required output');
+    return normal(data);
+  } });
+  assert.equal(result.verified, true);
+});
+
 test('a premature review request and narrow passing checks do not complete the original goal', async t => {
   const f = await fixture(t), implementations = [];
   let verifications = 0;

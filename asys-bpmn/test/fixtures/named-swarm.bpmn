@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:asys="urn:asys:workflow:1" id="NamedSwarm"
+  targetNamespace="urn:asys:test" expressionLanguage="feel">
+  <bpmn:error id="UnverifiedRoute" errorCode="unverified-route"/>
+  <bpmn:process id="route_search" name="Named swarm route check" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="search" name="Find a measured delivery route">
+      <bpmn:extensionElements>
+        <asys:job type="route-global" input="= {request: request}" result="searchResult"/>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="verified" default="reject"/>
+    <bpmn:endEvent id="done"/>
+    <bpmn:endEvent id="failed">
+      <bpmn:errorEventDefinition errorRef="UnverifiedRoute"/>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="search"/>
+    <bpmn:sequenceFlow id="measure" sourceRef="search" targetRef="verified"/>
+    <bpmn:sequenceFlow id="accept" sourceRef="verified" targetRef="done">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="feel">searchResult.output.achieved = true and searchResult.output.metrics.bestScore = 16</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="reject" sourceRef="verified" targetRef="failed"/>
+  </bpmn:process>
+</bpmn:definitions>

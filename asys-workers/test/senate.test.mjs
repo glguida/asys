@@ -71,6 +71,16 @@ test('the princeps introduces once, senators speak in order, and consensus retur
   assert.deepEqual(await f.run({ executeAgent() { assert.fail('a completed senate must only replay its answer'); } }), result);
 });
 
+test('canonical request supplies a topic with the existing explicit Senate configuration', async t => {
+  const f = await fixture(t, { topic: undefined, request: 'Choose a design for the aqueduct.' });
+  const result = await f.run({ async executeAgent(context) {
+    const data = assignment(context);
+    assert.equal(data.topic, 'Choose a design for the aqueduct.');
+    return response(data);
+  } });
+  assert.equal(result.consensus, true);
+});
+
 test('consensus can be reached in a later round without another introduction or a deciding turn', async t => {
   const f = await fixture(t), calls = [];
   const result = await f.run({ async executeAgent(context) {

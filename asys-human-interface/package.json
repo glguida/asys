@@ -1,11 +1,16 @@
 {
   "name": "@asys/human-interface",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Human service with a terminal handler",
-  "engines": { "node": ">=22.19.0" },
-  "scripts": { "pretest": "make host-deps", "test": "node --test --test-concurrency=1 test/*.test.mjs" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "pretest": "make host-deps",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  },
   "dependencies": {
     "@asys/human-protocol": "file:../asys-workers/gen",
     "@bufbuild/protobuf": "2.12.1",

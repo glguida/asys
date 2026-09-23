@@ -8,16 +8,17 @@ NPM ?= npm
 export PREFIX DESTDIR
 
 JS_PACKAGES := $(patsubst %/package.json,%,$(wildcard asys-inference/components/protocol/*/package.json asys-inference/components/*/package.json)) asys-workers asys-bpmn asys-human-interface
+HOST_TOOLS := asys asys-run asys-workers asys-environment
 
 .PHONY: all host install-host install-skills build install test test-deps help
 
 all: build
 
 host:
-	install -D -m 0755 tools/asys bin/asys
+	@set -e; for name in $(HOST_TOOLS); do install -D -m 0755 "tools/$$name" "bin/$$name"; done
 
 install-host: host install-skills
-	install -D -m 0755 bin/asys "$(DESTDIR)$(PREFIX)/bin/asys"
+	@set -e; for name in $(HOST_TOOLS); do install -D -m 0755 "bin/$$name" "$(DESTDIR)$(PREFIX)/bin/$$name"; done
 	install -d "$(DESTDIR)$(PREFIX)/share/asys/python/asys"
 	install -m 0644 python/asys/*.py "$(DESTDIR)$(PREFIX)/share/asys/python/asys/"
 	@set -e; for source in python/asys/system_agents/*.py python/asys/system_agents/*/prompt.md; do \
@@ -27,6 +28,14 @@ install-host: host install-skills
 	install -m 0644 asys-runtime/asys_runtime/*.py "$(DESTDIR)$(PREFIX)/share/asys/python/asys_runtime/"
 	install -m 0644 LICENSE "$(DESTDIR)$(PREFIX)/share/asys/"
 	install -m 0644 asys-runtime/LICENSE.multiagent "$(DESTDIR)$(PREFIX)/share/asys/"
+	@if test -d asys-workers/asys_swarm; then \
+		install -d "$(DESTDIR)$(PREFIX)/share/asys/python/asys_swarm"; \
+		install -m 0644 asys-workers/asys_swarm/*.py "$(DESTDIR)$(PREFIX)/share/asys/python/asys_swarm/"; \
+	fi
+	@if test -d asys-workers/worlds; then find asys-workers/worlds -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -exec sh -ec '\
+		destination=$$1; shift; \
+		for source do relative=$${source#asys-workers/}; install -D -m 0644 "$$source" "$$destination/$$relative"; done' \
+		_ "$(DESTDIR)$(PREFIX)/share/asys/workers" {} +; fi
 
 install-skills:
 	@find skills/asys -type f -exec sh -ec '\

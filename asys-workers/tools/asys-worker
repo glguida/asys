@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Execute an environment's named worker definition."""
+from pathlib import Path
+import sys
+
+root = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(root / 'python'), str(root / 'asys-workers'), str(root / 'asys-runtime')]
+from asys_worker import main
+
+raise SystemExit(main())

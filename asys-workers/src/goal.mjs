@@ -46,7 +46,7 @@ export async function goal({ job, argv, env, signal }, { executeAgent = agent, a
   } });
   const input = job.input;
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Goal input must be a JSON object');
-  const original = requiredString(input.goal, 'Goal');
+  const original = requiredString(input.goal ?? input.request, 'Goal');
   const maxAttempts = values['max-attempts'] === undefined ? (input.maxAttempts ?? null) : Number(values['max-attempts']);
   if (maxAttempts !== null && (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1)) throw new Error('maxAttempts must be a positive integer');
   const model = systemModel('simple', values.model, env);

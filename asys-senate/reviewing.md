@@ -35,7 +35,7 @@ asys-senate ./env/research \
 ```
 
 Here `pool/gpt-5.5` must be a model exported by your Provider; substitute the
-exported name used by your installation. This command assumes that the roster has
+exported name used by your installation. This command assumes that the configuration has
 been copied into the current directory and that `project` contains the submission.
 Every participant uses the fallback model unless its configuration overrides it.
 
@@ -61,7 +61,7 @@ with `consensus: false`. Decide whether your workflow accepts a chair's decision
 or additionally requires consensus; the example gate below accepts either kind
 of decision when its verdict is approval.
 
-The example roster requests `approved` and `reason` as top-level fields alongside
+The example configuration requests `approved` and `reason` as top-level fields alongside
 `final` and `exception`. The Senate preserves the terminal Princeps report and
 adds its deliberation metadata. A completed review can return:
 
@@ -110,10 +110,10 @@ gate when rejection must fail the workflow instead.
 
 The following fragments belong in an existing workflow with
 `xmlns:asys="urn:asys:workflow:1"`. Supply `review_request` as a string and
-`senate_config` as the parsed roster object. An earlier setup program can read
-the roster from the environment, write it to `ASYS_RESULT`, and bind its output
+`senate_config` as the parsed configuration object. An earlier setup program can read
+the configuration from the environment, write it to `ASYS_RESULT`, and bind its output
 using `result="senate_config"`. Passing a filename as the Senate input does not
-load it; the BPMN launcher's `--input` is text, not an automatic roster parser.
+load it; the BPMN launcher's `--input` is text, not an automatic configuration parser.
 
 The environment needs both `senate` and `program` types:
 

@@ -1,9 +1,26 @@
 # Release notes
 
-## Unreleased
+## 0.2.0
+
+- Separate named worker definitions from installed environment programs and
+  skills. Add `asys-workers` for list/add/describe/edit, `asys-environment` for
+  Dockerfile and skill management, and `asys-run ENVIRONMENT WORKER REQUEST` for
+  a common launch path. Keep existing command types and specialized launchers.
+- Bind named agents, goals, Senates and swarms as ordinary runtime jobs, usable
+  from the host or BPMN. Snapshot run definitions and preserve the existing
+  workspace, model, state and monitoring conventions.
+- Supervise each named swarm's configured world executable within its worker
+  job, using private synchronous runtime channels. Add reusable global artifact
+  sharing and torus worlds, explicit evaluators, and a deterministic route sample.
+- Embed world renderer modules in a common host page with controls, journal and
+  saved-frame playback. Include shared and selected-agent skill instructions in
+  bounded swarm decisions.
+- Align `asys-swarm --root` with the other host utilities: it selects the system
+  directory, whose `runs/` subdirectory contains execution state. Full saved run
+  paths remain usable with viewer and control commands.
 
 - Add `asys-swarm` as one worker job, with population state and the turn algorithm
-  inside workers. Worlds run as independent host programs or components using a
+  inside workers. Separately managed host and component worlds can also use the
   versioned protocol over runtime channels. Swarm configuration carries data;
   workers do not import world modules. Runs retain bounded execution, checkpoints,
   member transcripts, events and deterministic replay data.

@@ -77,7 +77,23 @@ def validate_config(value, package=None, *, name='swarm'):
         if len(value[field]) > (256 if field == 'name' else 32000):
             raise ValueError(f'{field} is too long')
     world = value.get('world')
-    object_fields(world, 'world', {'channel', 'settings', 'timeoutSeconds'})
+    object_fields(world, 'world', {'channel', 'settings', 'timeoutSeconds', 'command', 'view'})
+    if 'command' in world:
+        command = world['command']
+        if (not isinstance(command, list) or not 1 <= len(command) <= 64
+                or any(not isinstance(item, str) or not item or '\0' in item for item in command)
+                or sum(len(item.encode('utf-8')) for item in command) > 16384):
+            raise ValueError('world.command must be a nonempty argv array of at most 64 strings and 16384 bytes')
+        executable = Path(command[0])
+        if not executable.is_absolute() and '..' in executable.parts:
+            raise ValueError('world.command executable must remain inside the environment')
+    if 'view' in world:
+        view = world['view']
+        if (not isinstance(view, str) or not view or '\0' in view
+                or Path(view).is_absolute() or '..' in Path(view).parts):
+            raise ValueError('world.view must be an environment-relative file path')
+        if package is not None:
+            package_file(package, view, 'world.view')
     world.setdefault('channel', 'world')
     validate_name('world channel', world['channel'])
     if world['channel'] == 'swarm':

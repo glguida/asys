@@ -1,14 +1,22 @@
 # asys-workers
 
-An execution component containing an environment of named agents, installed
-programs, skills, and tools. A caller submits an assignment with a prepared job
-directory and workspace. Workers execute it and return its result. The caller
-owns sequencing, dependencies, branching, and decisions about further work.
+An execution component that runs named agents, goals, Senates, swarms and ordinary
+programs. Worker definitions are separate from the environment's installed
+programs, dependencies and shared skills. A caller submits a request with a
+prepared job directory and workspace. Workers own each algorithm's internal
+execution and return its result; a workflow can coordinate several such jobs.
 
 The component runs the [asys-runtime](../asys-runtime) process executor. Agent
 jobs use the installed Pi coding-agent SDK. Inference uses the unchanged dcomp
 Provider interface, connected to `@inference_endpoint`. Human interaction uses
 the typed [Human interface](proto/asys/human/v1/human.proto).
+
+Use `asys-workers ENVIRONMENT add KIND NAME` to create a named definition,
+`asys-environment ENVIRONMENT add-skill DIRECTORY` to import shared skills, and
+`asys-run ENVIRONMENT NAME REQUEST` to run it. See
+[workers and environments](../docs/workers-and-environments.md) for the complete
+command interface, definition format and BPMN binding. Runtime continues to use
+ordinary `workers.json` command mappings beneath these authoring tools.
 
 ## Environment definition
 
@@ -19,6 +27,7 @@ env/kicad/
   Dockerfile
   component.dcomp
   workers.json
+  workers/             # named agent, goal, Senate and swarm definitions
   tools.md             # optional installed tool list included in agent prompts
   agents/
     schematic/

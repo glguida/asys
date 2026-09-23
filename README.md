@@ -1,16 +1,17 @@
-<img src="docs/assets/banner.svg" alt="asys — Agentic systems, composed. Version 0.1.5. MIT. Linux." width="100%">
+<img src="docs/assets/banner.svg" alt="asys — Agentic systems, composed. Version 0.2.0. MIT. Linux." width="100%">
 
 asys runs specialized agents, programs, and human tasks against real project
 files. Give one agent an assignment, or coordinate a workflow that creates,
 checks, reviews, and revises the work. Runs keep their logs, agent transcripts,
 results, and execution state so you can see what happened and why.
 
-The parts are reusable. A worker environment supplies named agents, tools,
-skills, and memory. A workflow decides what work to do and in what order. A
+The parts are reusable. An environment supplies installed programs and shared
+skills. Named worker definitions select agents, goals, Senates and swarms using
+those resources. A workflow decides what work to do and in what order. A
 separate inference service supplies models. You can use the same environment
 across workflows and share inference across environments and users.
 
-[Installation](INSTALL.md) · [Write workflows and environments](asys-bpmn/AUTHORING.md) · [Inspect runs](docs/monitoring.md)
+[Installation](INSTALL.md) · [Workers and environments](docs/workers-and-environments.md) · [Write workflows](asys-bpmn/AUTHORING.md) · [Inspect runs](docs/monitoring.md)
 
 For agents using asys, the portable [asys skill](skills/asys/SKILL.md) covers
 team design, environments, BPMN, one-shot, goals, human decisions, and recovery,
@@ -54,7 +55,8 @@ Completed work and project files remain available. See the
 | Workflow | Assignments, dependencies, branches, parallel work, human decisions, and error handling. |
 | Swarm worker | A population's private memory, decision scheduling, turn coordination, budgets and checkpoints. |
 | World service | Per-agent observations, action rules and objective evaluation, over a runtime channel. |
-| Worker environment | Named agents and their models, memory, skills, extensions, and installed programs, packaged in a Docker image. |
+| Worker definitions | Named agents, goals, Senates and swarms, with their prompts and configuration. |
+| Environment | Installed programs, dependencies, shared skills and extensions, packaged by one Dockerfile. |
 | Inference service | Providers and poolers composed behind the named `@inference_endpoint` interface. |
 | Project workspace | The actual repository or directory where jobs read and modify files. |
 | Run state | Job requests, logs, transcripts, reports, proposed lessons, results, and workflow checkpoints. |
@@ -78,22 +80,24 @@ interfaces. Workflow managers submit work through the runtime's shared
 filesystem job protocol, with a job directory and workspace prepared for each
 assignment.
 
-BPMN is one orchestration engine in this system. `asys-oneshot` uses the same
-worker execution libraries for a single assignment. `asys-goal` and
-`asys-senate` submit jobs whose worker programs control implementation and review
-or group deliberation. `asys` reads saved
+BPMN is one orchestration engine in this system. `asys-run ENV WORKER REQUEST`
+submits one named worker with the same runtime and workspace conventions.
+Worker programs implement their own agent, goal, Senate and swarm algorithms.
+The existing specialized launchers remain available. `asys` reads saved
 runs independently of the engine. Other orchestration programs can reuse the
 runtime and workers. The BPMN engine accepts BPMN 2.0 XML with a small asys
 execution binding; see its [format and scope](asys-bpmn/README.md#bpmn-binding).
 
-[asys-swarm](asys-swarm/README.md) runs a population as one worker job, like goal
+[Swarm execution](asys-swarm/README.md) runs a population as one worker job, like goal
 and senate. The worker owns member identities, private memory and the turn
 algorithm. It communicates with a world service through asys-runtime channels;
-that service can run on the host or in a separate component. The world defines
+the named definition selects an environment-installed world executable supervised
+within that job. The world defines
 observations, applies proposed actions and measures success. Agent inference
 uses the existing Provider interface. Host controls and viewer updates also use
-runtime channels. Configuration supplies data and selects the world channel;
-world code is packaged with its own executable.
+runtime channels. The host embeds the world's renderer module in a common page
+with controls and playback. Global and local information policies are supplied
+as [reusable worlds](asys-workers/worlds/README.md).
 
 ## 03 · Install and run
 

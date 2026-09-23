@@ -1,8 +1,10 @@
 {
   "name": "@asys/human-protocol",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "exports": "./asys/human/v1/human_pb.js",
-  "dependencies": { "@bufbuild/protobuf": "2.12.1" }
+  "dependencies": {
+    "@bufbuild/protobuf": "2.12.1"
+  }
 }

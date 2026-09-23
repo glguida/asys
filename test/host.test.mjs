@@ -12,6 +12,14 @@ const cli = fileURLToPath(new URL('../tools/asys', import.meta.url));
 const launcher = fileURLToPath(new URL('../asys-bpmn/tools/asys-bpmn', import.meta.url));
 const json = (path, value) => writeFile(path, JSON.stringify(value));
 
+test('named workers share the ordinary queue, workspace, and host status', async () => {
+  await exec('python3', [fileURLToPath(new URL('./run.py', import.meta.url))]);
+});
+
+test('environment and worker authoring preserve validated configuration', async () => {
+  await exec('python3', [fileURLToPath(new URL('./authoring.py', import.meta.url))]);
+});
+
 test('asys routes commands and preserves interspersed options', async () => {
   await exec('python3', [fileURLToPath(new URL('./cli.py', import.meta.url))]);
 });

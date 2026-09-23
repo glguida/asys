@@ -1,10 +1,12 @@
 {
   "name": "@asys/workers",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Agent and human-task programs for the asys filesystem runtime",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "exports": {
     "./client": "./src/client.mjs",
     "./contract": "./gen/asys/human/v1/human_pb.js"

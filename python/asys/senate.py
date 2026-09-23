@@ -10,7 +10,7 @@ from .single_job import SingleJob, job_parser, run, validate_assignment
 
 
 def validate_senate(config):
-    """Validate the portable v1 roster before creating runtime state."""
+    """Validate the portable v1 configuration before creating runtime state."""
     if not isinstance(config, dict):
         raise ValueError('senate must be a JSON object')
     if set(config) - {'version', 'princeps', 'senators'}:
@@ -47,7 +47,7 @@ def arguments(argv):
     parser = job_parser('asys-senate', 'topic',
         'Deliberate on a topic with a princeps and senators, for at most three rounds.')
     parser.add_argument('--senate', type=Path, required=True, metavar='FILE',
-                        help='JSON roster defining the princeps and senators')
+                        help='JSON configuration defining the princeps and senators')
     return validate_assignment(parser, parser.parse_intermixed_args(argv), 'topic')
 
 

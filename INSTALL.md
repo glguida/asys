@@ -41,7 +41,7 @@ make install PREFIX=/opt/asys
 
 The destination must be writable by the installing user. `make build` builds
 the host commands and container images without installing them. `make install-host`
-installs the shared `asys` command and requires no Docker. Use
+installs `asys`, `asys-run`, `asys-workers` and `asys-environment`, and requires no Docker. Use
 `make -C asys-inference install` for inference management, or
 `make -C asys-bpmn install` for the workflow launcher and observer.
 `make -C asys-oneshot install` installs the single-agent launcher and observer
@@ -51,7 +51,7 @@ builds the worker and Human images.
 `make -C asys-senate install` installs the Senate launcher and observer and
 builds the shared worker images.
 `make -C asys-swarm install` installs the swarm launcher and example scenarios
-and builds the runtime, worker, and swarm controller images. Its `install-host`
+and builds the runtime and workers images. Its `install-host`
 target installs the host files when those images are already available.
 `make -C asys-human-interface install` builds the human interface component and
 installs the `asys-human-prompt` terminal handler; its `install-host` target
@@ -78,6 +78,9 @@ installs its own copy for action validation. The optional standalone
 | Installed path under `PREFIX` | Contents |
 | --- | --- |
 | `bin/asys` | State initialization, shared-service updates, run listing, status, logs, and terminal monitor |
+| `bin/asys-run` | Run a named agent, goal, Senate, swarm or program with a request |
+| `bin/asys-workers` | List, add, describe and edit named worker definitions |
+| `bin/asys-environment` | Import shared skills and manage the environment Dockerfile |
 | `bin/asys-inference` | Inference server management command |
 | `bin/asys-bpmn` | BPMN workflow launcher |
 | `bin/asys-swarm` | Swarm launcher, runtime controls, and viewer |
@@ -93,7 +96,8 @@ installs its own copy for action validation. The optional standalone
 | `share/asys-inference/provider-channel` | Private host client for the exported model catalogue |
 | `share/asys-inference/python/` | Bundled runtime channel library |
 | `share/asys-bpmn/python/` | BPMN progress formatting |
-| `share/asys-swarm/python/` | Swarm configuration, world adapters, controller, and replay code |
+| `share/asys-swarm/python/` | Swarm configuration, world protocol and replay code |
+| `share/asys/workers/worlds/` | Built-in world programs, renderer modules and route sample |
 | `share/asys-swarm/examples/` | Editable scenario packages, including the terrarium and its environments |
 | `share/asys-human/python/` | Human handler lifecycle, terminal presentation, and runtime channel libraries |
 
@@ -213,24 +217,23 @@ repositories. The launcher accepts their paths directly.
 
 ## Check the swarm installation
 
-The terrarium's scripted environment runs ordinary Python jobs without inference:
+The explicit route sample runs deterministic members without inference:
 
 ```sh
-asys-swarm run ./asys-swarm/examples/terrarium/swarm.json \
-  ./asys-swarm/examples/terrarium/env/scripted --view
+asys-run ./asys-workers/worlds/samples/route/env route-global \
+  "Find the shortest valid delivery loop" --view
 ```
 
-Open the printed loopback browser address to inspect agents building a habitat,
-then watch its constructions survive an agent-free drought. The scripted
-baseline should finish with eight healthy gardens, exceeding the objective of
-six. `--view` keeps the viewer available after completion; press Ctrl-C to close
-it. Installed copies are under `PREFIX/share/asys-swarm/examples/terrarium` and
-can be copied or renamed. There is no compiled-in demo name.
+Open the printed local address to inspect accepted artifacts, measurements and
+recorded turns. `--view` keeps the page available after completion; press Ctrl-C
+to close it. Use `route-local` in the same environment for torus visibility.
+Installed copies live under `PREFIX/share/asys/workers/worlds/samples/route/env`.
+The sample independently checks every route and measures its distance.
 
-After inference is configured, select the example's `env/agents` environment
-instead. It uses the `simple` system-model setting and the Provider endpoint.
-See the [example guide](asys-swarm/examples/terrarium/README.md) and
-[swarm guide](asys-swarm/README.md) for budgets, controls and saved artifacts.
+See [workers and environments](docs/workers-and-environments.md) to define your
+own worker, and the [swarm guide](asys-swarm/README.md) for the world protocol,
+budgets, controls and saved artifacts. The separately managed
+[terrarium example](asys-swarm/examples/terrarium/README.md) remains available.
 
 ## Run assignments and goals
 
