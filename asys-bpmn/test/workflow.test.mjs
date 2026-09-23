@@ -28,23 +28,20 @@ for (const verified of [true, false]) {
     const f = await fixture(t);
     const models = join(f.root, 'models.json');
     await writeFile(models, JSON.stringify({ simple: model.id }));
-    let calls = 0;
+    const phases = [];
     const server = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
       listModels() { return { models: [model] }; },
       async *infer(request) {
         assert.equal(request.model, model.id);
         const { context } = JSON.parse(request.payload);
         assert.equal(context.messages.length, 1);
-        calls++;
         const { phase } = JSON.parse(context.messages[0].content[0].text.split('Assignment data:\n')[1]);
+        phases.push(phase);
         const result = {
-          define: { final: 'Defined the required artifact.', exception: null, contract: { criteria: [
-            { id: 'C1', requirement: 'Produce an artifact', basis: 'User request', verification: 'Inspect artifact.txt' },
-          ] } },
-          review: { final: 'Criteria cover the request.', exception: null, decision: 'accept' },
-          implement: { final: 'Implementation finished.', exception: null },
+          implement: { final: 'Implementation finished.', exception: null, goal_status: 'review' },
           verify: { final: verified ? 'Artifact exists.' : 'Artifact missing.', exception: null, coverage: 'complete',
-            criteria: [{ id: 'C1', status: verified ? 'satisfied' : 'unmet',
+            criteria: [{ id: 'C1', requirement: 'Produce an artifact', basis: 'User request',
+              status: verified ? 'satisfied' : 'unmet',
               evidence: [{ source: 'artifact.txt', observation: verified ? 'Inspected the file.' : 'File does not exist.' }] }] },
         }[phase];
         yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify(result) }]) }) };
@@ -65,7 +62,8 @@ for (const verified of [true, false]) {
     assert.equal(jobs.length, 1);
     const state = await queue.state(jobs[0].id);
     assert.equal(state.result.verified, verified);
-    assert.equal(calls, 4);
+    assert.equal(state.result.criteria[0].status, verified ? 'satisfied' : 'unmet');
+    assert.deepEqual(phases, ['implement', 'verify']);
   });
 }
 
