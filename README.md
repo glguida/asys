@@ -52,7 +52,8 @@ Completed work and project files remain available. See the
 | Part | What it defines |
 | --- | --- |
 | Workflow | Assignments, dependencies, branches, parallel work, human decisions, and error handling. |
-| Swarm controller | A population's observations, decision scheduling, persistent world state, budgets, and objective evaluation. |
+| Swarm worker | A population's private memory, decision scheduling, turn coordination, budgets and checkpoints. |
+| World service | Per-agent observations, action rules and objective evaluation, over a runtime channel. |
 | Worker environment | Named agents and their models, memory, skills, extensions, and installed programs, packaged in a Docker image. |
 | Inference service | Providers and poolers composed behind the named `@inference_endpoint` interface. |
 | Project workspace | The actual repository or directory where jobs read and modify files. |
@@ -85,13 +86,14 @@ runs independently of the engine. Other orchestration programs can reuse the
 runtime and workers. The BPMN engine accepts BPMN 2.0 XML with a small asys
 execution binding; see its [format and scope](asys-bpmn/README.md#bpmn-binding).
 
-[asys-swarm](asys-swarm/README.md) supplies another orchestration component.
-Its controller owns a scenario's world and submits bounded decisions as ordinary
-worker jobs. Each worker proposes actions using the existing Provider interface;
-the scenario validates their effects and measures success. Host controls and
-viewer updates use runtime channels. A scenario is an external configuration,
-Python world module, optional view, and worker environment; its directory name
-has no special meaning to the launcher.
+[asys-swarm](asys-swarm/README.md) runs a population as one worker job, like goal
+and senate. The worker owns member identities, private memory and the turn
+algorithm. It communicates with a world service through asys-runtime channels;
+that service can run on the host or in a separate component. The world defines
+observations, applies proposed actions and measures success. Agent inference
+uses the existing Provider interface. Host controls and viewer updates also use
+runtime channels. Configuration supplies data and selects the world channel;
+world code is packaged with its own executable.
 
 ## 03 · Install and run
 
@@ -140,7 +142,8 @@ Run its deterministic baseline without a model account:
 
 ```sh
 asys-swarm run ./asys-swarm/examples/terrarium/swarm.json \
-  ./asys-swarm/examples/terrarium/env/scripted --view
+  ./asys-swarm/examples/terrarium/env/scripted \
+  --world ./asys-swarm/examples/terrarium/world --view
 ```
 
 The launcher prints a local browser address. The view shows constructions,
@@ -150,9 +153,9 @@ the same runtime. The scripted policy demonstrates execution and evaluation;
 it does not establish an advantage from collective intelligence. See the
 [swarm authoring guide](asys-swarm/AUTHORING.md) to define a different world or goal.
 
-World packages define their own information-sharing and evaluation rules.
+World services define their own information-sharing and evaluation rules.
 A world can expose local observations or a shared archive of checked results;
-the controller supplies execution, persistence and runtime communication.
+the swarm worker supplies execution, private state and runtime communication.
 
 ### Add inference and run agents
 

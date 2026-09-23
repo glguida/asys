@@ -11,6 +11,8 @@ import sys
 import tempfile
 import unittest
 
+from asys_swarm.world import World
+
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "terrarium"
 
@@ -22,7 +24,7 @@ def load(name, path):
     return module
 
 
-world = load("terrarium_test_world", EXAMPLE / "world.py")
+world = load("terrarium_test_world", EXAMPLE / "world/physics.py")
 policy = load("terrarium_test_policy", EXAMPLE / "env/scripted/programs/inhabitant.py")
 
 
@@ -146,10 +148,22 @@ class TerrariumTests(unittest.TestCase):
             scenario = root / "renamed-world"
             shutil.copytree(EXAMPLE, scenario)
             config = json.loads((scenario / "swarm.json").read_text())
-            relocated = load("relocated_terrarium", scenario / config["world"]["module"])
-            state = relocated.initialize(config["world"]["settings"], ["a"], 7)
+            repository = EXAMPLE.parents[2]
+            runtime = root / 'runtime'
+            env = {**os.environ, 'PYTHONPATH': os.pathsep.join([
+                str(repository / 'asys-workers'), str(repository / 'asys-runtime')])}
+            service = subprocess.Popen([sys.executable, str(scenario / 'world/serve.py'),
+                '--root', str(runtime)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                remote = World(runtime, config, 'relocated-test')
+                state = remote.call('initialize', config['world']['settings'], ['a'], 7)
+                observation = remote.call('observe', state, 'a')
+            finally:
+                service.terminate()
+                _, errors = service.communicate(timeout=5)
+            self.assertEqual(service.returncode, 0, errors.decode())
             input_path, result_path = root / "input.json", root / "result.json"
-            input_path.write_text(json.dumps({"observation": relocated.observe(state, "a"), "memory": {}}))
+            input_path.write_text(json.dumps({"observation": observation, "memory": {}}))
             environment = scenario / "env/scripted"
             manifest = json.loads((environment / "workers.json").read_text())
             command = manifest["types"]["swarm-step"]["command"]

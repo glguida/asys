@@ -1,4 +1,4 @@
-"""Validate experiment configuration without importing its world on the host."""
+"""Validate data-only swarm configuration and Runtime world channel selection."""
 from copy import deepcopy
 import hashlib
 import json
@@ -64,7 +64,7 @@ def package_file(package, value, label):
     return path
 
 
-def validate_config(value, package, *, name='swarm'):
+def validate_config(value, package=None, *, name='swarm'):
     value = deepcopy(json_value(value, limit=128 * 1024))
     object_fields(value, 'configuration', {'version', 'name', 'mission', 'world', 'objective',
                                          'agents', 'limits', 'seed', 'view'})
@@ -77,10 +77,15 @@ def validate_config(value, package, *, name='swarm'):
         if len(value[field]) > (256 if field == 'name' else 32000):
             raise ValueError(f'{field} is too long')
     world = value.get('world')
-    object_fields(world, 'world', {'module', 'settings'})
-    module = package_file(package, world.get('module'), 'world.module')
-    if module.suffix != '.py':
-        raise ValueError('world.module must be a Python .py file')
+    object_fields(world, 'world', {'channel', 'settings', 'timeoutSeconds'})
+    world.setdefault('channel', 'world')
+    validate_name('world channel', world['channel'])
+    if world['channel'] == 'swarm':
+        raise ValueError('The world channel must differ from the swarm control channel')
+    world.setdefault('timeoutSeconds', 30)
+    timeout = world['timeoutSeconds']
+    if type(timeout) not in (int, float) or not 0.01 <= timeout <= 3600:
+        raise ValueError('world.timeoutSeconds must be between 0.01 and 3600')
     world.setdefault('settings', {})
     if not isinstance(world['settings'], dict):
         raise ValueError('world.settings must be an object')
@@ -106,7 +111,13 @@ def validate_config(value, package, *, name='swarm'):
     if type(value['seed']) is not int or not 0 <= value['seed'] <= 2**32 - 1:
         raise ValueError('seed must be an integer between 0 and 4294967295')
     if value.get('view') is not None:
-        package_file(package, value['view'], 'view')
+        if package is None:
+            view = value['view']
+            if (not isinstance(view, str) or not view or '\0' in view
+                    or Path(view).is_absolute() or '..' in Path(view).parts):
+                raise ValueError('view must be a relative package file path')
+        else:
+            package_file(package, value['view'], 'view')
     return value
 
 

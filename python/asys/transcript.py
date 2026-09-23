@@ -228,6 +228,9 @@ class JobOutput:
         if senate.get('version') == 1 and isinstance(senate.get('sessions'), list):
             lines = [f"Topic: {senate.get('topic', '')}", f"Status: {senate.get('status', '')}", '']
             return 'Senate', lines + self.read_phases(directory, senate['sessions'], senate=True) + errors
+        swarm = self.files.read(directory / 'swarm/checkpoint.json')
+        if swarm.get('version') in (1, 2) and isinstance(swarm.get('agents'), list):
+            return 'Swarm', self.read_swarm(directory, swarm) + errors
         if isinstance(agent, dict):
             if self.saved is not document:
                 self.saved, self.lines = document, render(agent)
@@ -240,6 +243,52 @@ class JobOutput:
     def read_goal(self, directory, goal):
         lines = [f"Goal: {goal.get('goal', '')}", f"Status: {goal.get('status', '')}", '']
         return lines + self.read_phases(directory, goal['sessions'])
+
+    def read_swarm(self, directory, swarm):
+        lines = [f"Mission: {swarm.get('config', {}).get('mission', '')}",
+                 f"Status: {swarm.get('status', '')} · Turn: {swarm.get('turn', 0)} · "
+                 f"Members: {len(swarm['agents'])} · Decisions: {swarm.get('decisions', 0)}", '']
+        if swarm.get('evaluation', {}).get('summary'):
+            lines += [swarm['evaluation']['summary'], '']
+        attempts = []
+        for path in (directory / 'swarm/decisions').glob('*/state.json'):
+            if not path.resolve().is_relative_to(directory.resolve()):
+                continue
+            state = self.files.read(path)
+            if isinstance(state.get('agent'), str) and type(state.get('turn')) is int:
+                attempts.append((state, path.parent))
+        attempts.sort(key=lambda row: (row[0]['turn'], row[0].get('submitted_at', ''), row[0].get('id', '')))
+        # Keep the interactive display bounded. Full decisions remain in job
+        # storage; one runtime job may contain thousands of member executions.
+        recent = {}
+        for state, path in attempts:
+            recent[state['agent']] = (state, path)
+        selected = sorted(recent.values(), key=lambda row: (row[0]['turn'], row[0].get('submitted_at', '')))[-16:]
+        if len(recent) > len(selected):
+            lines += [f'Showing the latest {len(selected)} of {len(recent)} active member histories.', '']
+        for state, path in selected:
+            lines += [f"{state['agent']} · Turn {state['turn']} ({state.get('status', 'unknown')})", '']
+            # A trusted member program may use several bounded inference stages.
+            transcripts = [path / 'agent.json', *sorted(path.glob('*/agent.json'))]
+            found = False
+            for transcript in transcripts:
+                if not transcript.resolve().is_relative_to(path.resolve()):
+                    continue
+                agent = self.files.read(transcript).get('agent')
+                if isinstance(agent, dict):
+                    found = True
+                    if transcript.parent != path:
+                        lines += [transcript.parent.name, '']
+                    lines += render(agent, current_turn=True)
+            if not found:
+                reader, output = self.phase_outputs.setdefault(path, (LogReader(path / 'stdout.log', None), EventOutput()))
+                for line in reader.read(flush=state.get('status') in JOB_TERMINAL):
+                    output.append(line)
+                lines += output.read()
+            if state.get('error'):
+                lines += [str(state['error']), '']
+            lines += [f'stderr: {line}' for line in tail(path / 'stderr.log', 20)]
+        return lines
 
     def read_phases(self, directory, sessions, *, senate=False):
         lines = []

@@ -1,5 +1,8 @@
 FROM asys-runtime:dev
 USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3-jsonschema \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/asys
 COPY asys-inference/components/vendor/dcomp-component ./asys-inference/components/vendor/dcomp-component
 COPY asys-inference/components/protocol/component ./asys-inference/components/protocol/component
@@ -11,8 +14,10 @@ COPY asys-workers/src ./src
 COPY asys-workers/gen ./gen
 COPY asys-workers/extensions /opt/asys/asys-workers/extensions
 COPY asys-workers/tools ./tools
+COPY asys-workers/asys_swarm ./asys_swarm
 COPY python/asys/system_agents /opt/asys/python/asys/system_agents
 ENV NODE_ENV=production
+ENV PYTHONPATH=/opt/asys/asys-workers:/opt/asys/asys-runtime
 USER node
 ENTRYPOINT ["node", "/opt/asys/asys-workers/src/main.mjs"]
 CMD []

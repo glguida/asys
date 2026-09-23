@@ -77,34 +77,33 @@ semantics, matched-budget ablations and held-out evaluation protocols.
 | Part | Responsibility | Contract |
 | --- | --- | --- |
 | Host launcher/viewer | Launch, inspect, pause, resume, cancel | Runtime channel and saved run records |
-| `asys-swarm` component | World authority, scheduling, limits, durable turns, evaluation | Producer of ordinary runtime jobs |
+| `asys-swarm` worker | Population, private memory, scheduling, limits and durable turns | One ordinary runtime job |
 | Worker environment | Agent prompt, model and decision command | Existing `workers.json` |
-| Decision job | Observation/private memory to bounded actions/private memory | Existing runtime input/result/cancellation |
+| Member execution | Observation/private memory to bounded actions/private memory | Supervised command inside the swarm job |
 | Inference service | Model catalogue and inference | Unchanged `cyclo.provider.v1.Provider` |
-| User world module | Observations, schemas, rules, objective and artifacts | Six documented Python functions |
+| World service | Observations, schemas, rules, objective and artifacts | Versioned JSON protocol over a runtime channel |
 
-This follows the existing [BPMN pattern](../asys-bpmn/README.md): orchestration
-lives inside asys, while the host communicates through runtime channels. No new
-runtime type system or Provider service is needed. A controller owns execution
-authority without prescribing scientific roles or individual plans. Population
-size and concurrent decisions are separate settings.
+This follows the existing [Senate pattern](../asys-senate/README.md): the
+coordination algorithm lives inside workers. A host or BPMN task submits the
+whole swarm as one job. The world can run as a host process or separate component;
+both use the same runtime channel. No world source is imported into the swarm.
+Population size and concurrent decisions are separate settings.
 
 One turn works as follows:
 
-1. The controller observes each active agent's permitted world state. Agents
-   without queued plans get ordinary runtime jobs of the configured worker type
-   (`swarm-step` by default), with identities and inputs persisted before
-   submission.
+1. The swarm worker requests each participant's permitted observation from the
+   world. Members without queued plans execute their configured worker command
+   (`swarm-step` by default), with identities and inputs persisted first.
 2. The standard worker loads its prompt, mission, objective, observation and
    private memory. It makes one bounded Provider call through the existing
    adapter, without coding tools or extensions. An application can select a
    different worker command that independently evaluates a proposal before
    returning its result.
-3. The worker returns `{actions, memory, usage}`. Job identity and run/agent/turn
-   metadata stay in the existing runtime envelope rather than a new protocol.
-4. After all required decisions complete, the controller applies one action per
-   plan as a single transition. Schemas enforce shape; world rules determine
-   admissibility and deterministic conflict ordering.
+3. The member returns `{actions, memory, usage}`. The parent job retains member
+   identity, turn, private memory and per-decision logs.
+4. After all required decisions complete, the worker asks the world to apply
+   one action per plan as a single transition. Schemas enforce shape; world
+   rules determine admissibility and deterministic conflict ordering.
 5. The evaluator checks actual state. Events and snapshots pass through the
    runtime channel; the checkpoint retains world, memories and queued plans.
 
@@ -114,15 +113,17 @@ under fresh IDs within bounded attempts. Time, decisions, concurrency, plan
 length, memory and per-call output tokens are bounded. Reported usage is recorded;
 this version does not enforce aggregate token or money limits.
 
-World state is in a controller-only mount and the frozen package is read-only.
-Workers still share their environment container and workspace. Stronger
-isolation is needed before exposing arbitrary coding tools to competing agents.
+Committed snapshots and private memory remain in the swarm job's checkpoint.
+The world component only needs its runtime channel; it receives no member
+private memory. Member commands share the workers container and workspace.
+Stronger isolation is needed before exposing arbitrary coding tools to competing
+agents.
 
 ## Different algorithms on the same execution framework
 
 A common execution framework can support different coordination algorithms.
 The framework supplies agent identities, private memory, bounded decisions,
-runtime jobs, turn scheduling, persistence, cancellation and evaluation hooks.
+worker execution, turn scheduling, persistence, cancellation and world channels.
 The world defines observations, valid contributions, communication visibility,
 state transitions and success criteria. The worker environment supplies prompts,
 models, commands and evaluation tools. Compatible worlds can reuse an
@@ -152,7 +153,8 @@ The launcher has no demo registry or compiled-in scenario:
 
 ```sh
 asys-swarm run ./asys-swarm/examples/terrarium/swarm.json \
-  ./asys-swarm/examples/terrarium/env/scripted --view
+  ./asys-swarm/examples/terrarium/env/scripted \
+  --world ./asys-swarm/examples/terrarium/world --view
 ```
 
 Eight identical inhabitants have 24 turns to build rain collectors, gardens and

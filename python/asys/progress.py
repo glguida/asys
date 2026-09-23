@@ -37,6 +37,13 @@ class AgentProgress:
             elif kind == "senate.finished":
                 state = event.get("status", "finished")
                 detail = f"senate {state}: {event.get('decision') or 'no decision'}"
+            elif kind == 'swarm.tick':
+                data = event.get('data', event)
+                state, detail = 'working', f"swarm turn {data.get('turn', '?')} committed"
+            elif kind in {'swarm.paused', 'swarm.resumed', 'swarm.completed', 'swarm.failed', 'swarm.cancelled'}:
+                data = event.get('data', event)
+                state = 'working' if kind == 'swarm.resumed' else kind.split('.')[1]
+                detail = f"swarm {state}: {data.get('reason', '')}".rstrip(': ')
             elif kind == "agent.provider_exhausted":
                 state, detail = "exhausted", f"provider exhausted; retry at {event.get('retryAt', 'unknown')}"
             elif kind == "agent.provider_retrying":

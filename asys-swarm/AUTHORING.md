@@ -1,316 +1,222 @@
-# Program a swarm towards a goal
+# Program a swarm toward a goal
 
-A swarm experiment has four parts: instructions, a world with permitted actions,
-a measurable objective, and exported work. A mission alone tells agents what to
-try; it cannot define tools, change physics or certify that a complex system is
-correct. You program those capabilities and checks in the world and environment.
+A swarm is one worker job. You supply its mission, member policy and an
+independent world service. The world defines what agents can observe and do,
+what their actions actually change, how success is measured and what to export.
+A prompt alone does not create capabilities or establish correctness.
 
-| Part | Where it lives | Example |
-| --- | --- | --- |
-| Mission prompt | `swarm.json` → `mission` | Build a habitat that survives drought. |
-| Agent instructions and model | Environment `workers.json` and `agents/NAME/prompt.md` | Use local observations, retain useful memory and submit actions. |
-| Objective parameters | `swarm.json` → `objective` | `{"healthyGardens": 6}` |
-| Success test | World `evaluate(state, objective)` | Count gardens that stayed healthy after builders left. |
-| Output | World `artifacts(state)` plus automatic state/trace/result files | Construction plans, provenance and measured survival. |
+| Input | Where it belongs |
+| --- | --- |
+| Mission and population | Swarm configuration passed as job data |
+| Agent prompts, models and tools | Worker environment |
+| Private member memory and turn scheduling | Swarm worker algorithm |
+| Rules, observations, objective evaluation | World program on a runtime channel |
+| Browser presentation | Optional host-served view assets |
 
-The mission and objective parameters are both passed to each model decision.
-Keep them consistent: changing `objective.healthyGardens` changes the check;
-changing “six” to “ten” in prose alone does not. An evaluator can require several
-conditions and withheld tests. If success is qualitative, record a proposed
-result and arrange an independent review instead of returning `achieved: true`
-because an agent claims to be finished.
-
-## Package and configuration
-
-You implement a world module, not another runtime or controller component.
-The same `asys-swarm` controller loads each world's rules. The worker environment
-is the existing asys environment contract: it supplies the decision command,
-prompts, models and any evaluation tools. Worlds describe the problem; worker
-environments supply capabilities. They can be reused independently when their
-action and observation contracts are compatible.
-
-For example, `observe()` can expose nearby habitat cells or a shared archive of
-checked results. `step()` applies contributions according to the world's rules.
-An environment can wrap the decision worker with a trusted evaluator before
-returning a result. These information and validation policies belong to the
-world and environment rather than the engine.
-
-Put each experiment in a dedicated directory:
-
-```text
-my-experiment/
-  swarm.json
-  world.py
-  view.html                       optional custom browser view
-  env/
-    component.dcomp
-    Dockerfile
-    workers.json
-    agents/researcher/prompt.md
-```
-
-Run `asys-swarm run ./my-experiment/swarm.json ./my-experiment/env --workspace
-./work --view`, with an existing `./work` directory. The launcher snapshots the
-configuration's directory, not just the JSON file. Paths to world/view files are
-relative to it, cannot escape it and cannot traverse symlinks. The snapshot is
-limited to 2,000 files and 32 MiB; VCS, dependency, cache and run-state directories
-are excluded. Keep generated work outside the package.
+## Configure the job
 
 ```json
 {
   "version": 1,
-  "name": "Target builder",
-  "mission": "Cooperate to raise the shared count to 12 using legal additions.",
-  "world": {"module": "world.py", "settings": {}},
-  "objective": {"target": 12},
+  "name": "Reach the target",
+  "mission": "Cooperate to reach the measured target using permitted actions.",
+  "world": {"channel": "world", "settings": {}, "timeoutSeconds": 30},
+  "objective": {"target": 8},
   "agents": {"count": 4, "type": "swarm-step"},
-  "limits": {
-    "turns": 20, "decisions": 80, "concurrency": 2,
-    "seconds": 300, "jobSeconds": 30,
-    "actions": 2, "memoryBytes": 2048, "outputTokens": 1024,
-    "tickSeconds": 0.05
-  },
+  "limits": {"turns": 20, "concurrency": 2, "decisions": 80},
   "seed": 7
 }
 ```
 
-Only `version`, `mission` and `world.module` are required. Name defaults to the
-configuration filename, objective to `null`, world settings to `{}`, population
-to 8, job type to `swarm-step` and seed to 0. Unknown configuration keys fail
-validation, helping catch misspellings.
+The configuration is data. There is no world module, executable import path or
+scenario directory mounted into workers. The launcher selects the world process
+separately through `--world`, `--world-command` or `--world-external`.
 
-| Limit | Default | Allowed | Meaning |
-| --- | ---: | --- | --- |
-| `turns` | 100 | 1–10,000 | Maximum committed world transitions. |
-| `decisions` | 1,000 | 1–1,000,000 | Reserved decision attempts, including interrupted retries. |
-| `concurrency` | 4 | 1–64 | Maximum outstanding runtime decision jobs. |
-| `seconds` | 600 | 0.1–86,400 | Whole-run wall time, including pauses. |
-| `jobSeconds` | 60 | 0.1–3,600 | Per-job time, including queueing and inference. |
-| `actions` | 4 | 1–16 | Maximum proposed actions per decision. |
-| `memoryBytes` | 4,096 | 4–65,536 | Maximum compact UTF-8 JSON private memory; `null` uses 4 bytes. |
-| `outputTokens` | 2,048 | 128–16,384 | Requested maximum generated tokens per model call. |
-| `tickSeconds` | 0.05 | 0–5 | Minimum delay between world turns; independent of physical rules. |
+`mission` is natural-language guidance; `objective` is data for the world. Set
+`objective` to `null` for exploration with no pass/fail goal. The members can
+propose actions and summarize ideas, but the world measures actual outcomes.
 
-`agents.count` permits 1–256; `seed` is an integer from 0 through 2³²−1. Agent
-count does not require that many simultaneous model calls. Model context windows
-and provider rate limits still apply. There is no aggregate token-budget setting.
+| Limit | Default | Range |
+| --- | --- | --- |
+| `turns` | 100 | 1–10,000 |
+| `concurrency` | 4 | 1–64 |
+| `decisions` | 1,000 | 1–1,000,000 |
+| `seconds` | 600 | 0.1–86,400 |
+| `jobSeconds` | 60 | 0.1–3,600 per member decision |
+| `actions` | 4 | 1–16 per returned plan |
+| `memoryBytes` | 4,096 | 4–65,536 |
+| `outputTokens` | 2,048 | 128–16,384 |
+| `tickSeconds` | 0.05 | 0–5 |
 
-## Implement the world
+Population defaults to eight and can contain 1–256 members. Output-token limits
+apply to model calls; report measured token use when comparing experiments.
+The swarm counts complete decision batches before scheduling a turn so a
+budget does not silently omit some members from that turn.
 
-`world.module` names a trusted Python file implementing six functions. The
-controller image includes the standard library and `jsonschema`; extra world
-dependencies need a derived image selected through `ASYS_SWARM_IMAGE`.
+## Supply a world service
 
-The host snapshots the experiment directory and mounts it read-only at
-`/opt/asys/swarm-package` inside the controller. The controller uses Python's
-`importlib` to load the configured module from that directory, then calls its
-functions in the controller's own Python process. The host does not import the
-world. Editing ordinary world code requires no controller image rebuild.
+A world is an independently running program. It exchanges versioned JSON
+requests and responses with the swarm over a named asys-runtime channel.
+The [wire specification](WORLD.md) defines the exact envelopes for implementations
+in any language.
+The swarm writes `out`; the world reads `out` and writes replies to `in`.
+Request IDs correlate responses; run IDs identify the experiment. Both
+endpoints must see the same channel directory.
 
-Here is the complete `world.py` for the target example above:
+Use one swarm client and one world service per channel. Concurrent runs need
+distinct channel directories; replay needs its own channel or a stopped run.
+Runtime's acknowledgement cursor belongs to that consumer.
+
+The protocol supports a description containing implementation identity and an
+action schema, followed by these operations:
+
+| Operation | Arguments | Result |
+| --- | --- | --- |
+| `initialize` | settings, participant IDs, seed | Initial state object |
+| `observe` | state, participant ID | That member's observation |
+| `step` | state, actions keyed by participant ID | `{state, events}` |
+| `evaluate` | state, objective | `{achieved, metrics, summary}` |
+| `artifacts` | state | Exported artifact object |
+
+`action_schema` describes one proposed action using JSON Schema Draft 7.
+Schemas may reference their own definitions; remote references are forbidden.
+The worker validates structure before submitting actions. The world applies
+semantic rules and decides whether a legal-shaped action is admissible.
+
+An observation with `active: false` suspends decisions for that participant and
+discards its queued plan. World time can still advance, including after every
+agent has left. Other observation fields are world-defined. This supports both
+local neighborhoods and globally shared information without changing workers.
+
+World operations receive explicit state and must be deterministic for the same
+arguments. Treat the seed and state as the source of randomness. The worker
+commits a transition only after it and its evaluation succeed; retries can
+repeat operations. Keep side effects outside these pure rules or make them
+idempotent. A durable implementation identity and action-schema identity are
+checked during recovery and replay.
+
+The Python SDK accepts a callbacks object that your world program imports
+normally. It does not load source named by an incoming request. Other languages
+can implement the same channel protocol.
+
+For example, `rules.py` inside your own world project:
 
 ```python
 def action_schema():
-    return {
-        "type": "object",
-        "properties": {"add": {"type": "integer", "minimum": 1, "maximum": 2}},
-        "required": ["add"],
-        "additionalProperties": False,
-    }
+    return {"type": "object", "properties": {"add": {"type": "integer", "minimum": 0, "maximum": 2}},
+            "required": ["add"], "additionalProperties": False}
 
-def initialize(settings, agent_ids, seed):
-    return {"count": 0, "turn": 0, "contributions": {a: 0 for a in agent_ids}}
 
-def observe(state, agent_id):
-    return {"count": state["count"], "yourContribution": state["contributions"][agent_id]}
+def initialize(settings, agents, seed):
+    return {"total": 0}
+
+
+def observe(state, agent):
+    return {"active": True, "total": state["total"]}
+
 
 def step(state, actions):
-    events = []
-    for agent_id, action in sorted(actions.items()):
-        amount = action["add"]
-        state["count"] += amount
-        state["contributions"][agent_id] += amount
-        events.append({"type": "added", "agent": agent_id, "amount": amount})
-    state["turn"] += 1
-    return {"state": state, "events": events}
+    return {"state": {"total": state["total"] + sum(a["add"] for a in actions.values())}, "events": []}
+
 
 def evaluate(state, objective):
-    target = objective.get("target", 12)
-    return {"achieved": state["count"] >= target,
-            "metrics": {"count": state["count"], "target": target},
-            "summary": f"Count is {state['count']}; target is {target}."}
+    return {"achieved": state["total"] >= objective.get("target", 8),
+            "metrics": {"total": state["total"]}, "summary": f"Total: {state['total']}"}
+
 
 def artifacts(state):
-    return {"count": state["count"], "contributions": state["contributions"]}
+    return {"total": state["total"]}
 ```
 
-This intentionally small example shows exactly where a prompt becomes a checked
-objective. Replace its counter with your engineering state and actions. You do
-not need to edit asys to introduce a new world.
+The world executable explicitly supplies that implementation:
 
-The callback contracts are:
+```python
+import os
+from asys_swarm.world_service import Service
+import rules
 
-- `initialize(settings, agent_ids, seed) → state`: return an initial JSON object.
-  Initialize randomness from `seed` and store any evolving random state in it.
-- `observe(state, agent_id) → object`: provide only what this agent may know.
-  Return `{"active": false}` to discard its queued plan and skip decisions and
-  actions for this turn. World time still advances, enabling agent-free tests.
-- `action_schema() → object`: return a JSON Schema Draft 7 schema for **one**
-  action, not the whole plan. References must be local `#` fragments. Close the
-  action object with `additionalProperties: false` where appropriate.
-- `step(state, actions) → {state, events}`: consume at most one action per active
-  agent. `actions` maps stable IDs such as `agent-001` to their actions; agents
-  with empty plans are absent. Return a state object and a list of event objects.
-  Validate physical preconditions here, resolve conflicts deterministically and
-  record rejected actions. Valid shape does not imply legal execution.
-- `evaluate(state, objective) → {achieved, metrics, summary}`: return a boolean,
-  a metrics object and text, evaluated initially and after every committed turn.
-  With no objective, the function receives `{}` for useful metrics, and the
-  controller changes `achieved` to `null` so exploration cannot auto-complete.
-- `artifacts(state) → object`: export the useful work as JSON. Large external
-  artifacts need a separately designed storage/submission mechanism; this
-  callback cannot simply return arbitrary host file paths for the engine to copy.
-
-All inputs and returns are JSON copies. Observation and evaluation cannot mutate
-the authoritative state through their arguments. Payload limits apply to both
-compact and indented UTF-8 JSON:
-
-| Payload | Limit |
-| --- | --- |
-| World state, including the state returned by `step` | 2 MiB |
-| Aggregate `step` action input or complete `{state, events}` result | 4 MiB |
-| Individual observation, decision, or evaluation | 256 KiB |
-| Action schema or configuration | 128 KiB |
-| `artifacts` result, including its deepest checkpoint indentation | 1 MiB |
-| In-progress checkpoint before job submission or turn commit | 4 MiB |
-| Complete durable checkpoint, including the publication outbox | 7 MiB |
-
-Private memory keeps the configured `memoryBytes` limit. The controller also
-reserves room for terminal publication: the terminal checkpoint without
-artifacts must fit 5 MiB, leaving space for the artifact copies in the result
-and outbox. Aggregate limits can reject a combination of individually valid
-payloads. Oversized observations fail before new jobs are submitted; oversized
-transitions, including their tick and snapshot events, fail before changing the
-committed world. Keep observations local and export focused artifacts rather
-than embedding entire repositories or datasets in each agent's input.
-
-Callbacks run in the controller container and must terminate promptly. Store all
-evolving information in `state`, not module globals. Avoid wall-clock-dependent
-physics, unordered conflict resolution and unrecorded external side effects if
-you need deterministic recovery/replay. JSON files and queued jobs are durable;
-an arbitrary external action made by a callback is not automatically transactional.
-
-## Define the decision environment
-
-The standard [worker environment contract](../asys-workers/README.md) applies.
-For a model-driven environment use:
-
-`component.dcomp`:
-
-```text
-docker asys-workers:dev
-input cyclo.provider.v1.Provider inference
+Service(os.environ["ASYS_RUNTIME_ROOT"], rules, identity="counter-v1",
+        channel=os.environ.get("ASYS_WORLD_CHANNEL", "world")).serve()
 ```
 
-`Dockerfile`:
+For a component deployment, package the program and its dependencies in its
+image and declare it in `component.dcomp`. Accept `--root` and `--channel` so the
+launcher can pass the runtime location, and supply the Docker health check
+required by dcomp. The complete
+[terrarium world](examples/terrarium/world) demonstrates both host and component
+execution with the same entry point. The implementation identity should change
+when rules or their dependencies change; a content digest is useful.
 
-```dockerfile
-FROM asys-workers:dev
-COPY . /opt/asys/environment
-```
+World state is limited to 2 MiB; transitions and pending actions to 4 MiB;
+artifacts to 1 MiB. Observations and individual decisions are bounded separately.
+The worker reserves room for terminal records beneath runtime's 8 MiB file
+limit. A timed-out or invalid world response fails explicitly and retains the
+last committed checkpoint.
 
-`workers.json`:
+## Define the member policy
+
+Use the ordinary environment definition. For model decisions:
 
 ```json
 {
   "version": 1,
-  "name": "target-builders",
+  "name": "habitat",
   "types": {
     "swarm-step": {
-      "command": ["/opt/asys/asys-workers/tools/asys-swarm-agent", "--agent", "researcher"]
+      "command": ["/opt/asys/asys-workers/tools/asys-swarm-agent",
+                  "--agent", "inhabitant", "--model", "account/model"]
     }
   }
 }
 ```
 
-`agents/researcher/prompt.md`:
+Create `agents/inhabitant/prompt.md` with its standing instructions. The component
+uses the existing Provider input. The bounded decision adapter exposes only the
+allowed action schema: no shell, arbitrary file access or coding extensions.
+It receives mission, objective, participant ID, turn, observation and its own
+private memory. It returns `{actions, memory, usage}`. Memory replaces the prior
+value; it is retained by the swarm worker and never sent to the world service.
 
-```text
-Work towards the supplied mission and objective using the available actions.
-Use the observation as evidence. Retain useful information in private memory.
-Follow the supplied action schema and plan length limit.
-```
+A custom trusted member command can run tools or an independent evaluator
+before returning its decision. It uses the normal `ASYS_INPUT`, `ASYS_RESULT`,
+`ASYS_JOB_DIR` and `ASYS_WORKSPACE` conventions, within the parent job's process
+group. Member invocations are internal executions, not additional runtime jobs.
+Their logs and transcripts remain under the swarm job's decision directories.
 
-The prompt defines a behavioral policy, while the mission is specific to a run.
-The worker additionally supplies its structured-response instructions. It loads
-the selected agent prompt and optional environment `tools.md`, but no coding
-tools, extensions, workspace instructions or `memory.md`. The name `researcher`
-only selects a file; the swarm itself has no prescribed scientist hierarchy.
+A population is not a permission boundary. Its trusted commands share a workers
+component. The action-only adapter enforces limited model capabilities; arbitrary
+coding commands would require an additional design to preserve local knowledge.
 
-You can replace the model worker with any ordinary runtime command declaring
-the same job type. The scripted terrarium demonstrates this. Runtime input is:
+## Reuse swarm as one task
 
-```json
-{
-  "mission": "...", "objective": {"target": 12},
-  "agent": "agent-001", "turn": 0,
-  "observation": {"count": 0}, "memory": null,
-  "actionSchema": {"type": "object"},
-  "maxActions": 2, "memoryBytes": 2048,
-  "timeoutSeconds": 30, "options": {"maxTokens": 1024}
-}
-```
-
-Write the result to the runtime's `ASYS_RESULT` file:
+An environment can expose the complete algorithm as an ordinary job type:
 
 ```json
-{
-  "actions": [{"add": 2}, {"add": 1}],
-  "memory": {"lastObservedCount": 0},
-  "usage": {"input": 120, "output": 30, "totalTokens": 150}
-}
+"swarm": {"command": ["/opt/asys/asys-workers/tools/asys-swarm"]}
 ```
 
-`usage` is optional for scripted programs. `actions` and `memory` are required;
-memory can be any JSON value and fully replaces the previous memory. An empty
-plan is allowed and causes another decision on the next active turn.
+The job input supplies an experiment `id`, `config` and an optional control
+`channel`. The world service must already be available on the configured world
+channel. The worker obtains the runtime root from its normal execution context.
+The launcher installs this job-type binding for convenience; BPMN or another
+runtime producer can submit it directly. Neither needs to manage individual
+members or run a second controller.
 
-At each turn, agents with no remaining plan get observations and decision jobs.
-The controller waits for all needed decisions, then applies one action from each
-plan together in a single world transition. Remaining actions are queued for
-later turns without another model call. Therefore plans can become stale: the
-world must validate each action against current state. Runtime response order
-does not establish action order. Private memory is only supplied to that agent,
-but workers share an execution container; use the standard action-only worker
-when local-observation boundaries matter.
+The worker's result includes normal `final` and `exception` fields and the swarm
+status, measurements, artifacts and execution summary. A satisfied objective,
+an unmet objective at the budget limit and exploration are distinct outcomes.
+Pause/resume and progress use runtime channels; runtime job cancellation also
+terminates the member subprocesses.
 
-## Engineering goals
+## Define useful outputs
 
-The same interface can represent a code investigation or a construction task,
-provided the world exposes real capabilities and independent acceptance checks.
+Implement `artifacts` to export the work worth retaining: constructions, source
+references, plans, provenance, measurements or other domain data. Keep large
+files in durable application storage and return verified references. Define an
+independent acceptance test for engineering work; claims in model prose are
+not acceptance evidence.
 
-| Engineering task | Useful actions | Evidence for completion | Export |
-| --- | --- | --- | --- |
-| Find a bug | Inspect allowed code, propose an input, request an isolated test | Reproducible failing case and a checked explanation of violated behavior | Reproducer, test log, proposed patch |
-| Optimize a design | Propose a design, request a simulator trial, reuse a candidate | Required constraints plus measured improvement on separate test cases | Design, parameters, measurements |
-| Build a complex system | Propose a task, submit a patch, request tests, integrate a candidate | Passing acceptance tests, interfaces and integration checks; review for qualitative requirements | Source changes, test evidence and build artifacts |
-
-Those actions are examples to implement, not built-in tools shipped by this
-feature. The terrarium's actions only affect its simulated habitat. Giving its
-agents a prompt saying “build an operating system” does not give them compilers,
-repository access or a meaningful completion test.
-
-For code work, give each candidate an isolated workspace, control which commands
-and dependencies it can use, accept immutable submissions, and run trusted tests
-outside the submitting agent's write access. Use a fast deterministic world
-transition to accept a proposal; long-running test/build jobs need a recorded,
-asynchronous work/result mechanism instead of blocking `step()`. The current
-engine schedules decision jobs; that extra engineering workflow is application
-work. Existing goal/BPMN workflows remain useful for explicit build plans.
-
-To ask whether interaction improves results, compare it with independent agents
-and a sequential agent under matched budgets and seeds. Measure correct accepted
-artifacts, reuse and cost. A moving graph or a single success does not establish
-an advantage from collaboration. The shipped drought checks persistent
-constructions after agent removal; held-out disturbances and repeated trials
-require additional experiments.
+Local interaction and a shared archive are world policies. Compare them with
+matched populations, proposals, evaluator rules and measured token budgets.
+The [research notes](../docs/swarm-research.md) describe their different aims and
+the limits of the teaching example.

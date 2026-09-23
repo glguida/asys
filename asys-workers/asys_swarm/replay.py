@@ -1,18 +1,16 @@
-"""Replay recorded world transitions without any worker or model calls."""
+"""Replay recorded transitions through a world channel, without model calls."""
 import json
 from pathlib import Path
+import uuid
 
 from .config import digest, validate_config
-from .world import World, package_digest
+from .world import World
 
 
-def replay(package, config, trace):
+def replay(root, config, trace, *, package=None, poll=None):
     config = validate_config(config, package)
-    # This developer helper executes trusted world code in its caller. It is
-    # deliberately not part of the host launcher/control surface.
-    world = World(package, config)
+    world = None
     agents = [f'agent-{i + 1:03d}' for i in range(config['agents']['count'])]
-    state = world.call('initialize', config['world']['settings'], agents, config['seed'])
     turns = 0
     started = False
     terminal = None
@@ -26,8 +24,12 @@ def replay(package, config, trace):
                 raise ValueError('Replay event sequence is missing or out of order')
             sequence += 1
             if row['type'] == 'swarm.started':
-                if started or data['packageHash'] != package_digest(package) or data['config'] != config:
-                    raise ValueError('Replay package or configuration differs from the trace')
+                if started or data['config'] != config:
+                    raise ValueError('Replay configuration differs from the trace')
+                world = World(root, config, 'replay-' + uuid.uuid4().hex, poll=poll)
+                if data.get('worldIdentity') != world.identity:
+                    raise ValueError('Replay world identity differs from the trace')
+                state = world.call('initialize', config['world']['settings'], agents, config['seed'])
                 if data['stateHash'] != digest(state):
                     raise ValueError('Initial world state differs from the trace')
                 started = True
@@ -52,8 +54,12 @@ def replay(package, config, trace):
                     or output['metrics'] != evaluation['metrics']
                     or (output['reason'] == 'objective' and expected is not True)):
                     raise ValueError('Replay result contradicts the evaluated world')
-                if data['status'] == 'completed' and output['artifacts'] != world.call('artifacts', state):
-                    raise ValueError('Replay artifacts differ from the recorded result')
+                if data['status'] == 'completed':
+                    # Exhausted wall time forbids another world RPC during
+                    # termination; the worker records an empty artifact export.
+                    artifacts = {} if output['reason'] == 'time_limit' else world.call('artifacts', state)
+                    if output['artifacts'] != artifacts:
+                        raise ValueError('Replay artifacts differ from the recorded result')
                 terminal = data
     if not started:
         raise ValueError('Trace contains no swarm.started event')

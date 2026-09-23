@@ -47,7 +47,11 @@ class Viewer:
     def __init__(self, directory, *, port=0):
         self.directory = Path(directory).resolve()
         record = run_record(self.directory)
-        self.package = self.directory / 'package'
+        # Old runs retained a package; worker-owned runs retain only static
+        # assets. Keep both view formats readable without importing either.
+        self.package = (self.directory / record.get('view_directory', 'package')).resolve()
+        if not self.package.is_relative_to(self.directory):
+            raise ValueError('Saved view directory must remain inside the run')
         self.view = None
         if record.get('view'):
             candidate = (self.package / record['view']).resolve(strict=True)
@@ -144,7 +148,11 @@ class Viewer:
                 continue
             if event['type'] == 'swarm.snapshot':
                 return event['data']
-        checkpoint = self.directory / 'swarm/checkpoint.json'
+        record = run_record(self.directory)
+        state_directory = (self.directory / record.get('swarm_state', 'swarm')).resolve()
+        if not state_directory.is_relative_to(self.directory):
+            raise ValueError('Saved swarm state must remain inside the run')
+        checkpoint = state_directory / 'checkpoint.json'
         if not checkpoint.is_file():
             return {}
         value = read_json(checkpoint)

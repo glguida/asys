@@ -1,4 +1,4 @@
-"""Deterministic world turns, parallel runtime decisions, durable host control."""
+"""One runtime job owns population, private memories, turns, and local decisions."""
 from copy import deepcopy
 import json
 import os
@@ -7,24 +7,38 @@ import time
 import uuid
 
 from asys_runtime.channel import Reader, Writer, direction_root
-from asys_runtime.environment import describe, environment_root
+from asys_runtime.environment import Environment
 from asys_runtime.files import read_json, sync_directory, timestamp, validate_name, write_json
 from asys_runtime.permissions import mkdir
-from asys_runtime.queue import Queue, TERMINAL as JOB_TERMINAL
 
 from .config import digest, json_value, validate_config
 from .limits import (ACTIVE_CHECKPOINT_BYTES, ERROR_CHARACTERS,
                      PUBLICATION_CHECKPOINT_BYTES, TERMINAL_BASE_BYTES)
-from .world import World, package_digest
+from .world import World
+from .executor import Executor, TERMINAL as JOB_TERMINAL
 
 
 TERMINAL = {'completed', 'failed', 'cancelled'}
 
 
+class TimeLimit(TimeoutError):
+    """The swarm budget expired, including time spent waiting on the world."""
+
+
 class Engine:
-    def __init__(self, root, state, workspace, package, *, channel='swarm'):
-        self.root, self.directory, self.workspace, self.package = (
-            Path(path).resolve() for path in (root, state, workspace, package))
+    def __init__(self, root, state, workspace, environment, *, channel='swarm', external=None,
+                 executor_factory=Executor, world_factory=World, stopping=lambda: False):
+        self.root, self.directory, self.workspace = (
+            Path(path).resolve() for path in (root, state, workspace))
+        self.environment = Environment(environment, external=external)
+        self.world_factory = world_factory
+        self.channel = channel
+        self.stopping = stopping
+        self.cancel_requested = False
+        self.finishing = False
+        self.starting_id = None
+        self.starting_config = None
+        self.start_deadline = None
         mkdir(self.directory, parents=True, exist_ok=True)
         if not self.workspace.is_dir():
             raise ValueError('Workspace must be a prepared directory')
@@ -34,24 +48,41 @@ class Engine:
         self.journal = self.directory / 'events.jsonl'
         self.state = read_json(self.checkpoint) if self.checkpoint.exists() else None
         self.world = None
-        self.queue = None
+        self.queue = executor_factory(self.directory / 'decisions', self.environment, self.root)
         self.last_tick = 0.0
-        self.package_hash = package_digest(self.package)
         self.published = self._published_sequence()
         self.recorded = self._recorded_sequence()
         if self.state:
-            if self.state.get('version') != 1 or self.state.get('packageHash') != self.package_hash:
-                raise ValueError('Checkpoint version or experiment package differs; cannot recover')
-            descriptor = describe(self.root, self.state['environment'])
+            if self.state.get('version') != 2:
+                raise ValueError('Checkpoint version differs; cannot recover')
+            if self.state.get('controlChannel') != channel:
+                raise ValueError('Checkpoint control channel differs; cannot recover')
+            if self.state['config']['world']['channel'] == channel:
+                raise ValueError('World and swarm control channels must be different')
+            descriptor = self.environment.descriptor
             if descriptor['definition'] != self.state['environmentDefinition']:
                 raise ValueError('Worker environment definition differs; cannot recover')
-            self.world = World(self.package, self.state['config'])
-            self.queue = Queue(environment_root(self.root, self.state['environment']))
             self.flush()
 
+    def world_poll(self):
+        """Controls remain responsive while the external world handles an RPC."""
+        self.controls()
+        if self.cancel_requested or self.stopping():
+            raise InterruptedError('Swarm interrupted while waiting for the world')
+        deadline = self.state['deadline'] if self.state else self.start_deadline
+        if deadline is not None and time.time() >= deadline:
+            raise TimeLimit('Swarm time limit expired while waiting for the world')
+
     def _published_sequence(self):
+        if not self.state:
+            return 0  # A new job has its own journal sequence on a reused channel.
         last = self.outbound.last()
-        return self.outbound.event(last)['data'].get('store', 0) if last else 0
+        if not last:
+            return 0
+        data = self.outbound.event(last)['data']
+        if data.get('runId') != self.state['id']:
+            raise ValueError('Control channel belongs to another swarm run; cannot recover this checkpoint')
+        return data.get('store', 0)
 
     def _recorded_sequence(self):
         if not self.journal.exists():
@@ -108,6 +139,9 @@ class Engine:
                     stream.flush()
                     os.fsync(stream.fileno())
                 self.recorded = sequence
+                if event['type'].startswith('decision.'):
+                    data = {key: item for key, item in event['data'].items() if key != 'actions'}
+                    print(json.dumps({'type': event['type'], 'time': event['time'], **data}), flush=True)
         # Materialize terminal artifacts before notifying the host, which may
         # immediately tear down the controller after receiving run.result.
         # Repeating this on recovery also repairs a crash during export.
@@ -132,38 +166,50 @@ class Engine:
 
     def start(self, data):
         validate_name('run ID', data.get('id'))
-        config = validate_config(data.get('config'), self.package)
-        environment = data.get('environment')
-        descriptor = describe(self.root, environment)
-        if descriptor['definition'] != data.get('environmentDefinition'):
-            raise ValueError('Worker environment definition differs from the selected environment')
+        config = validate_config(data.get('config'))
+        self.starting_id, self.starting_config = data['id'], config
+        self.start_deadline = self.state['deadline'] if self.state else time.time() + config['limits']['seconds']
+        if config['world']['channel'] == self.channel:
+            raise ValueError('World and swarm control channels must be different')
+        environment = self.environment.name
+        descriptor = self.environment.descriptor
         if config['agents']['type'] not in descriptor['types']:
             raise ValueError(f"Environment does not declare {config['agents']['type']}")
+        command = self.environment.types[config['agents']['type']]['command']
+        if (config['agents']['type'] == 'swarm' or any(Path(argument).name == 'asys-swarm' for argument in command)
+                or any(command[index:index + 2] == ['-m', 'asys_swarm'] for index in range(len(command) - 1))):
+            raise ValueError('A swarm member type cannot recursively run the swarm worker')
+        expired = self.state and (self.state['status'] in TERMINAL or time.time() >= self.start_deadline)
+        if self.world is None and not expired:
+            self.world = self.world_factory(self.root, config, data['id'], poll=self.world_poll)
+            if self.state and self.world.identity != self.state['worldIdentity']:
+                raise ValueError('World service identity differs; cannot recover')
+        identity = self.state['worldIdentity'] if expired else self.world.identity
         signature = digest({'config': config, 'environment': environment,
-                            'definition': descriptor['definition'], 'package': self.package_hash})
+                            'definition': descriptor['definition'], 'world': identity,
+                            'channel': self.channel})
         if self.state:
             if self.state['id'] != data['id'] or self.state['signature'] != signature:
                 raise ValueError('This controller already owns a different run')
             return
-        self.world = World(self.package, config)
         agents = [f'agent-{i + 1:03d}' for i in range(config['agents']['count'])]
         state = self.world.call('initialize', config['world']['settings'], agents, config['seed'])
         if not isinstance(state, dict):
             raise ValueError('initialize() must return a JSON object')
         evaluation = self.world.evaluation(state, config['objective'])
-        self.queue = Queue(environment_root(self.root, environment))
-        initial = {'version': 1, 'id': data['id'], 'signature': signature,
-            'packageHash': self.package_hash, 'config': config, 'environment': environment,
+        initial = {'version': 2, 'id': data['id'], 'signature': signature,
+            'worldIdentity': self.world.identity, 'controlChannel': self.channel,
+            'config': config, 'environment': environment,
             'environmentDefinition': descriptor['definition'], 'status': 'running',
             'turn': 0, 'decisions': 0, 'world': state, 'agents': agents,
             'memories': {agent: None for agent in agents}, 'plans': {agent: [] for agent in agents},
             'pending': None, 'evaluation': evaluation, 'startedAt': timestamp(),
-            'deadline': time.time() + config['limits']['seconds'], 'pauseRequested': False,
+            'deadline': self.start_deadline, 'pauseRequested': False,
             'usage': {'input': 0, 'output': 0, 'totalTokens': 0}, 'sequence': 0, 'outbox': []}
         self.validate_active(initial)
         self.state = initial
         self.event('swarm.started', {'mission': config['mission'], 'objective': config['objective'],
-            'config': config, 'packageHash': self.package_hash, 'stateHash': digest(state)})
+            'config': config, 'worldIdentity': self.world.identity, 'stateHash': digest(state)})
         self.snapshot()
         self.flush()
 
@@ -173,9 +219,13 @@ class Engine:
                 data = event['data']
                 if not isinstance(data, dict):
                     raise ValueError('Control data must be an object')
-                if event['type'] == 'start':
-                    self.start(data)
-                else:
+                if not self.state and event['type'] == 'cancel' and data.get('id') == self.starting_id:
+                    self.cancel_requested = True
+                    self.outbound.send('accepted', {'request': event['sequence'], 'runId': self.starting_id,
+                                                   'status': 'initializing', 'store': self.published})
+                    self.inbound.advance(event['sequence'])
+                    continue
+                if event['type'] != 'start':
                     if not self.state or data.get('id') != self.state['id']:
                         raise ValueError('Unknown swarm run')
                     kind = event['type']
@@ -183,7 +233,7 @@ class Engine:
                         raise ValueError(f'Unknown swarm control {kind}')
                     if self.state['status'] not in TERMINAL:
                         if kind == 'cancel':
-                            self.finish('cancelled', 'cancelled', 'Cancelled by the host')
+                            self.cancel_requested = True
                         elif kind == 'pause':
                             self.state['pauseRequested'] = True
                             if self.state['pending'] is None:
@@ -199,10 +249,13 @@ class Engine:
                     if kind == 'snapshot':
                         self.snapshot()
                     self.flush()
+                else:
+                    raise ValueError('The runtime job input starts this swarm; start is not a control action')
                 self.outbound.send('accepted', {'request': event['sequence'], 'runId': self.state['id'],
                     'status': self.state['status'], 'store': self.published})
             except Exception as error:
                 self.outbound.send('rejected', {'request': event['sequence'], 'message': str(error),
+                                               'runId': self.state['id'] if self.state else self.starting_id,
                                                'store': self.published})
             self.inbound.advance(event['sequence'])
 
@@ -212,6 +265,11 @@ class Engine:
         if not self.state or self.state['status'] in TERMINAL:
             return
         try:
+            if self.stopping():
+                raise InterruptedError('Swarm worker interrupted')
+            if self.cancel_requested:
+                self.finish('cancelled', 'cancelled', 'Cancelled by the host')
+                return
             if time.time() >= self.state['deadline']:
                 self.finish('completed', 'time_limit')
                 return
@@ -230,6 +288,15 @@ class Engine:
                     return
             if self.decisions_ready():
                 self.commit_turn()
+        except TimeLimit:
+            self.finish('completed', 'time_limit')
+        except InterruptedError:
+            if self.stopping():
+                raise
+            if self.cancel_requested:
+                self.finish('cancelled', 'cancelled', 'Cancelled by the host')
+            else:
+                raise
         except Exception as error:
             self.finish('failed', 'error', f'{type(error).__name__}: {error}')
 
@@ -263,7 +330,7 @@ class Engine:
         return True
 
     def job_paths(self, job_id, agent):
-        directory = self.root.parent / 'jobs' / job_id
+        directory = self.directory / 'decisions' / job_id
         workspace = self.workspace / '.asys-swarm' / self.state['id'] / 'agents' / agent
         for path in (directory, workspace):
             mkdir(path, parents=True, exist_ok=True)
@@ -313,8 +380,8 @@ class Engine:
             if decision['status'] != 'planned':
                 continue
             directory, workspace = self.job_paths(decision['id'], agent)
-            # Reusing this job identity with identical inputs is idempotent if a
-            # crash occurred between queue publication and checkpoint update.
+            # The executor persists local attempt identity before spawning; a
+            # crash before checkpoint update cannot duplicate that attempt.
             self.queue.submit(value['config']['agents']['type'], decision['id'], directory=directory,
                 workspace=workspace, input=decision['input'], metadata={
                     'name': f"{agent} turn {value['turn']}", 'run_id': value['id'],
@@ -378,18 +445,42 @@ class Engine:
         if not value or value['status'] in TERMINAL:
             return
         self.cancel_jobs()
+        self.queue.close()
         value['pending'] = None
         artifacts = {}
         try:
-            artifacts = self.world.call('artifacts', value['world'])
+            self.finishing = True
+            if status == 'completed' and reason != 'time_limit':
+                artifacts = self.world.call('artifacts', value['world'])
             if not isinstance(artifacts, dict):
                 raise ValueError('artifacts() must return an object')
+        except TimeLimit:
+            status, reason, error, artifacts = 'completed', 'time_limit', '', {}
+        except InterruptedError:
+            if self.stopping() or not self.cancel_requested:
+                raise
+            status, reason, error, artifacts = 'cancelled', 'cancelled', 'Cancelled by the host', {}
         except Exception as failure:
             status, reason, error = 'failed', 'error', error or str(failure)
+        finally:
+            self.finishing = False
         terminal = self.terminal_state(value, status, reason, error, artifacts)
         json_value(terminal, limit=PUBLICATION_CHECKPOINT_BYTES)
         value.update(terminal)
         self.flush()
+
+    def finish_uninitialized(self, status, reason, message):
+        """A stopped handshake has no world state or evaluation to fabricate."""
+        config = self.starting_config or {}
+        output = {'runId': self.starting_id, 'mission': config.get('mission', ''),
+                  'achieved': None if status == 'completed' and config.get('objective') is None else False,
+                  'reason': reason, 'turns': 0, 'decisions': 0, 'summary': message,
+                  'metrics': {}, 'usage': {'input': 0, 'output': 0, 'totalTokens': 0},
+                  'artifacts': {}, 'files': {}}
+        result = {'runId': self.starting_id, 'status': status, 'output': output, 'error': ''}
+        write_json(self.directory / 'result.json', result)
+        self.outbound.send('run.result', {**result, 'store': self.published})
+        return {'final': message, 'exception': None, **result}
 
     def terminal_state(self, value, status, reason, error, artifacts):
         """Construct the entire terminal publication without mutating live state."""
@@ -435,6 +526,6 @@ class Engine:
         temporary.replace(destination)
         sync_directory(destination.parent)
 
-    def close(self):
-        if self.state and self.state['status'] not in TERMINAL:
-            self.finish('cancelled', 'cancelled', 'Controller stopped')
+    def close(self, *, interrupted=True):
+        self.queue.close(interrupted=interrupted)
+        self.save()

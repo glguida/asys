@@ -246,13 +246,25 @@ replaces the previous value. The worker validates the plan and its bounds,
 records the actual Provider conversation in `agent.json`, and fails on invalid
 output or a failed inference call. It makes no automatic retry or correction.
 
-The [swarm controller](../asys-swarm/README.md) schedules decisions, retains
-private memories and owns authoritative world state. It validates each action
-again before the world's rules apply it, and the world's evaluator determines
-goal completion. The runtime and Provider protocols are unchanged. An ordinary
-program can return the same plan format, as the
+The complete [swarm worker](../asys-swarm/README.md),
+`/opt/asys/asys-workers/tools/asys-swarm`, schedules these member executions,
+retains private memories and checkpoints committed world snapshots. Like goal
+and senate, the whole algorithm is one ordinary runtime job. It communicates
+with an independent world program through runtime channels; the world determines
+per-agent observations, action consequences and goal completion. The world can
+run on the host or in a separate component, and its source is never imported
+into the swarm worker. The runtime and Provider primitives are unchanged. An ordinary
+program can return the same member plan format, as the
 [terrarium's scripted environment](../asys-swarm/examples/terrarium/env/scripted)
 does without inference.
+
+The swarm job input contains `id`, `config` and an optional control `channel`.
+The selected member command comes from the environment's `workers.json`.
+Member processes stay in the parent runtime job's process group and keep their
+own logs and transcripts. They are internal executions rather than additional
+runtime jobs; parent cancellation stops their work. See the
+[authoring guide](../asys-swarm/AUTHORING.md) for configuration and the world
+protocol.
 
 ## Programs and humans
 

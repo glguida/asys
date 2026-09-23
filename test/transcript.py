@@ -289,5 +289,43 @@ class TranscriptTest(unittest.TestCase):
         self.assertIn('Senate finished', '\n'.join(self.output.read(self.job)[1]))
 
 
+class SwarmTranscriptTest(unittest.TestCase):
+    def test_parent_job_renders_latest_member_and_nested_stage_transcripts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            swarm = root / 'swarm'
+            swarm.mkdir()
+            (swarm / 'checkpoint.json').write_text(json.dumps({'version': 2, 'agents': ['agent-001'],
+                'status': 'running', 'turn': 2, 'decisions': 3, 'config': {'mission': 'Build a habitat'},
+                'evaluation': {'summary': 'Two healthy gardens'}}))
+            for turn in (1, 2):
+                decision = swarm / 'decisions' / str(turn)
+                (decision / 'inspect').mkdir(parents=True)
+                (decision / 'state.json').write_text(json.dumps({'id': str(turn), 'agent': 'agent-001',
+                    'turn': turn, 'status': 'running', 'submitted_at': str(turn)}))
+                (decision / 'inspect/agent.json').write_text(json.dumps({'agent': {'session': {'entries': [
+                    {'type': 'message', 'message': {'role': 'assistant', 'content': f'Design from turn {turn}'}}
+                ]}}}))
+            title, lines = JobOutput().read({'directory': str(root), 'status': 'running'})
+            text = '\n'.join(lines)
+            self.assertEqual(title, 'Swarm')
+            self.assertIn('Build a habitat', text)
+            self.assertIn('agent-001 · Turn 2', text)
+            self.assertIn('Design from turn 2', text)
+            self.assertNotIn('Design from turn 1', text)
+
+    def test_swarm_progress_uses_worker_events(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            log = root / 'stdout.log'
+            job = {'directory': str(root)}
+            progress = AgentProgress()
+            log.write_text(json.dumps({'type': 'swarm.tick', 'data': {'turn': 3}}) + '\n')
+            self.assertEqual(progress.observe(job)['detail'], 'swarm turn 3 committed')
+            with log.open('a') as out:
+                out.write(json.dumps({'type': 'swarm.completed', 'data': {'reason': 'objective'}}) + '\n')
+            self.assertEqual(progress.observe(job)['detail'], 'swarm completed: objective')
+
+
 if __name__ == "__main__":
     unittest.main()

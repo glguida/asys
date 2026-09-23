@@ -1,6 +1,6 @@
 {
   "version": 1,
   "name": "terrarium-scripted",
-  "description": "Deterministic teaching policy. No model calls; ordinary runtime jobs.",
+  "description": "Deterministic swarm member policy. No model calls.",
   "types": {"swarm-step": {"command": ["python3", "/opt/asys/environment/programs/inhabitant.py"]}}
 }

@@ -1,19 +1,28 @@
 """Exercise authoritative turns and recovery over the real filesystem runtime."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from asys_runtime.channel import Reader, Writer, direction_root
 from asys_runtime.environment import Environment, describe
 from asys_runtime.files import read_json, write_json
+from asys_runtime.queue import Queue as RuntimeQueue
 from asys_swarm.config import load_config, validate_config
 from asys_swarm.engine import Engine
+from asys_swarm.__main__ import main as worker_main
 from asys_swarm.limits import PUBLICATION_CHECKPOINT_BYTES, WORLD_BYTES
 from asys_swarm.replay import replay
+from asys_swarm.world_service import Service
+from asys_swarm.executor import Executor
+from asys_swarm.config import digest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORLD = '''
@@ -36,6 +45,34 @@ def artifacts(state):
 '''
 
 
+class ManualExecutor:
+    """Deterministic decision fixture; process lifecycle has its own real tests."""
+    def __init__(self, directory, environment, root):
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+    def list(self):
+        return [read_json(path / 'state.json') for path in sorted(self.directory.iterdir()) if (path / 'state.json').exists()]
+    def state(self, identity):
+        return read_json(self.directory / identity / 'state.json')
+    def save(self, state):
+        write_json(self.directory / state['id'] / 'state.json', state)
+    def submit(self, kind, identity, *, directory, workspace, input, metadata):
+        if (Path(directory) / 'state.json').exists():
+            return self.state(identity)
+        state = {'id': identity, 'status': 'pending', 'input': input, 'metadata': metadata}
+        self.save(state)
+        return state
+    def cancel(self, identity):
+        state = self.state(identity)
+        if state['status'] not in {'done', 'failed', 'cancelled', 'interrupted'}:
+            state['status'] = 'cancelled'
+            self.save(state)
+    def close(self, *, interrupted=False):
+        if not interrupted:
+            for state in self.list():
+                self.cancel(state['id'])
+
+
 class EngineTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -51,18 +88,40 @@ class EngineTests(unittest.TestCase):
         self.registration = Environment(self.env).register(self.root)
         self.registration.__enter__()
         self.config = {'version': 1, 'mission': 'Reach the target together',
-            'world': {'module': 'world.py'}, 'objective': {'target': 4},
+            'world': {'channel': 'world', 'timeoutSeconds': 2}, 'objective': {'target': 4},
             'agents': {'count': 2}, 'limits': {'tickSeconds': 0, 'concurrency': 1, 'turns': 4}}
-        self.engine = Engine(self.root, self.storage, self.workspace, self.package)
+        self.service_stop = None
+        self.reset_service()
+        self.engine = self.make_engine()
         self.inbound = Writer(direction_root(self.root, 'swarm', 'in'))
 
     def tearDown(self):
+        self.engine.close()
+        self.service_stop.set()
+        self.service_thread.join(timeout=3)
+        self.assertFalse(self.service_thread.is_alive())
         self.registration.__exit__(None, None, None)
         self.temporary.cleanup()
 
+    def reset_service(self):
+        if self.service_stop is not None:
+            self.service_stop.set()
+            self.service_thread.join(timeout=3)
+        namespace = {}
+        source = (self.package / 'world.py').read_text()
+        exec(source, namespace)
+        self.callbacks = SimpleNamespace(**namespace)
+        self.service = Service(self.root, self.callbacks, identity='fixture-' + digest(source))
+        self.service_stop = threading.Event()
+        self.service_thread = threading.Thread(target=self.service.serve, args=(self.service_stop.is_set,), daemon=True)
+        self.service_thread.start()
+
+    def make_engine(self, *, real=False):
+        return Engine(self.root, self.storage, self.workspace, self.env,
+                      executor_factory=Executor if real else ManualExecutor)
+
     def start(self):
-        self.inbound.send('start', {'id': 'test-run', 'environment': 'test',
-            'environmentDefinition': describe(self.root, 'test')['definition'], 'config': self.config})
+        self.engine.start({'id': 'test-run', 'config': self.config})
         self.engine.pump()
 
     def answer(self, actions=None, *, status='done', result=None):
@@ -90,7 +149,8 @@ class EngineTests(unittest.TestCase):
         return [json.loads(line) for line in self.engine.journal.read_text().splitlines()]
 
     def recover(self):
-        self.engine = Engine(self.root, self.storage, self.workspace, self.package)
+        self.engine = self.make_engine()
+        self.engine.start({'id': 'test-run', 'config': self.config})
 
     def test_goal_concurrency_and_replay(self):
         self.start()
@@ -107,22 +167,315 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result['usage']['totalTokens'], 20)
         for filename in result['files'].values():
             self.assertTrue((self.workspace / filename).is_file())
-        report = replay(self.package, self.engine.state['config'], self.engine.journal)
+        report = replay(self.root, self.engine.state['config'], self.engine.journal)
         self.assertTrue(report['verified'])
         self.assertTrue(report['evaluation']['achieved'])
         self.assertEqual(report['turns'], 2)
 
-    def test_real_runtime_decision_process(self):
+    def test_real_local_decision_process(self):
+        self.engine = self.make_engine(real=True)
         self.start()
-        for _ in range(10):
-            if self.engine.state['status'] == 'completed':
-                break
-            response = subprocess.run([sys.executable, str(ROOT / 'asys-runtime/tools/asys-runtime'),
-                'run', str(self.env), '--root', str(self.root), '--once'],
-                text=True, capture_output=True, timeout=10)
-            self.assertEqual(response.returncode, 0, response.stderr)
+        deadline = time.monotonic() + 8
+        while self.engine.state['status'] not in {'completed', 'failed'} and time.monotonic() < deadline:
             self.engine.pump()
+            time.sleep(0.01)
+        self.assertEqual(self.engine.state['status'], 'completed', self.engine.state)
         self.assertTrue(self.engine.state['result']['output']['achieved'])
+        self.assertFalse((self.root / 'environments/test/jobs').exists(), 'Member attempts are not runtime jobs')
+        self.assertEqual(len(list((self.storage / 'decisions').glob('*/state.json'))), 4)
+
+    def test_whole_population_is_one_standard_runtime_job(self):
+        definition = read_json(self.env / 'workers.json')
+        definition['types']['swarm'] = {'command': [str(ROOT / 'asys-workers/tools/asys-swarm')]}
+        self.registration.__exit__(None, None, None)
+        write_json(self.env / 'workers.json', definition)
+        self.registration = Environment(self.env).register(self.root)
+        self.registration.__enter__()
+        directory = self.base / 'parent-job'
+        directory.mkdir()
+        config = {**self.config, 'objective': None,
+                  'limits': {**self.config['limits'], 'turns': 1}}
+        queue = RuntimeQueue(self.root / 'environments/test')
+        queue.submit('swarm', 'outer-swarm', directory=directory, workspace=self.workspace,
+                     input={'id': 'test-run', 'config': config, 'channel': 'swarm'})
+        completed = subprocess.run([sys.executable, str(ROOT / 'asys-runtime/tools/asys-runtime'),
+            'run', str(self.env), '--root', str(self.root), '--once'],
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        state = queue.state('outer-swarm')
+        self.assertEqual(state['status'], 'done', state)
+        self.assertIsNone(state['result']['exception'])
+        self.assertEqual(state['result']['status'], 'completed')
+        self.assertEqual(state['result']['output']['decisions'], 2)
+        self.assertEqual([entry['id'] for entry in queue.list()], ['outer-swarm'])
+        self.assertTrue((directory / 'swarm/checkpoint.json').is_file())
+        self.assertEqual(len(list((directory / 'swarm/decisions').glob('*/state.json'))), 2)
+
+    def test_completed_local_attempt_survives_checkpoint_recovery_without_repeating(self):
+        self.config['limits']['turns'] = 1
+        self.engine = self.make_engine(real=True)
+        self.start()
+        identity = next(iter(self.engine.state['pending']['decisions'].values()))['id']
+        deadline = time.monotonic() + 5
+        while self.engine.queue.state(identity)['status'] != 'done' and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(self.engine.queue.state(identity)['status'], 'done')
+        # The process result is durable, but this controller has not consumed it.
+        self.assertEqual(self.engine.state['pending']['decisions']['agent-001']['status'], 'submitted')
+        self.engine.close(interrupted=True)
+        self.engine = self.make_engine(real=True)
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        while self.engine.state['status'] not in {'completed', 'failed'} and time.monotonic() < deadline:
+            self.engine.pump()
+            time.sleep(0.01)
+        self.assertEqual(self.engine.state['status'], 'completed')
+        self.assertEqual(self.engine.state['decisions'], 2)
+        self.assertEqual(len(self.engine.queue.list()), 2)
+        self.assertEqual(sum(event['type'] == 'decision.completed' and event['data']['jobId'] == identity
+                             for event in self.events()), 1)
+
+    def test_cancel_interrupts_world_wait_without_recursive_rpc(self):
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        entered = threading.Event()
+        original = self.callbacks.observe
+        def slow(*args):
+            entered.set()
+            time.sleep(0.5)
+            return original(*args)
+        self.callbacks.observe = slow
+        def cancel():
+            if entered.wait(2):
+                self.inbound.send('cancel', {'id': 'test-run'})
+        sender = threading.Thread(target=cancel)
+        sender.start()
+        started = time.monotonic()
+        self.engine.pump()
+        sender.join(timeout=2)
+        self.assertLess(time.monotonic() - started, 0.4)
+        self.assertEqual(self.engine.state['status'], 'cancelled')
+        self.assertEqual(self.engine.state['world']['total'], 0)
+        self.assertEqual(self.engine.queue.list(), [])
+
+    def worker_environment(self, config):
+        directory = self.base / 'parent-job'
+        directory.mkdir()
+        write_json(directory / 'input.json', {'id': 'test-run', 'config': config, 'channel': 'swarm'})
+        return {**os.environ, 'ASYS_JOB_DIR': str(directory), 'ASYS_JOB_ID': 'outer',
+                'ASYS_INPUT': str(directory / 'input.json'), 'ASYS_RESULT': str(directory / 'result.json'),
+                'ASYS_ENVIRONMENT_DIR': str(self.env), 'ASYS_WORKERS_DIR': str(self.env),
+                'ASYS_WORKSPACE': str(self.workspace), 'ASYS_RUNTIME_ROOT': str(self.root)}
+
+    def test_channel_cancel_during_startup_returns_normal_cancelled_result(self):
+        environment = self.worker_environment(self.config)
+        self.inbound.send('cancel', {'id': 'test-run'})
+        started = time.monotonic()
+        code = worker_main([], environment=environment)
+        self.assertLess(time.monotonic() - started, 0.4)
+        self.assertEqual(code, 0)
+        result = read_json(environment['ASYS_RESULT'])
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertIsNone(result['exception'])
+        self.assertTrue(result['final'])
+        self.assertEqual(result['output']['decisions'], 0)
+        messages = Reader(direction_root(self.root, 'swarm', 'out')).read(0)
+        self.assertTrue(any(event['type'] == 'accepted' for event in messages))
+        self.assertEqual(messages[-1]['type'], 'run.result')
+
+    def test_deadline_covers_world_initialization(self):
+        original = self.callbacks.initialize
+        def slow(*args):
+            time.sleep(1.5)
+            return original(*args)
+        self.callbacks.initialize = slow
+        self.config['limits']['seconds'] = 0.1
+        environment = self.worker_environment(self.config)
+        started = time.monotonic()
+        self.assertEqual(worker_main([], environment=environment), 0)
+        self.assertLess(time.monotonic() - started, 1.0)
+        result = read_json(environment['ASYS_RESULT'])
+        self.assertEqual((result['status'], result['output']['reason']), ('completed', 'time_limit'))
+        self.assertEqual(result['output']['turns'], 0)
+        self.assertEqual(result['output']['metrics'], {})
+
+    def test_deadline_interrupts_world_observation_without_extra_artifact_call(self):
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        original = self.callbacks.observe
+        def slow(*args):
+            time.sleep(0.5)
+            return original(*args)
+        self.callbacks.observe = slow
+        self.engine.state['deadline'] = time.time() + 0.1
+        started = time.monotonic()
+        self.engine.pump()
+        self.assertLess(time.monotonic() - started, 0.4)
+        self.assertEqual(self.engine.state['result']['output']['reason'], 'time_limit')
+        self.assertEqual(self.engine.state['world']['total'], 0)
+        self.assertEqual(self.engine.state['result']['output']['artifacts'], {})
+
+    def test_cancel_interrupts_final_artifact_collection(self):
+        self.config['objective'] = {'target': 0}
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        entered = threading.Event()
+        def slow(_):
+            entered.set()
+            time.sleep(1.5)
+            return {'late': True}
+        self.callbacks.artifacts = slow
+        def cancel():
+            if entered.wait(2):
+                self.inbound.send('cancel', {'id': 'test-run'})
+        sender = threading.Thread(target=cancel)
+        sender.start()
+        started = time.monotonic()
+        self.engine.pump()
+        sender.join(timeout=2)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(self.engine.state['status'], 'cancelled')
+        self.assertEqual(self.engine.state['world']['total'], 0)
+        self.assertEqual(self.engine.state['result']['output']['artifacts'], {})
+
+    def test_deadline_interrupts_final_artifact_collection(self):
+        self.config['objective'] = {'target': 0}
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        def slow(_):
+            time.sleep(1.5)
+            return {'late': True}
+        self.callbacks.artifacts = slow
+        self.engine.state['deadline'] = time.time() + 0.1
+        started = time.monotonic()
+        self.engine.pump()
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(self.engine.state['result']['output']['reason'], 'time_limit')
+        self.assertEqual(self.engine.state['world']['total'], 0)
+        self.assertEqual(self.engine.state['result']['output']['artifacts'], {})
+
+    def test_failed_world_callback_does_not_request_more_world_work(self):
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        requested = []
+        def fail(*_):
+            raise ValueError('world unavailable')
+        self.callbacks.observe = fail
+        self.callbacks.artifacts = lambda *_: requested.append(True) or {}
+        self.engine.pump()
+        self.assertEqual(self.engine.state['status'], 'failed')
+        self.assertEqual(requested, [])
+        self.assertIn('world unavailable', self.engine.state['result']['error'])
+
+    def test_worker_failure_has_nonempty_final_and_exception(self):
+        environment = self.worker_environment({**self.config, 'agents': {'type': 'missing'}})
+        self.assertEqual(worker_main([], environment=environment), 1)
+        result = read_json(environment['ASYS_RESULT'])
+        self.assertTrue(result['final'])
+        self.assertTrue(result['exception'])
+        self.assertEqual(result['status'], 'failed')
+
+    def test_runtime_interruption_keeps_a_resumable_checkpoint(self):
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        self.engine.stopping = lambda: True
+        with self.assertRaises(InterruptedError):
+            self.engine.pump()
+        self.engine.close(interrupted=True)
+        self.assertEqual(read_json(self.engine.checkpoint)['status'], 'running')
+        self.engine = self.make_engine()
+        self.engine.start({'id': 'test-run', 'config': self.config})
+        self.engine.pump()
+        self.run_to_end()
+        self.assertEqual(self.engine.state['status'], 'completed')
+
+    def test_member_type_cannot_launch_recursive_swarm(self):
+        definition = read_json(self.env / 'workers.json')
+        definition['types']['swarm-step']['command'] = ['/opt/asys/asys-workers/tools/asys-swarm']
+        write_json(self.env / 'workers.json', definition)
+        self.engine = self.make_engine()
+        with self.assertRaisesRegex(ValueError, 'recursively'):
+            self.start()
+
+    def test_host_cannot_start_a_second_population_via_controls(self):
+        self.start()
+        self.inbound.send('start', {'id': 'other', 'config': self.config})
+        self.engine.controls()
+        messages = Reader(direction_root(self.root, 'swarm', 'out')).read(0)
+        self.assertEqual(messages[-1]['type'], 'rejected')
+        self.assertEqual(messages[-1]['data']['runId'], 'test-run')
+        self.assertEqual(self.engine.state['id'], 'test-run')
+        self.recover()
+        self.run_to_end()
+        self.assertEqual(self.engine.state['status'], 'completed')
+
+    def test_world_channel_cannot_share_custom_control_channel(self):
+        self.engine = Engine(self.root, self.storage, self.workspace, self.env,
+                             channel='custom', executor_factory=ManualExecutor)
+        self.config['world']['channel'] = 'custom'
+        with self.assertRaisesRegex(ValueError, 'channels must be different'):
+            self.start()
+
+    def test_recovery_rejects_changed_control_channel(self):
+        self.start()
+        with self.assertRaisesRegex(ValueError, 'control channel differs'):
+            Engine(self.root, self.storage, self.workspace, self.env,
+                   channel='other', executor_factory=ManualExecutor)
+
+    def test_fresh_job_reusing_control_channel_publishes_its_own_events(self):
+        self.config['limits']['turns'] = 1
+        self.start()
+        self.run_to_end()
+        self.engine.close()
+        self.engine = Engine(self.root, self.base / 'second-state', self.workspace, self.env,
+                             executor_factory=ManualExecutor)
+        self.engine.start({'id': 'second-run', 'config': self.config})
+        self.engine.pump()
+        self.run_to_end()
+        messages = Reader(direction_root(self.root, 'swarm', 'out')).read(0)
+        for identity in ('test-run', 'second-run'):
+            own = [event for event in messages if event['data'].get('runId') == identity]
+            self.assertEqual(own[0]['type'], 'swarm.started')
+            self.assertEqual(own[0]['data']['store'], 1)
+            self.assertEqual(own[-1]['type'], 'run.result')
+
+    def test_recovery_rejects_channel_reused_by_another_run(self):
+        self.start()
+        self.engine.outbound.send('swarm.started', {'runId': 'other-run', 'store': 1})
+        with self.assertRaisesRegex(ValueError, 'another swarm run'):
+            self.recover()
+
+    def test_two_worker_processes_cannot_share_the_world_response_cursor(self):
+        definition = read_json(self.env / 'workers.json')
+        definition['types']['swarm-step']['command'] = [sys.executable, '-c', 'import time;time.sleep(30)']
+        write_json(self.env / 'workers.json', definition)
+        environment = self.worker_environment(self.config)
+        first = subprocess.Popen([str(ROOT / 'asys-workers/tools/asys-swarm')], env=environment,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            checkpoint = Path(environment['ASYS_JOB_DIR']) / 'swarm/checkpoint.json'
+            deadline = time.monotonic() + 5
+            while not checkpoint.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(checkpoint.exists(), first.poll())
+            second_directory = self.base / 'second-job'
+            second_directory.mkdir()
+            write_json(second_directory / 'input.json', {'id': 'second-run', 'config': self.config,
+                                                        'channel': 'second-control'})
+            second_environment = {**environment, 'ASYS_JOB_DIR': str(second_directory),
+                'ASYS_INPUT': str(second_directory / 'input.json'),
+                'ASYS_RESULT': str(second_directory / 'result.json')}
+            second = subprocess.run([str(ROOT / 'asys-workers/tools/asys-swarm')], env=second_environment,
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(second.returncode, 1)
+            result = read_json(second_directory / 'result.json')
+            self.assertIn('owns channel world', result['exception'])
+            self.assertTrue(result['final'])
+            self.inbound.send('cancel', {'id': 'test-run'})
+            self.assertEqual(first.wait(timeout=5), 0)
+            self.assertEqual(read_json(environment['ASYS_RESULT'])['status'], 'cancelled')
+        finally:
+            if first.poll() is None:
+                first.terminate()
+                try:
+                    first.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    first.kill()
+                    first.wait()
+            first.stderr.close()
 
     def test_exploration_and_unsatisfied_objective_have_distinct_results(self):
         self.config['objective'] = None
@@ -270,14 +623,15 @@ class EngineTests(unittest.TestCase):
         self.start()
         with (self.package / 'world.py').open('a') as stream:
             stream.write('\n# modified\n')
-        with self.assertRaisesRegex(ValueError, 'package differs'):
+        self.reset_service()
+        with self.assertRaisesRegex(ValueError, 'World service identity differs'):
             self.recover()
 
     def test_recovery_rejects_changed_worker_definition(self):
         self.start()
-        descriptor = describe(self.root, 'test')
-        descriptor['definition'] = '0' * 64
-        write_json(self.root / 'environments/test/environment.json', descriptor)
+        definition = read_json(self.env / 'workers.json')
+        definition['types']['swarm-step']['env'] = {'CHANGED': 'yes'}
+        write_json(self.env / 'workers.json', definition)
         with self.assertRaisesRegex(ValueError, 'Worker environment definition differs'):
             self.recover()
 
@@ -289,7 +643,7 @@ class EngineTests(unittest.TestCase):
         trace = self.base / 'changed.jsonl'
         trace.write_text(''.join(json.dumps(row) + '\n' for row in rows))
         with self.assertRaisesRegex(ValueError, 'diverged'):
-            replay(self.package, self.engine.state['config'], trace)
+            replay(self.root, self.engine.state['config'], trace)
 
     def test_replay_rejects_fabricated_outcome_and_missing_events(self):
         self.start()
@@ -299,16 +653,16 @@ class EngineTests(unittest.TestCase):
         trace = self.base / 'changed.jsonl'
         trace.write_text(''.join(json.dumps(row) + '\n' for row in rows))
         with self.assertRaisesRegex(ValueError, 'contradicts'):
-            replay(self.package, self.engine.state['config'], trace)
+            replay(self.root, self.engine.state['config'], trace)
         trace.write_text(''.join(json.dumps(row) + '\n' for row in rows[1:]))
         with self.assertRaisesRegex(ValueError, 'sequence'):
-            replay(self.package, self.engine.state['config'], trace)
+            replay(self.root, self.engine.state['config'], trace)
 
     def test_oversized_observation_fails_before_submitting_jobs(self):
         self.start()
         self.answer()
         self.answer()
-        self.engine.world.module.observe = lambda *_: {'oversized': 'x' * (256 * 1024)}
+        self.callbacks.observe = lambda *_: {'oversized': 'x' * (256 * 1024)}
         self.engine.pump()
         self.assertEqual(self.engine.state['status'], 'failed')
         self.assertEqual(self.engine.state['turn'], 1)
@@ -323,7 +677,7 @@ class EngineTests(unittest.TestCase):
         self.engine.cancel_jobs()
         self.engine.state['pending'] = None
         existing = len(self.engine.queue.list())
-        self.engine.world.module.observe = lambda *_: {'context': 'x' * (120 * 1024)}
+        self.callbacks.observe = lambda *_: {'context': 'x' * (120 * 1024)}
         self.engine.pump()
         self.assertEqual(self.engine.state['status'], 'failed')
         self.assertEqual(len(self.engine.queue.list()), existing)
@@ -345,8 +699,8 @@ def step(state, actions):
 def artifacts(state):
     return {{"payload":"a" * {artifact_bytes},"total":state["total"]}}
 ''')
-        # No run has started, so replace the controller's package fingerprint.
-        self.engine = Engine(self.root, self.storage, self.workspace, self.package)
+        self.reset_service()
+        self.engine = self.make_engine()
 
     def test_large_world_sixteen_decisions_recovery_and_replay(self):
         self.large_world()
@@ -369,7 +723,7 @@ def artifacts(state):
         self.assertEqual(self.engine.state['status'], 'completed')
         self.assertEqual(self.engine.state['result']['output']['decisions'], 32)
         self.assertEqual(len(read_json(self.workspace / 'swarm-runs/test-run/artifacts.json')['payload']), 900 * 1024)
-        self.assertTrue(replay(self.package, self.engine.state['config'], self.engine.journal)['verified'])
+        self.assertTrue(replay(self.root, self.engine.state['config'], self.engine.journal)['verified'])
 
     def test_large_terminal_outbox_recovery_preserves_artifacts(self):
         self.large_world(state_bytes=WORLD_BYTES - 1024, observation_bytes=0,
@@ -395,7 +749,7 @@ def artifacts(state):
         self.assertEqual(sum(row['type'] == 'run.result' for row in messages), 1)
         exported = read_json(self.workspace / 'swarm-runs/test-run/artifacts.json')
         self.assertEqual(exported, saved['result']['output']['artifacts'])
-        self.assertTrue(replay(self.package, self.engine.state['config'], self.engine.journal)['verified'])
+        self.assertTrue(replay(self.root, self.engine.state['config'], self.engine.journal)['verified'])
 
     def test_large_step_outbox_rejected_before_world_commit(self):
         # The callback result fits 4 MiB, but events appear in both tick and
@@ -414,11 +768,9 @@ def artifacts(state):
 
     def test_world_and_artifact_caps_are_still_enforced(self):
         self.large_world(state_bytes=WORLD_BYTES, observation_bytes=0, artifact_bytes=0)
-        self.start()
+        with self.assertRaisesRegex(Exception, 'exceeds'):
+            self.start()
         self.assertIsNone(self.engine.state)
-        messages = Reader(direction_root(self.root, 'swarm', 'out')).read(0)
-        self.assertEqual(messages[-1]['type'], 'rejected')
-        self.assertIn('exceeds', messages[-1]['data']['message'])
         self.large_world(state_bytes=300 * 1024, observation_bytes=0,
                          artifact_bytes=1024 * 1024)
         self.config['agents']['count'] = 1
@@ -445,7 +797,7 @@ def artifacts(state):
         for limits in ({'memoryBytes': 0}, {'seconds': True}, {'concurrency': 65}, {'surprise': 1}):
             with self.subTest(limits=limits), self.assertRaises(ValueError):
                 validate_config({**self.config, 'limits': limits}, self.package)
-        with self.assertRaisesRegex(ValueError, 'inside'):
+        with self.assertRaisesRegex(ValueError, 'module'):
             validate_config({**self.config, 'world': {'module': '../escape.py'}}, self.package)
 
 
