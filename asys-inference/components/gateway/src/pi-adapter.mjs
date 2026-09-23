@@ -1,6 +1,5 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 import { STATUS_CODES } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import { createResourceExhaustedError } from "@cyclo/provider/errors";
 import { decodePayload, encodePayload } from "@cyclo/provider/protocol";
 
@@ -8,12 +7,17 @@ import { credentialSecretValues } from "./credentials.mjs";
 
 const DEFAULT_EXHAUSTION_RETRY_MS = 60_000;
 const TRANSIENT_HTTP = new Set([408, 500, 502, 503, 504, 529]);
-const MAX_RETRIES = 3;
+const NETWORK_ERRORS = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "EPIPE", "ETIMEDOUT", "EAI_AGAIN",
+  "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET",
+]);
 
 class GatewayTransientError extends Error {
-  constructor(status) {
-    super(`Upstream HTTP ${status} ${STATUS_CODES[status] ?? 'Overloaded'}`);
-    this.status = status;
+  constructor(reason) {
+    super(typeof reason === "number"
+      ? `Upstream HTTP ${reason} ${STATUS_CODES[reason] ?? 'Overloaded'}`
+      : reason);
   }
 }
 
@@ -28,47 +32,24 @@ class GatewayResourceExhaustion extends Error {
 
 // The gateway terminates the opaque transport because this is where a Pi call
 // becomes a native provider request. It does not interpret messages, tools,
-// schemas, arguments, or successful model output. It owns bounded retries
-// before output begins and enforces its credential boundary on serialized events.
-export function createPiAdapter({
-  now = Date.now,
-  sleep = (ms, signal) => delay(ms, undefined, { signal }),
-} = {}) {
+// schemas, arguments, or successful model output. Each Infer performs one native
+// attempt; the caller owns end-to-end timeouts, retries, and capacity waits.
+export function createPiAdapter({ now = Date.now } = {}) {
   return Object.freeze({
     infer(route, payload, signal) {
-      return dispatch(route, payload, signal, now, sleep);
+      return dispatch(route, payload, signal, now);
     },
   });
 }
 
-async function* dispatch(route, payload, signal, now, sleep) {
-  for (let retry = 0; ; retry++) {
-    try {
-      signal?.throwIfAborted();
-      yield* dispatchAttempt(route, payload, signal, now);
-      return;
-    } catch (error) {
-      if (signal?.aborted) throw upstreamFailure(error, signal);
-      if (!(error instanceof GatewayTransientError)) throw error;
-      if (retry === MAX_RETRIES) {
-        throw new ConnectError(`${error.message} after ${retry + 1} attempts`, Code.Unavailable);
-      }
-      const delayMs = 1000 * 2 ** retry;
-      console.error(`${error.message}; retry ${retry + 1}/${MAX_RETRIES} in ${delayMs} ms`);
-      try { await sleep(delayMs, signal); }
-      catch (error) { throw upstreamFailure(error, signal); }
-    }
-  }
-}
-
-async function* dispatchAttempt(route, payload, signal, now) {
+async function* dispatch(route, payload, signal, now) {
   if (
     !route?.models
     || typeof route.models.streamSimple !== "function"
     || !route.credentialStore
     || typeof route.credentialStore.read !== "function"
   ) {
-    throw new ConnectError("model adapter is unavailable", Code.Unavailable);
+    throw new ConnectError("model adapter is unavailable", Code.FailedPrecondition);
   }
 
   const frame = piCallFrame(payload);
@@ -76,6 +57,8 @@ async function* dispatchAttempt(route, payload, signal, now) {
   const dispatchSignal = signal
     ? AbortSignal.any([signal, localAbort.signal])
     : localAbort.signal;
+  let transportFailure;
+  const reflectionGuard = credentialReflectionGuard([]);
 
   try {
     const api = route.rawModel.api;
@@ -90,9 +73,7 @@ async function* dispatchAttempt(route, payload, signal, now) {
         cause: error,
       });
     }
-    const reflectionGuard = credentialReflectionGuard(
-      credentialSecretValues(credential),
-    );
+    reflectionGuard.add(credentialSecretValues(credential));
     let response;
     const options = gatewayOptions(
       frame.options,
@@ -104,10 +85,38 @@ async function* dispatchAttempt(route, payload, signal, now) {
         return headers;
       },
     );
+    // Observe transport errors before Pi turns them into terminal text events.
+    // Classification uses native error codes, never provider error prose.
+    options.fetch = async (...args) => {
+      try {
+        const result = await globalThis.fetch(...args);
+        response = { status: result.status, headers: result.headers };
+        if (!result.body || !result.ok) return result;
+        const reader = result.body.getReader();
+        const body = new ReadableStream({
+          async pull(controller) {
+            try {
+              const { done, value } = await reader.read();
+              if (done) { reader.releaseLock(); controller.close(); }
+              else controller.enqueue(value);
+            } catch (error) {
+              const code = networkErrorCode(error);
+              transportFailure = new GatewayTransientError(`Upstream stream interrupted${code ? ` (${code})` : ""}`);
+              controller.error(error);
+            }
+          },
+          cancel(reason) { return reader.cancel(reason); },
+        });
+        return new Response(body, result);
+      } catch (error) {
+        const code = networkErrorCode(error);
+        if (code) transportFailure = new GatewayTransientError(`Upstream connection failed (${code})`);
+        throw error;
+      }
+    };
     const native = route.models.streamSimple(route.rawModel, frame.context, options);
-    let emitted = false;
 
-    for await (const event of native) {
+    for await (const event of nativeEvents(native, localAbort, dispatchSignal)) {
       let encoded;
       try {
         encoded = encodePayload(event);
@@ -118,35 +127,70 @@ async function* dispatchAttempt(route, payload, signal, now) {
       }
       reflectionGuard.check(encoded);
 
-      if (!emitted) {
-        const retryAt = providerExhaustionRetryAt(api, response, event, now);
-        if (retryAt !== undefined) {
-          throw new GatewayResourceExhaustion(retryAt);
-        }
-        if (event.type === "error" && TRANSIENT_HTTP.has(response?.status)) {
-          throw new GatewayTransientError(response.status);
-        }
+      const retryAt = providerExhaustionRetryAt(api, response, event, now);
+      if (retryAt !== undefined) {
+        throw new GatewayResourceExhaustion(retryAt);
+      }
+      if (event.type === "error") {
+        if (transportFailure) throw transportFailure;
+        const status = nativeErrorStatus(api, response, event);
+        if (TRANSIENT_HTTP.has(status)) throw new GatewayTransientError(status);
       }
 
-      emitted = true;
+      const terminal = event.type === "done" || event.type === "error";
       yield {
         payload: encoded,
         usage: eventUsage(event),
       };
+      if (terminal) return;
     }
+    throw new GatewayTransientError("Upstream stream ended before a terminal Pi event");
   } catch (error) {
+    if (signal?.aborted) throw upstreamFailure(error, signal);
     if (error instanceof GatewayCredentialError) throw error;
-    if (error instanceof GatewayTransientError) throw error;
+    if (error instanceof GatewayTransientError) throw new ConnectError(error.message, Code.Unavailable);
     if (error instanceof GatewayResourceExhaustion) {
       throw createResourceExhaustedError(error.retryAt);
     }
     if (error instanceof GatewayResponseError) {
       throw new ConnectError(error.message, Code.DataLoss);
     }
+    if (transportFailure) throw new ConnectError(transportFailure.message, Code.Unavailable);
+    const code = networkErrorCode(error);
+    if (code) throw new ConnectError(`Upstream connection failed (${code})`, Code.Unavailable);
     throw upstreamFailure(error, signal);
   } finally {
     localAbort.abort(new Error("gateway native dispatch stopped"));
   }
+}
+
+async function* nativeEvents(native, controller, signal) {
+  const iterator = native[Symbol.asyncIterator]();
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      const aborted = Promise.withResolvers();
+      const onAbort = () => aborted.reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      let next;
+      try { next = await Promise.race([iterator.next(), aborted.promise]); }
+      finally { signal.removeEventListener("abort", onAbort); }
+      signal.throwIfAborted();
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    controller.abort(new Error("gateway native dispatch stopped"));
+    // A broken iterator may ignore cancellation; it must not trap the caller.
+    void Promise.resolve().then(() => iterator.return?.()).catch(() => {});
+  }
+}
+
+function networkErrorCode(error) {
+  for (let depth = 0; error && depth < 8; depth++, error = error.cause) {
+    if (NETWORK_ERRORS.has(error.code)) return error.code;
+  }
+  return undefined;
 }
 
 function piCallFrame(payload) {
@@ -200,9 +244,9 @@ function gatewayOptions(options, signal, api, onResponse, transformHeaders) {
   };
 }
 
-// Account exhaustion is never slept on here: before any output it becomes the
-// compositional Provider RESOURCE_EXHAUSTED contract, so another component may
-// select another route. All ambiguous failures remain ordinary failures.
+// Exhaustion follows the existing Provider contract, including after partial
+// output. A pool can select another route before output; the caller can retry
+// the complete request in either case.
 function providerExhaustionRetryAt(api, response, event, now) {
   if (event?.type !== "error" || nativeErrorStatus(api, response, event) !== 429) {
     return undefined;
@@ -219,18 +263,19 @@ function providerExhaustionRetryAt(api, response, event, now) {
 }
 
 function nativeErrorStatus(api, response, event) {
-  if (Number.isInteger(response?.status)) return response.status;
+  if (Number.isInteger(response?.status) && response.status >= 400) return response.status;
   const message = event?.error?.errorMessage;
   if (typeof message !== "string") return undefined;
 
   // The pinned Anthropic and OpenAI Pi adapters catch SDK errors before their
   // onResponse hook runs. These exact prefixes are produced from the SDK's
   // numeric status by those pinned adapters; arbitrary body text follows them.
-  if (api === "anthropic-messages" && /^429(?:\s|$)/u.test(message)) return 429;
-  if (api === "openai-responses" && message.startsWith("OpenAI API error (429):")) {
-    return 429;
-  }
-  return undefined;
+  const match = api === "anthropic-messages"
+    ? /^(\d{3})(?:\s|$)/u.exec(message)
+    : api === "openai-responses"
+      ? /^OpenAI API error \((\d{3})\):/u.exec(message)
+      : undefined;
+  return match ? Number(match[1]) : undefined;
 }
 
 function codexResetWaitMs(event) {
@@ -362,7 +407,7 @@ function upstreamFailure(_error, signal) {
     if (signal.reason instanceof ConnectError) return signal.reason;
     return new ConnectError("request canceled", Code.Canceled);
   }
-  return new ConnectError("upstream inference failed", Code.Unavailable);
+  return new ConnectError("upstream inference failed", Code.Internal);
 }
 
 function plainObject(value) {

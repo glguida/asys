@@ -20,11 +20,12 @@ from channel_client import Client, RPCError
 def main():
     with tempfile.TemporaryDirectory(prefix='asys-inference-integration-') as temporary:
         temp = Path(temporary)
-        machine = temp / 'machine'
+        system_root = temp / 'state'
+        machine = system_root / 'inference'
         droot = temp / 'dcomp'
         system = 'asys-inference-test'
         prefix = temp / 'installed'
-        machine_cli = [str(prefix / 'bin/asys-inference'), '--root', str(machine)]
+        machine_cli = [str(prefix / 'bin/asys-inference'), '--root', str(system_root)]
         dcomp = [os.environ.get('DCOMP_BINARY', 'dcomp'), '--state-root', str(droot)]
         version = subprocess.check_output(dcomp[:1] + ['version'], text=True).strip()
         if version != 'dcomp 0.3.1':

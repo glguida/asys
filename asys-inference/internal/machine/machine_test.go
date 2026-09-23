@@ -113,21 +113,17 @@ func TestArbitraryComponentDirectoryAndDefaults(t *testing.T) {
 }
 
 func TestDefaultRoot(t *testing.T) {
-	t.Setenv("ASYS_INFERENCE_STATE_ROOT", "")
 	t.Setenv("ASYS_STATE_ROOT", "")
 	base := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", base)
-	if root, err := DefaultRoot(); err != nil || root != filepath.Join(base, "asys/inference") {
+	if root, err := DefaultRoot(); err != nil || root != filepath.Join(base, "asys") {
 		t.Fatalf("default root %q: %v", root, err)
 	}
 	t.Setenv("ASYS_STATE_ROOT", filepath.Join(base, "shared"))
-	if root, err := DefaultRoot(); err != nil || root != filepath.Join(base, "shared/inference") {
+	if root, err := DefaultRoot(); err != nil || root != filepath.Join(base, "shared") {
 		t.Fatalf("shared root %q: %v", root, err)
 	}
-	t.Setenv("ASYS_INFERENCE_STATE_ROOT", filepath.Join(base, "custom"))
-	if root, err := DefaultRoot(); err != nil || root != filepath.Join(base, "custom") {
-		t.Fatalf("configured root %q: %v", root, err)
-	}
+
 }
 
 func TestComponentsListsDirectoryWithoutMachineOrDocker(t *testing.T) {
@@ -450,6 +446,12 @@ func TestInitAndShowNeedNoDocker(t *testing.T) {
 	if code := cli.Run(context.Background(), args); code != 0 {
 		t.Fatalf("init %d: %s", code, &stderr)
 	}
+	if _, err := os.Stat(filepath.Join(root, "inference", "machine.json")); err != nil {
+		t.Fatalf("inference state was not created below the system root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "machine.json")); !os.IsNotExist(err) {
+		t.Fatal("machine state must not be stored directly in the system root")
+	}
 	out.Reset()
 	if code := cli.Run(context.Background(), []string{"--root", root, "show", "--json"}); code != 0 {
 		t.Fatalf("show %d: %s", code, &stderr)
@@ -461,10 +463,10 @@ func TestInitAndShowNeedNoDocker(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "dcomp")); !os.IsNotExist(err) {
 		t.Fatal("init touched dcomp runtime")
 	}
-	before, _ := os.ReadFile(filepath.Join(root, "machine.json"))
+	before, _ := os.ReadFile(filepath.Join(root, "inference", "machine.json"))
 	out.Reset()
 	cli.Run(context.Background(), []string{"--root", root, "show", "--json"})
-	after, _ := os.ReadFile(filepath.Join(root, "machine.json"))
+	after, _ := os.ReadFile(filepath.Join(root, "inference", "machine.json"))
 	if !bytes.Equal(before, after) {
 		t.Fatal("show mutated config")
 	}

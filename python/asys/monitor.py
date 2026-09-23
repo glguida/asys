@@ -11,7 +11,7 @@ def top(args):
         raise ValueError("top needs a terminal; use status for plain text or JSON")
     import curses
 
-    runs = Runs(args.root)
+    runs = Runs(args.root / 'runs')
     output = JobOutput()
     fixed = runs.select(args.run) if args.run else None
 

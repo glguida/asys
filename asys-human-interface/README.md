@@ -110,10 +110,11 @@ the complete schema before recording it; rejection reopens the draft for
 correction. Disapproval is a completed decision with a false value; the workflow
 decides what that means for subsequent work.
 
-`--root DIRECTORY` selects the parent for saved handler sessions, defaulting to
-`$XDG_STATE_HOME/asys/human` or `$HOME/.local/state/asys/human`, or
-`$ASYS_STATE_ROOT/human` when the asys base is set. A shared service reuses its
-saved directory; a private handler creates a session directory. The terminal
+`--root DIRECTORY` selects the asys system root, overriding `ASYS_STATE_ROOT`.
+The default root is `$XDG_STATE_HOME/asys` or `$HOME/.local/state/asys`.
+Human service state and handler sessions are saved in `ROOT/human`. A shared
+service reuses its saved directory; a private handler creates a session
+directory. The terminal
 prints that directory, containing command logs and a
 `session.json` with its component identity and any unresolved claim or answer.
 Its `request.json` contains the complete JSON presentation of the current or

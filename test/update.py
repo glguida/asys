@@ -39,7 +39,7 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual(service.call_args.args[0].system, 'selected')
                 self.assertEqual(service.call_args.args[0].dcomp_state_root, Path('/selected/dcomp'))
                 service.return_value.ensure.assert_called_once_with()
-                self.assertEqual(run.call_args.args[0][-3:], ['--root', str(root / 'inference'), 'start'])
+                self.assertEqual(run.call_args.args[0][-3:], ['--root', str(root), 'start'])
                 self.assertEqual(human.call_count, 1)
                 self.assertEqual(human.call_args.args[0], root / 'human/shared')
                 self.assertEqual((root / 'runs/not-a-service').read_text(), 'untouched')

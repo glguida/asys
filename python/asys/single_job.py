@@ -17,7 +17,7 @@ from asys_runtime.permissions import mkdir
 from .config import system_model
 from .execution import EnvironmentHost, execution_options, prepare_run
 from .lifecycle import Interrupted, LaunchError
-from .runs import default_root
+from .state import state_root
 
 
 AGENT = 'simple'
@@ -28,7 +28,7 @@ def job_parser(prog, assignment, description):
     parser.add_argument('environment', type=Path, metavar='ENVIRONMENT_DIRECTORY')
     parser.add_argument(assignment, metavar=assignment.upper())
     parser.add_argument('--model', metavar='MODEL', help="override the 'simple' system model for this run")
-    parser.add_argument('--root', type=Path, default=default_root(), metavar='DIRECTORY', help='saved run state directory')
+    parser.add_argument('--root', type=Path, default=state_root(), metavar='DIRECTORY', help='asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)')
     execution_options(parser)
     return parser
 
@@ -82,12 +82,12 @@ class SingleJob(EnvironmentHost):
         pass
 
     def setup(self):
-        model = system_model(AGENT, self.args.model)
+        model = system_model(AGENT, self.args.model, root=self.args.root)
         environment = self.args.environment.expanduser().resolve(strict=True)
         definition = Environment(environment, external=self.args.external)
         if self.args.external is not None and self.job_type not in definition.types:
             raise LaunchError(f"{self.manager} workers must define the {self.job_type!r} job type")
-        self.id, self.directory, workspace = prepare_run(self.args.root, self.args.workspace)
+        self.id, self.directory, workspace = prepare_run(state_root('runs', root=self.args.root), self.args.workspace)
         self.lease = (self.directory / 'launcher.lock').open('xb')
         fcntl.flock(self.lease, fcntl.LOCK_EX)
         prefix = re.sub('[^a-z0-9-]', '-', definition.name.lower()).strip('-')[:37] or self.manager

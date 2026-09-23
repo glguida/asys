@@ -29,8 +29,10 @@ the pinned `pi-ai` `Models.streamSimple` with the gateway-owned native model.
 Pi owns provider dispatch, API-key and OAuth resolution, locked OAuth refresh,
 credential-specific model filtering, provider environment, headers, and base
 URL preparation. The gateway does not interpret or validate prompt content,
-history, tools, JSON Schema, reasoning, tool arguments, or returned Pi events.
-Every native Pi event is serialized immediately into one response payload.
+history, tools, JSON Schema, reasoning, or tool arguments.
+Native Pi events are serialized into response payloads. Each `Infer` performs
+one native attempt. The calling inference client owns timeouts and retries,
+including replacement of incomplete assistant output.
 The one gateway-specific egress check is schema-independent: if a serialized
 event exactly reflects an API key or authentication-header value injected by
 the gateway, the event is discarded and inference fails with a generic
@@ -96,15 +98,21 @@ intermediate provider may supply its own catalogue; it logs and ignores only
 the bad entry. Intermediate relays preserve the typed catalogue fields
 unchanged.
 
-A definite native HTTP 429 before the first Pi event becomes the Provider
-protocol's typed `RESOURCE_EXHAUSTED` error. The gateway reports the absolute
-retry time immediately instead of sleeping, allowing an intermediate pooler to
-select another account. It never includes the native error text, account, or
-headers in that error. Before output starts, HTTP 408, 500, 502, 503, 504 and
-529 responses are retried up to three times, after 1, 2 and 4 seconds. If they
-persist, the error reports the HTTP status and attempt count. Cancellation
-interrupts the wait. Ambiguous transport failures and requests that have already
-started producing output are not replayed.
+A definite native HTTP 429 becomes the Provider protocol's typed
+`RESOURCE_EXHAUSTED` error with an absolute retry time, including after partial
+output. It never includes native error text, account, or headers. An optional
+pooler can select another account before output starts; otherwise the caller
+waits and retries the complete request. The gateway does not sleep for capacity.
+HTTP 408, 500, 502, 503, 504 and 529 responses, recognized connection failures,
+interrupted response bodies, and native iterators ending without a terminal event
+become `UNAVAILABLE`. Other native Pi error events pass through for the caller's
+Pi error handling. Malformed output fails with `DATA_LOSS`; unavailable gateway
+credentials fail with `FAILED_PRECONDITION`.
+
+The gateway does not retry or impose an inference deadline. Caller cancellation
+ends the native attempt, including while awaiting its first event. Native SDK
+retries remain disabled. This works with a direct Provider client and with
+optional poolers and relays; no pooler is required for recovery.
 
 Usage is observed at the native Pi endpoint and appended to the private audit
 file. Accounting observes terminal event usage but does not alter or reorder

@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+import runpy
 from pathlib import Path
 import sys
 import unittest
@@ -30,12 +31,26 @@ class ArgumentTests(unittest.TestCase):
                     self.assertEqual(args.root, Path('/selected/state'))
                     self.assertTrue(callable(args.handler))
 
-    def test_default_root_distinguishes_configuration_and_observation(self):
+    def test_default_root_is_the_system_root_for_every_command(self):
         with patch.dict(os.environ, {'ASYS_STATE_ROOT': '/selected/state'}):
             for command in [['update'], ['system-model', 'list']]:
                 self.assertEqual(arguments(command).root, Path('/selected/state'))
             for command in ['ps', 'status', 'logs', 'top']:
-                self.assertEqual(arguments([command]).root, Path('/selected/state/runs'))
+                self.assertEqual(arguments([command]).root, Path('/selected/state'))
+
+    def test_all_job_launchers_select_the_same_system_root(self):
+        from asys.goal import arguments as goal_arguments
+        from asys.oneshot import arguments as oneshot_arguments
+        from asys.human_service import SharedHumanService
+        bpmn_arguments = runpy.run_path(str(ROOT / 'asys-bpmn/tools/asys-bpmn'))['arguments']
+        with patch.dict(os.environ, {'ASYS_STATE_ROOT': '/ambient/state'}):
+            for parse, argv in [(goal_arguments, ['env', 'goal']),
+                                (oneshot_arguments, ['env', 'prompt']),
+                                (bpmn_arguments, ['run', 'workflow.bpmn', 'env'])]:
+                self.assertEqual(parse(argv).root, Path('/ambient/state'))
+                selected = parse([*argv, '--root', '/explicit/state'])
+                self.assertEqual(selected.root, Path('/explicit/state'))
+                self.assertEqual(SharedHumanService(selected).directory.parent, Path('/explicit/state/human'))
 
     def test_logs_allow_options_between_run_and_job_and_apply_source_defaults(self):
         args = arguments(['logs', 'latest', '--stream', 'stderr', 'worker', '-n', '0'])

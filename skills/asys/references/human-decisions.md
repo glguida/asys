@@ -142,8 +142,9 @@ the run log while the terminal handles questions.
 select it with `-L human=review-desk.human`. `--claimant NAME` selects the identity
 used for candidate restrictions; it is not an authentication mechanism.
 `--plain` uses line prompts, `--tui` forces the terminal UI, and `--once` detaches
-after one completed answer. `--root`, `--dcomp-state-root`, and `--runtime-root`
-select the corresponding state locations.
+after one completed answer. `--root ROOT` selects the asys system root, with
+Human state saved in `ROOT/human`. `--dcomp-state-root` and `--runtime-root`
+select the dcomp state and proxy directories.
 
 The Human service validates the submitted answer against the schema. Defaults
 do not silently choose an approval. Skip leaves a request pending; quitting

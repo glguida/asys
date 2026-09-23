@@ -7,7 +7,7 @@ import sys
 from .config import list_system_models, set_system_model
 from .lifecycle import LaunchError
 from .monitor import top
-from .runs import default_root, logs, status
+from .runs import logs, status
 from .skill import skill
 from .state import initialize, state_root
 from .update import update
@@ -52,12 +52,11 @@ def arguments(argv):
     parser = argparse.ArgumentParser(prog='asys', allow_abbrev=False,
         description='Configure asys, update shared services, and inspect runs and jobs.')
     parser.add_argument('--root', type=Path, metavar='DIRECTORY', default=argparse.SUPPRESS,
-        help='state base for configuration commands, or saved run directory for observation commands')
+        help='asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)')
     parser.set_defaults(argument_parser=None, root_default=None)
     commands = parser.add_subparsers(dest='command', title='commands', metavar='COMMAND')
 
-    state = root_options('asys state base (default: ASYS_STATE_ROOT or the local state directory)', state_root)
-    runs = root_options('saved run directory or root (default: the selected asys state directory/runs)', default_root)
+    state = root_options('asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)', state_root)
 
     init = add_command(commands, 'init', initialize, 'Initialize asys state', validate=validate_init)
     init.add_argument('directory', type=Path, metavar='DIR')
@@ -84,17 +83,17 @@ def arguments(argv):
                           'List configured and unset system models', parents=[state])
     listing.add_argument('--json', action='store_true', help='print a JSON object mapping names to models')
 
-    ps = add_command(commands, 'ps', status, 'List saved runs', parents=[runs])
+    ps = add_command(commands, 'ps', status, 'List saved runs', parents=[state])
     ps.set_defaults(run=None)
     ps.add_argument('--json', action='store_true', help='print structured run and job status')
 
     run_help = 'run ID or unique prefix, latest, or a saved run directory'
-    inspect = add_command(commands, 'status', status, "Show a run's jobs and errors", parents=[runs])
+    inspect = add_command(commands, 'status', status, "Show a run's jobs and errors", parents=[state])
     inspect.add_argument('run', nargs='?', metavar='RUN', help=run_help)
     inspect.add_argument('--json', action='store_true', help='print structured run and job status')
 
     output = add_command(commands, 'logs', logs, 'Show saved run output; JOB selects worker output',
-                         parents=[runs], validate=validate_logs)
+                         parents=[state], validate=validate_logs)
     output.add_argument('run', nargs='?', metavar='RUN', help=run_help)
     output.add_argument('job', nargs='?', metavar='JOB', help='job name, ID, or unique ID prefix')
     output.add_argument('-f', '--follow', action='store_true', help='follow new output and jobs until the run ends')
@@ -104,7 +103,7 @@ def arguments(argv):
     output.add_argument('--source', choices=['run', 'events', 'jobs', 'components', 'commands'],
                         help='saved log source (default: run, or jobs when JOB is given)')
 
-    monitor = add_command(commands, 'top', top, 'Monitor runs, jobs, and transcripts', parents=[runs])
+    monitor = add_command(commands, 'top', top, 'Monitor runs, jobs, and transcripts', parents=[state])
     monitor.add_argument('run', nargs='?', metavar='RUN', help=run_help)
 
     selected, remaining = parser.parse_known_args(argv)

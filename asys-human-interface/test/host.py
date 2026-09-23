@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "python"), str(ROOT.parent / "python"), str(ROOT.parent / "asys-runtime")]
 from asys_human.channel import Channel
 from asys_human.launcher import Launcher, arguments
+from asys.human_service import SharedHumanService
 from asys_human.presentation import request_document
 from asys_human.prompt import FormPrompt
 from asys_runtime.channel import Writer, direction_root
@@ -49,6 +51,24 @@ class HostTests(unittest.TestCase):
     def test_global_and_private_handlers_have_explicit_endpoint_roles(self):
         self.assertFalse(arguments([]).private)
         self.assertTrue(arguments(['--private', '--name', 'run-human']).private)
+
+    def test_root_selects_the_system_and_human_state_is_derived_beneath_it(self):
+        with patch.dict(os.environ, {'ASYS_STATE_ROOT': '/ambient/state'}):
+            self.assertEqual(arguments([]).root, Path('/ambient/state'))
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                args = arguments(['--root', str(root)])
+                self.assertEqual(SharedHumanService(args).directory.parent, root / 'human')
+                launcher = Launcher(arguments(['--private', '--root', str(root)]))
+                class Prepared(Exception):
+                    pass
+                with patch.object(launcher, 'view', side_effect=Prepared), self.assertRaises(Prepared):
+                    launcher.setup()
+                try:
+                    self.assertEqual(launcher.directory.parent, root / 'human')
+                    self.assertTrue((launcher.directory / 'session.json').is_file())
+                finally:
+                    launcher.lease.close()
 
     def test_cleanup_recovers_an_unacknowledged_claim_and_removes_only_its_component(self):
         args = arguments(["--claimant", "alice"])

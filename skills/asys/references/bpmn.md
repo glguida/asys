@@ -99,8 +99,7 @@ Specify inputs, deliverables, acceptance checks, and structured output:
 
 ```xml
 <asys:job type="reviewer" input='= {
-  prompt: "Inspect deliverables/report.md against this request. Check actual sources. Return approved as a boolean and reason as concrete findings, alongside final and exception. Request: " + request,
-  timeoutSeconds: 600
+  prompt: "Inspect deliverables/report.md against this request. Check actual sources. Return approved as a boolean and reason as concrete findings, alongside final and exception. Request: " + request
 }'/>
 ```
 

@@ -238,7 +238,7 @@ def table(headers, rows):
 
 
 def status(args):
-    runs = Runs(args.root)
+    runs = Runs(state_root('runs', root=args.root))
     paths = [runs.select(args.run)] if args.run else runs.directories()
     records = [runs.snapshot(path) for path in paths]
     if args.json:
@@ -327,7 +327,7 @@ def log_sources(record, args):
 
 
 def logs(args):
-    runs = Runs(args.root)
+    runs = Runs(state_root('runs', root=args.root))
     directory = runs.select(args.run)
     readers = {}
     emitted = False

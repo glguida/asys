@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { runTestAgent as runAgent } from './helpers.mjs';
 import { groupModels, streamProvider } from '../src/provider-adapter.mjs';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { createResourceExhaustedError } from '@cyclo/provider/errors';
 import { assistant, model } from './helpers.mjs';
 
@@ -187,13 +189,21 @@ test('Pi SDK runs its real shell tool and sends native frames through Provider',
   assert.ok(saves > 1);
 });
 
-test('an incomplete Provider stream fails promptly instead of leaving Pi waiting for a terminal frame', async () => {
+test('incomplete streams retry beyond the old retry limit with capped backoff', async () => {
   const route = groupModels([model]).get('fixture')[0];
-  const provider = { async *infer() {} };
-  const stream = streamProvider(provider, model.id, route.model, { messages: [] });
-  const result = await stream.result();
-  assert.equal(result.stopReason, 'error');
-  assert.match(result.errorMessage, /terminal Pi event/);
+  const requests = [], delays = [];
+  const provider = { async *infer(request) {
+    requests.push(request);
+    if (requests.length <= 8) return;
+    yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([]) }) };
+  } };
+  const result = await streamProvider(provider, model.id, route.model, { messages: [] }, {}, {
+    random: () => 1, sleep: async ms => delays.push(ms),
+  }).result();
+  assert.equal(result.stopReason, 'stop');
+  assert.equal(requests.length, 9);
+  assert.ok(requests.every(request => request === requests[0]));
+  assert.deepEqual(delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
 });
 
 test('the Provider RPC iterator is released when its terminal Pi event arrives', async () => {
@@ -212,17 +222,17 @@ test('the Provider RPC iterator is released when its terminal Pi event arrives',
   assert.equal(closed, true);
 });
 
-test('an exhausted Provider is replayed after its reset time, however far beyond the attempt timeout that is', async () => {
+test('an exhausted Provider is replayed after its reset time, even hours later', async () => {
   const route = groupModels([model]).get('fixture')[0];
   const start = 1_700_000_000_000, resetAfterMs = 3 * 60 * 60 * 1000;
   let clock = start, calls = 0;
   const sleeps = [], waits = [];
   const provider = { async *infer(_request, { signal }) {
-    assert.equal(signal.aborted, false, 'a fresh attempt must not inherit an expired timeout');
+    assert.equal(signal.aborted, false);
     if (++calls === 1) throw createResourceExhaustedError(new Date(start + resetAfterMs));
     yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify({ final: 'Back', exception: null }) }]) }) };
   } };
-  const stream = streamProvider(provider, model.id, route.model, { messages: [] }, { attemptTimeoutMs: 50 }, {
+  const stream = streamProvider(provider, model.id, route.model, { messages: [] }, { signal: new AbortController().signal }, {
     now: () => clock,
     async sleep(delayMs, signal) { sleeps.push(delayMs); signal?.throwIfAborted(); clock += delayMs; },
     onExhaustion: wait => waits.push(wait),
@@ -245,7 +255,7 @@ test('an exhaustion wait ends only on operator cancellation and reports as abort
     throw createResourceExhaustedError(new Date(Date.now() + 24 * 60 * 60 * 1000));
   } };
   const stream = streamProvider(provider, model.id, route.model, { messages: [] },
-    { attemptTimeoutMs: 20, signal: controller.signal }, {
+    { signal: controller.signal }, {
       async sleep(_delayMs, signal) { controller.abort(); signal.throwIfAborted(); },
     });
   const result = await stream.result();
@@ -264,41 +274,182 @@ async function stallUntilAborted(signal) {
   } finally { clearInterval(keepAlive); }
 }
 
-test('an inference attempt that stalls past the attempt timeout is a provider failure, not a cancellation', async () => {
-  const route = groupModels([model]).get('fixture')[0];
-  let calls = 0;
-  const provider = { async *infer(_request, { signal }) {
-    calls++;
-    await stallUntilAborted(signal);
-  } };
-  const stream = streamProvider(provider, model.id, route.model, { messages: [] }, { attemptTimeoutMs: 20 });
-  const result = await stream.result();
-  assert.equal(result.stopReason, 'error');
-  assert.match(result.errorMessage, /no complete response within 20 ms/);
-  assert.equal(calls, 1, 'a stalled attempt is not replayed');
-});
+for (const partial of [false, true]) {
+  test(`inference keeps waiting ${partial ? 'after partial output' : 'before the first response'} without a worker deadline`, async () => {
+    const route = groupModels([model]).get('fixture')[0];
+    const controller = new AbortController();
+    const message = assistant([{ type: 'text', text: JSON.stringify({ final: 'Finished', exception: null }) }]);
+    let calls = 0;
+    const provider = { async *infer(_request, options) {
+      calls++;
+      assert.deepEqual(Object.keys(options), ['signal']);
+      assert.equal(options.signal.aborted, false);
+      if (partial) yield { payload: JSON.stringify({ type: 'start', partial: assistant([], 'pending') }) };
+      // Native timeout options must not become a worker deadline.
+      await delay(60, undefined, { signal: options.signal });
+      yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message }) };
+    } };
+    const stream = streamProvider(provider, model.id, route.model, { messages: [] },
+      { signal: controller.signal, timeoutMs: 20 });
+    assert.equal((await stream.result()).stopReason, 'stop');
+    assert.equal(calls, 1, 'the worker keeps the original request open');
+  });
 
-test('operator cancellation during an attempt still reports as aborted', async () => {
-  const route = groupModels([model]).get('fixture')[0];
-  const controller = new AbortController();
-  const provider = { async *infer(_request, { signal }) {
+  test(`operator cancellation stops inference ${partial ? 'after partial output' : 'before the first response'}`, async () => {
+    const route = groupModels([model]).get('fixture')[0];
+    const controller = new AbortController(), waiting = Promise.withResolvers();
+    let calls = 0;
+    const provider = { async *infer(_request, { signal }) {
+      calls++;
+      if (partial) yield { payload: JSON.stringify({ type: 'start', partial: assistant([], 'pending') }) };
+      waiting.resolve();
+      await stallUntilAborted(signal);
+    } };
+    const stream = streamProvider(provider, model.id, route.model, { messages: [] }, { signal: controller.signal });
+    await waiting.promise;
     controller.abort();
-    await stallUntilAborted(signal);
-  } };
-  const stream = streamProvider(provider, model.id, route.model, { messages: [] },
-    { attemptTimeoutMs: 60_000, signal: controller.signal });
-  const result = await stream.result();
-  assert.equal(result.stopReason, 'aborted');
-});
+    assert.equal((await stream.result()).stopReason, 'aborted');
+    assert.equal(calls, 1, 'no replay after cancellation');
+  });
+}
 
-test('the attempt timeout never enters the Provider payload', async () => {
+test('native timeout options never enter the Provider payload or RPC options', async () => {
   const route = groupModels([model]).get('fixture')[0];
   let frame;
-  const provider = { async *infer(request) {
+  const provider = { async *infer(request, options) {
+    assert.deepEqual(Object.keys(options), ['signal']);
     frame = JSON.parse(request.payload);
     yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify({ final: 'ok', exception: null }) }]) }) };
   } };
-  await streamProvider(provider, model.id, route.model, { messages: [] }, { attemptTimeoutMs: 1000, temperature: 0.2 }).result();
-  assert.equal(frame.options.attemptTimeoutMs, undefined);
+  const result = await streamProvider(provider, model.id, route.model, { messages: [] },
+    { timeoutMs: 1000, temperature: 0.2 }).result();
+  assert.equal(result.stopReason, 'stop');
+  assert.equal(frame.options.timeoutMs, undefined);
   assert.equal(frame.options.temperature, 0.2);
+});
+
+for (const partial of [false, true]) {
+  test(`an idle ${partial ? 'partial stream' : 'first response'} retries only the RPC, even if its iterator ignores abort`, { timeout: 2000 }, async () => {
+    const route = groupModels([model]).get('fixture')[0];
+    const requests = [], signals = [], retries = [];
+    const done = { type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: 'Recovered' }]) };
+    const provider = { async *infer(request, { signal }) {
+      requests.push(request);
+      signals.push(signal);
+      if (requests.length === 1) {
+        if (partial) yield { payload: JSON.stringify({ type: 'start', partial: assistant([], 'pending') }) };
+        await new Promise(() => {});
+      }
+      yield { payload: JSON.stringify({ type: 'start', partial: assistant([], 'pending') }) };
+      yield { payload: JSON.stringify(done) };
+    } };
+    const context = { messages: [{ role: 'toolResult', content: 'already done' }] };
+    const stream = streamProvider(provider, model.id, route.model, context, {}, {
+      idleTimeoutMs: 20, sleep: async () => {}, onRetry: event => retries.push(event),
+    });
+    const events = [];
+    for await (const event of stream) events.push(event);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0], requests[1]);
+    assert.ok(signals[0].aborted);
+    assert.deepEqual(events.map(event => event.type), ['start', 'done']);
+    assert.equal(events.at(-1).message.content[0].text, 'Recovered');
+    assert.match(retries[0].errorMessage, partial ? /stream inactivity/ : /first response timeout/);
+  });
+}
+
+test('progress refreshes the inactivity timer without an absolute deadline', { timeout: 2000 }, async () => {
+  const route = groupModels([model]).get('fixture')[0];
+  let calls = 0;
+  const provider = { async *infer() {
+    calls++;
+    for (let i = 0; i < 6; i++) {
+      await delay(25);
+      yield { payload: JSON.stringify({ type: 'text_delta', delta: 'progress', partial: assistant([]) }) };
+    }
+    yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([]) }) };
+  } };
+  const result = await streamProvider(provider, model.id, route.model, { messages: [] }, {}, {
+    idleTimeoutMs: 100, sleep: async () => assert.fail('progress must not retry'),
+  }).result();
+  assert.equal(result.stopReason, 'stop');
+  assert.equal(calls, 1);
+});
+
+for (const code of [Code.Unavailable, Code.DeadlineExceeded, Code.Aborted, Code.Canceled]) {
+  test(`RPC ${Code[code]} is retried while the caller remains active`, async () => {
+    const route = groupModels([model]).get('fixture')[0];
+    let calls = 0;
+    const provider = { async *infer() {
+      if (++calls === 1) throw new ConnectError('upstream stopped', code);
+      yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([]) }) };
+    } };
+    const result = await streamProvider(provider, model.id, route.model, { messages: [] }, {}, { sleep: async () => {} }).result();
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(calls, 2);
+  });
+}
+
+for (const code of [Code.InvalidArgument, Code.Unauthenticated, Code.PermissionDenied, Code.FailedPrecondition, Code.Internal, Code.DataLoss]) {
+  test(`RPC ${Code[code]} fails promptly even if its message mentions a timeout`, async () => {
+    const route = groupModels([model]).get('fixture')[0];
+    let calls = 0;
+    const provider = { async *infer() { calls++; throw new ConnectError('invalid timeout setting', code); } };
+    const result = await streamProvider(provider, model.id, route.model, { messages: [] }, {}, {
+      sleep: async () => assert.fail('nonretryable error'),
+    }).result();
+    assert.equal(result.stopReason, 'error');
+    assert.match(result.errorMessage, /invalid timeout setting/);
+    assert.equal(calls, 1);
+  });
+}
+
+test('partial output followed by repeated capacity limits waits outside cancelled RPCs', async () => {
+  const route = groupModels([model]).get('fixture')[0];
+  let clock = 1_700_000_000_000, calls = 0, lastSignal;
+  const waits = [], delays = [];
+  const provider = { async *infer(_request, { signal }) {
+    calls++;
+    lastSignal = signal;
+    yield { payload: JSON.stringify({ type: 'start', partial: assistant([], 'pending') }) };
+    if (calls <= 2) throw createResourceExhaustedError(new Date(clock + 5 * 60 * 60 * 1000));
+    yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([]) }) };
+  } };
+  const stream = streamProvider(provider, model.id, route.model, { messages: [] }, {}, {
+    idleTimeoutMs: 10, now: () => clock, onExhaustion: event => waits.push(event),
+    async sleep(ms) { assert.ok(lastSignal.aborted); delays.push(ms); await delay(30); clock += ms; },
+  });
+  const events = [];
+  for await (const event of stream) events.push(event);
+  assert.deepEqual(events.map(event => event.type), ['start', 'done']);
+  assert.deepEqual(delays, [18_000_000, 18_000_000]);
+  assert.equal(waits.length, 2);
+  assert.equal(calls, 3);
+});
+
+test('capacity without reset details is rechecked with bounded backoff', async () => {
+  const route = groupModels([model]).get('fixture')[0];
+  const delays = [];
+  let calls = 0;
+  const provider = { async *infer() {
+    if (++calls < 4) throw new ConnectError('capacity unavailable', Code.ResourceExhausted);
+    yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([]) }) };
+  } };
+  const result = await streamProvider(provider, model.id, route.model, { messages: [] }, {}, {
+    random: () => 1, sleep: async ms => delays.push(ms),
+  }).result();
+  assert.equal(result.stopReason, 'stop');
+  assert.deepEqual(delays, [1000, 2000, 4000]);
+});
+
+test('cancellation interrupts retry backoff without starting another attempt', async () => {
+  const route = groupModels([model]).get('fixture')[0];
+  const controller = new AbortController();
+  let calls = 0;
+  const provider = { async *infer() { calls++; throw new ConnectError('connection lost', Code.Unavailable); } };
+  const result = await streamProvider(provider, model.id, route.model, { messages: [] }, { signal: controller.signal }, {
+    onRetry: () => controller.abort(new Error('operator cancelled')),
+  }).result();
+  assert.equal(result.stopReason, 'aborted');
+  assert.equal(calls, 1);
 });

@@ -158,7 +158,7 @@ asys-bpmn resume RUN [--root DIRECTORY] [--human]
 | Option | Applies to | Meaning |
 | --- | --- | --- |
 | `--workspace DIRECTORY` | New runs of all three launchers | Existing actual project directory; defaults to current directory |
-| `--root DIRECTORY` | All launchers | Parent of saved run directories, **not** the model-configuration state base |
+| `--root DIRECTORY` | All host tools | Asys system root; contains `config.json`, `runs/`, `inference/`, and `human/`; overrides `ASYS_STATE_ROOT` |
 | `--model MODEL` | One-shot, goal | Override the `simple` inference model for this run |
 | `--max-attempts N` | Goal | Explicit positive implementation/verification cycle limit; default unlimited |
 | `--input FILE` | BPMN run | UTF-8 text becomes `request`; `-` reads stdin |
@@ -182,15 +182,15 @@ Other host commands:
 | --- | --- |
 | `asys init DIR` | Initialize state; `--dcomp DIR`, `--group GROUP` |
 | `asys skill [DEST]` | Locate or export this portable guide |
-| `asys system-model set NAME MODEL` | Set a default; `--root` selects the state **base** |
+| `asys system-model set NAME MODEL` | Set a default in `ROOT/config.json` |
 | `asys system-model list [--json]` | List defaults and unset packaged system-model names |
 | `asys ps [--json]` | List saved runs |
 | `asys status [RUN] [--json]` | Inspect jobs and outcomes |
 | `asys logs [RUN] [JOB]` | Run log, or worker output when a job is selected |
 | `asys top [RUN]` | Interactive run/job/transcript monitor |
-| `asys update` | Apply installed images to running shared services; `--root` selects state base |
+| `asys update` | Apply installed images to running shared services under the selected system root |
 
-For `ps/status/logs/top`, `--root` selects saved runs. `RUN` can be an ID,
+For `ps/status/logs/top`, `--root ROOT` selects runs in `ROOT/runs`. `RUN` can be an ID,
 unique prefix, `latest`, or run directory. Logs accept `-f/--follow`,
 `-n/--lines N`, `--stream both|stdout|stderr`, and
 `--source run|events|jobs|components|commands`. JOB and `--stream` select job
@@ -211,9 +211,10 @@ asys-inference models
 Adding a provider selects its output; `select NAME` chooses an existing one.
 Wire wrappers to the previous provider directly, not back to their own public
 endpoint. A pooler named `pool` exports `pool/MODEL`; select from the live
-catalogue. Account-qualified models remain available. `--root DIR` or
-`ASYS_INFERENCE_STATE_ROOT` selects a machine; initialization can set its
-system, dcomp state, runtime root, prefix, and components root.
+catalogue. Account-qualified models remain available. `--root ROOT` selects
+the machine stored in `ROOT/inference`; the default root comes from
+`ASYS_STATE_ROOT` or the local state directory/asys. Initialization can set
+its system, dcomp state, runtime root, prefix, and components root.
 
 After updating source, reinstall with the original `PREFIX`. Existing run
 containers keep their images. New runs and BPMN resume rebuild environments

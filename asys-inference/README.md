@@ -59,11 +59,10 @@ that exits or fails its health
 check makes the command fail, with its exit code and recent log output. Startup
 waits are bounded to 90 seconds.
 
-The default machine state is `$XDG_STATE_HOME/asys/inference` or
-`$HOME/.local/state/asys/inference`. When `ASYS_STATE_ROOT` is set, the default
-is `$ASYS_STATE_ROOT/inference`. Use `asys-inference --root DIR ...` or `ASYS_INFERENCE_STATE_ROOT` for
-another machine. The tool saves the configuration; ordinary use does not involve editing its
-state files.
+`--root DIR` selects the asys system root, overriding `ASYS_STATE_ROOT`.
+The default root is `$XDG_STATE_HOME/asys` or `$HOME/.local/state/asys`.
+Machine state is stored in `ROOT/inference`. The tool saves the configuration;
+ordinary use does not involve editing its state files.
 
 The default dcomp system is `asys`, using dcomp's normal state-root rules.
 
@@ -82,7 +81,7 @@ Its components are named `asys-inference-gateway`, `asys-inference-NAME`, and so
 these settings at initialization:
 
 ```sh
-bin/asys-inference --root /absolute/path/my-machine init \
+bin/asys-inference --root /absolute/path/my-asys init \
   --system asys \
   --dcomp-state-root /absolute/path/shared-dcomp \
   --prefix asys-inference

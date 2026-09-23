@@ -21,18 +21,18 @@ with that name; following discovers additional jobs as they appear.
 `ps` lists saved runs, including completed ones. `status` and `top` show all runs
 when no run is selected; `logs` defaults to the latest run.
 
-State defaults to `$XDG_STATE_HOME/asys/runs`, or
-`$HOME/.local/state/asys/runs`. `ASYS_STATE_ROOT` selects the asys base: runs
-are stored in `$ASYS_STATE_ROOT/runs`. Use `asys init DIR` and source the
-generated `asys-env` to select it for all asys tools. `--root DIRECTORY` on
-the launcher or observer selects the runs directory directly. Options can appear
-before or after arguments:
+The asys system root defaults to `$XDG_STATE_HOME/asys`, or
+`$HOME/.local/state/asys`. `--root DIRECTORY` overrides `ASYS_STATE_ROOT`
+for every host tool. Runs are stored in `ROOT/runs`, alongside
+`ROOT/config.json`, `ROOT/inference`, and `ROOT/human`. Use `asys init DIR`
+and source the generated `asys-env` to select it for all asys tools.
+Options can appear before or after arguments:
 
 ```sh
 asys-bpmn run workflow.bpmn env/dummy --root ./state
 asys ps --root ./state
 asys top --root ./state
-asys logs ./state/RUN_ID -f
+asys logs ./state/runs/RUN_ID -f
 ```
 
 ## Logs and transcripts

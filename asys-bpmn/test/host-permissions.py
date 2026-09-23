@@ -62,7 +62,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="asys-host-permissions-") as temporary:
         root = Path(temporary)
         root.chmod(0o777)
-        host = ["python3", "-c", HOST, str(CLI), str(EXAMPLE), str(root / "runs")]
+        host = ["python3", "-c", HOST, str(CLI), str(EXAMPLE), str(root)]
         prepared = subprocess.run(host + ["setup"], user=1001, group=1001, extra_groups=[],
                                   check=True, text=True, capture_output=True, timeout=10)
         info = json.loads(prepared.stdout)

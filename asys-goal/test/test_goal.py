@@ -98,13 +98,14 @@ class GoalHostTests(unittest.TestCase):
 
     def launcher(self, *extra):
         launcher = LocalGoal(arguments([str(self.environment), 'Produce the required output',
-            '--workspace', str(self.workspace), '--root', str(self.root / 'runs'), *extra]))
+            '--workspace', str(self.workspace), '--root', str(self.state), *extra]))
         self.addCleanup(launcher.close)
         return launcher
 
     def test_host_submits_one_goal_job_with_default_model_snapshot_and_human_access(self):
         launcher = self.launcher('--max-attempts', '4')
         launcher.setup()
+        self.assertEqual(launcher.directory.parent, self.state / 'runs')
         self.human.assert_called_once_with(launcher)
         self.config.write_text(json.dumps({'system_models': {'simple': 'other/model'}}))
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -120,7 +121,7 @@ class GoalHostTests(unittest.TestCase):
         self.assertIn('human=@human_endpoint', launcher.launch_arguments)
         self.assertIn('input asys.human.v1.Human human', (launcher.directory / 'environment/component.dcomp').read_text())
         self.assertEqual(json.loads((launcher.directory / 'system-models.json').read_text()), {'simple': 'fixture/model'})
-        self.assertEqual(Runs(self.root / 'runs').snapshot(launcher.directory)['jobs'][0]['name'], 'goal')
+        self.assertEqual(Runs(self.state / 'runs').snapshot(launcher.directory)['jobs'][0]['name'], 'goal')
         self.assertIn('Attempt 1: implement', (launcher.directory / 'run.log').read_text())
         self.assertEqual(launcher.record['manager'], 'goal')
         self.assertEqual(launcher.record['agent'], 'simple')
@@ -137,13 +138,20 @@ class GoalHostTests(unittest.TestCase):
         self.assertNotIn('maxAttempts', launcher.queue.request(launcher.job_id)['input'])
         self.assertEqual(self.config.read_text(), 'broken')
 
+    def test_explicit_root_selects_the_goal_model_snapshot(self):
+        with patch.dict(os.environ, {'ASYS_STATE_ROOT': str(self.root / 'another-system')}):
+            launcher = self.launcher()
+            launcher.setup()
+        self.assertEqual(launcher.directory.parent, self.state / 'runs')
+        self.assertEqual(json.loads((launcher.directory / 'system-models.json').read_text()), {'simple': 'fixture/model'})
+
     def test_missing_default_fails_before_starting_or_creating_a_run(self):
         self.config.write_text('{"system_models": {"goal": "unused/model"}}')
         result = subprocess.run([sys.executable, str(ROOT / 'asys-goal/tools/asys-goal'),
-            str(self.environment), 'Achieve the goal', '--root', str(self.root / 'runs')], capture_output=True, text=True)
+            str(self.environment), 'Achieve the goal', '--root', str(self.state)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
-        self.assertIn('asys system-model set simple MODEL', result.stderr)
-        self.assertFalse((self.root / 'runs').exists())
+        self.assertIn(f'asys system-model set simple MODEL --root {self.state}', result.stderr)
+        self.assertFalse((self.state / 'runs').exists())
 
     def test_public_arguments_select_a_goal_and_optional_model_and_limit(self):
         with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit):

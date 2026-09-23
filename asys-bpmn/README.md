@@ -139,8 +139,10 @@ The dcomp Provider connection works without egress.
 Run records, workflow checkpoints, job records, command and component logs, and events live
 under `$XDG_STATE_HOME/asys/runs/<run-id>` or
 `$HOME/.local/state/asys/runs/<run-id>`. `--root DIRECTORY` or
-`ASYS_STATE_ROOT` selects the asys base; runs go in its `runs/` directory.
-`--root DIRECTORY` selects the runs directory directly. The selected workspace is edited in place. Job state is kept separately. `--dcomp-state-root DIRECTORY` and
+`ASYS_STATE_ROOT` selects the asys system root; an explicit `--root` takes
+precedence. Runs go in `ROOT/runs`, and model defaults come from
+`ROOT/config.json`. The selected workspace is edited in place. Job state is
+kept separately. `--dcomp-state-root DIRECTORY` and
 `--runtime-root DIRECTORY` select nondefault dcomp state and proxy roots.
 
 The host command talks to the workflow component over a runtime channel in the
@@ -194,7 +196,7 @@ asys-bpmn resume RUN
 ```
 
 `RUN` is a run ID, unique prefix, or saved state directory. Use `--root DIRECTORY`
-when the run was created under another state root. The command restores the
+when the run was created under another asys system root. The command restores the
 stored BPMN execution, variables and job identities. Completed jobs stay complete;
 the failed stage and unfinished work cancelled by its failure get new job IDs
 and directories, using the original requests and the same actual workspace.

@@ -12,8 +12,9 @@ import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.l
 import { resourceExhaustedRetryAt } from "@cyclo/provider/errors";
 
 import { createPiAdapter } from "../src/pi-adapter.mjs";
+import { streamProvider } from "../../../../asys-workers/src/provider-adapter.mjs";
 
-test('the real Codex adapter recovers from an HTML 502 without exposing the error page', async t => {
+test('the agent retries a native HTTP 502 without exposing the error page', async t => {
   const requests = [], delays = [];
   const upstream = createServer(async (incoming, response) => {
     const chunks = [];
@@ -32,16 +33,64 @@ test('the real Codex adapter recovers from an HTML 502 without exposing the erro
   upstream.listen(0, '127.0.0.1');
   await once(upstream, 'listening');
   t.after(() => { upstream.closeAllConnections(); upstream.close(); });
-  const events = (await collect(createPiAdapter({ sleep: async ms => { delays.push(ms); } }).infer(
-    route(`http://127.0.0.1:${upstream.address().port}`, 'openai-codex-responses', codexToken()),
-    JSON.stringify({ context: { messages: [{ role: 'user', content: 'Continue.', timestamp: 0 }] } }), t.signal,
-  ))).map(response => JSON.parse(response.payload));
+  const events = await inferWithAgent(
+    route(`http://127.0.0.1:${upstream.address().port}`, 'openai-codex-responses', codexToken()), t.signal,
+    { random: () => 1, sleep: async ms => delays.push(ms) },
+  );
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[0], requests[1]);
   assert.deepEqual(delays, [1000]);
   assert.equal(events.at(-1).type, 'done');
   assert.ok(!events.some(event => event.type === 'error'));
 });
+
+for (const failure of ['no response', 'silent partial stream', 'disconnected partial stream', 'cleanly closed partial stream']) {
+  test(`the agent recovers from native ${failure} by repeating Infer`, { timeout: 5000 }, async t => {
+    const requests = [], logs = [];
+    const closed = Promise.withResolvers();
+    const upstream = createServer(async (incoming, response) => {
+      const chunks = [];
+      for await (const chunk of incoming) chunks.push(chunk);
+      const bytes = Buffer.concat(chunks);
+      requests.push(JSON.parse((incoming.headers['content-encoding'] === 'zstd' ? zlib.zstdDecompressSync(bytes) : bytes).toString('utf8')));
+      if (requests.length === 1) {
+        response.once('close', closed.resolve);
+        if (failure === 'no response') return;
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        for (const event of nativeEvents().slice(0, 3)) response.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (failure === 'disconnected partial stream') setTimeout(() => response.destroy(), 30);
+        else if (failure === 'cleanly closed partial stream') response.end();
+        else {
+          // Transport heartbeats must not keep a stalled generation alive.
+          const heartbeat = setInterval(() => response.write(': keepalive\n\n'), 10);
+          response.once('close', () => clearInterval(heartbeat));
+        }
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const event of nativeEvents()) response.write(`data: ${JSON.stringify(event)}\n\n`);
+      response.end('data: [DONE]\n\n');
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+    const events = await inferWithAgent(
+      route(`http://127.0.0.1:${upstream.address().port}`, 'openai-codex-responses', codexToken()), t.signal,
+      { idleTimeoutMs: 200, sleep: async () => {}, onRetry: event => logs.push(event) },
+    );
+    await closed.promise;
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0], requests[1]);
+    assert.equal(events.filter(event => event.type === 'start').length, 1);
+    assert.equal(events.at(-1).type, 'done');
+    assert.equal(events.at(-1).message.content[0].text, 'native ok');
+    assert.ok(!events.some(event => event.type === 'error'));
+    assert.equal(logs.length, 1);
+    assert.match(logs[0].errorMessage, failure === 'no response' ? /first response timeout/
+      : failure === 'silent partial stream' ? /stream inactivity/
+      : failure === 'cleanly closed partial stream' ? /stream ended/ : /stream interrupted/);
+  });
+}
 
 test('native Codex requests readable reasoning and forwards summary text unchanged', { timeout: 10000 }, async t => {
   let body;
@@ -221,7 +270,7 @@ test("the real Anthropic and OpenAI adapters expose SDK 429s as exhaustion", asy
         )),
         (error) => error instanceof ConnectError
           && error.code === Code.ResourceExhausted
-          && resourceExhaustedRetryAt(error)?.getTime() === now + 60_000
+          && resourceExhaustedRetryAt(error)?.getTime() === now + 7_200_000
           && !error.message.includes("private"),
       );
       assert.equal(requests, 1);
@@ -325,4 +374,11 @@ async function collect(values) {
   const result = [];
   for await (const value of values) result.push(value);
   return result;
+}
+
+async function inferWithAgent(selected, signal, policy) {
+  const adapter = createPiAdapter();
+  const client = { infer(request, options) { return adapter.infer(selected, request.payload, options.signal); } };
+  return collect(streamProvider(client, selected.publicModel.id, selected.rawModel,
+    { messages: [{ role: 'user', content: 'Continue.', timestamp: 0 }] }, { signal }, policy));
 }

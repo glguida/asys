@@ -35,7 +35,7 @@ test('update selects running shared services without changing workflow runs', as
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'asys-host-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const run = join(root, 'script-run');
+  const run = join(root, 'runs', 'script-run');
   const job = join(run, 'runtime/environments/shell/jobs/command-1');
   await mkdir(job, { recursive: true });
   await json(join(run, 'run.json'), { id: 'script-run', name: 'Build reports',

@@ -17,10 +17,10 @@ selector can be its name, ID or unique prefix. `status --json` includes job and
 workspace locations. A completed stage means its executable succeeded; inspect
 its result and the domain artifacts to assess the requested outcome.
 
-If the run used `--root ./run-state`, supply the same run root to observers or
-select its absolute run path. An asys state base selected with `ASYS_STATE_ROOT`
-instead contains `runs/`, `inference/`, `human/`, and model config. Mixing these
-two meanings of root commonly makes a run or default model appear absent.
+If the run used `--root ./state`, supply the same system root to observers or
+select its absolute run path (`./state/runs/RUN_ID`). Every host tool uses
+`--root` for the asys system root, containing `runs/`, `inference/`, `human/`,
+and `config.json`. An explicit root overrides `ASYS_STATE_ROOT`.
 
 Logs default to the saved run log. `--source events` shows the event stream,
 `jobs` worker stdout/stderr, `components` saved component logs, and `commands`

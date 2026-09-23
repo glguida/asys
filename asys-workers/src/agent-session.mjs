@@ -38,7 +38,8 @@ export async function runAgent({ config, job, signal, provider, workspace: cwd, 
       writeFileSync(promptFile, context.systemPrompt ?? '');
     },
   });
-  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true } });
+  // streamProvider owns transport recovery for turns and compaction alike.
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: false } });
   const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager,
     noSkills: true, noExtensions: true, noContextFiles: true, noPromptTemplates: true, noThemes: true,
     additionalSkillPaths: definition.skills,

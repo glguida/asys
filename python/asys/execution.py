@@ -135,7 +135,7 @@ class EnvironmentHost(ComponentHost):
         return options
 
     def worker_models(self):
-        return system_models()
+        return system_models(self.args.root)
 
     def start_workers(self):
         options = self.execution_mounts()

@@ -21,6 +21,9 @@ const Usage = `asys-inference manages a provider network exporting @inference_en
 
 Usage: asys-inference [--root DIR] COMMAND [ARGUMENTS] [OPTIONS]
 
+--root selects the asys system root; inference state is stored in DIR/inference.
+The default is ASYS_STATE_ROOT, or the local state directory/asys.
+
   init [--system NAME] [--dcomp-state-root DIR] [--runtime-root DIR]
        [--prefix NAME] [--components-root DIR] [--empty]
   start | stop                      Start or stop the provider network
@@ -90,11 +93,8 @@ func parseOptions(flags *flag.FlagSet, args []string) error {
 }
 
 func DefaultRoot() (string, error) {
-	if value := os.Getenv("ASYS_INFERENCE_STATE_ROOT"); value != "" {
-		return filepath.Abs(value)
-	}
 	if value := os.Getenv("ASYS_STATE_ROOT"); value != "" {
-		return filepath.Abs(filepath.Join(value, "inference"))
+		return filepath.Abs(value)
 	}
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
@@ -104,7 +104,7 @@ func DefaultRoot() (string, error) {
 		}
 		base = filepath.Join(home, ".local/state")
 	}
-	return filepath.Abs(filepath.Join(base, "asys/inference"))
+	return filepath.Abs(filepath.Join(base, "asys"))
 }
 
 func (cli CLI) Run(ctx context.Context, args []string) int {
@@ -136,7 +136,7 @@ func usage(message string) error    { return &usageError{message} }
 
 func (cli CLI) run(ctx context.Context, args []string) error {
 	flags := cli.flags("asys-inference")
-	root := flags.String("root", "", "machine configuration/state directory")
+	root := flags.String("root", "", "asys system root (inference state is stored in ROOT/inference)")
 	flags.Usage = func() { fmt.Fprint(cli.Err, Usage) }
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -172,7 +172,7 @@ func (cli CLI) run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	store := Store{Root: *root}
+	store := Store{Root: filepath.Join(*root, "inference")}
 	if command == "components" {
 		return cli.components(store, args)
 	}
@@ -302,7 +302,7 @@ func (cli CLI) init(ctx context.Context, store Store, args []string) error {
 	if err = store.Write(document); err != nil {
 		return err
 	}
-	fmt.Fprintf(cli.Out, "Initialized %s; run asys-inference --root %s start\n", store.Root, store.Root)
+	fmt.Fprintf(cli.Out, "Initialized %s; run asys-inference --root %s start\n", store.Root, filepath.Dir(store.Root))
 	return nil
 }
 

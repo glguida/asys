@@ -6,12 +6,17 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import { Provider } from '@cyclo/provider/contract';
 import { PreparedQueue as Queue } from '../../asys-runtime/test/fixtures.mjs';
 import { HumanService } from '../../asys-human-interface/src/human-service.mjs';
 import { humanServer } from '../../asys-human-interface/src/human-server.mjs';
 import { assistant, model } from './helpers.mjs';
+import { createPiAdapter } from '../../asys-inference/components/gateway/src/pi-adapter.mjs';
+import { createPoolerServices } from '../../asys-inference/components/pooler/src/services.mjs';
+import { parseArguments as poolArguments } from '../../asys-inference/components/pooler/src/config.mjs';
+import { providerClient } from '../src/provider.mjs';
 
 const executor = fileURLToPath(new URL('../../asys-runtime/tools/asys-runtime', import.meta.url));
 const agentProgram = fileURLToPath(new URL('../tools/asys-agent', import.meta.url));
@@ -100,6 +105,108 @@ test('the worker configuration selects the Pi model and inference uses the uncha
   assert.ok(requests[1].context.messages.some(m => m.role === 'toolResult' && m.toolCallId === 'proof'));
   assert.equal(requests[1].context.messages.find(m => m.role === 'assistant').provider, 'openai-codex');
 });
+
+test('the worker keeps inference pending through silence before and after partial output', async t => {
+  const f = await fixture(t, { agentArgs: ['--model', 'fixture/model'] });
+  let calls = 0;
+  const server = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
+    listModels() { return { models: [model] }; },
+    async *infer(_request, { signal }) {
+      calls++;
+      await delay(60, undefined, { signal });
+      yield { payload: JSON.stringify({ type: 'start', partial: assistant([], 'pending') }) };
+      await delay(60, undefined, { signal });
+      yield { payload: JSON.stringify({ type: 'done', reason: 'stop',
+        message: assistant([{ type: 'text', text: '{"final":"Finished waiting","exception":null}' }]) }) };
+    },
+  }); } }));
+  f.start({ DCOMP_IN_INFERENCE: await listen(t, server, join(f.root, 'provider.sock')) });
+  await f.queue.submit('agent', 'waiting', { input: { prompt: 'Wait for the result.' } });
+  const state = await f.queue.wait('waiting', { timeoutMs: 10000 });
+  assert.equal(state.status, 'done', state.error);
+  assert.equal(state.result.final, 'Finished waiting');
+  assert.equal(calls, 1);
+});
+
+for (const pooled of [false, true]) {
+  for (const failure of ['silence', 'RPC disconnect', 'incomplete response', 'quota']) {
+    test(`agent recovery through ${pooled ? 'a pooler' : 'a direct gateway'} survives ${failure} and preserves completed tools`, async t => {
+      const selected = pooled ? 'pool/balanced' : model.id;
+      const f = await fixture(t, { agentArgs: ['--model', selected] });
+      const contexts = [], attempts = [];
+      const adapter = createPiAdapter();
+      let calls = 0;
+      const route = {
+        publicModel: model, provider: 'fixture', rawModel: { api: 'openai-responses' },
+        credentialStore: { async read() { return { type: 'api_key', key: 'test-gateway-key' }; } },
+        models: { async *streamSimple(_model, context, options) {
+          contexts.push(structuredClone(context));
+          attempts.push(options.signal);
+          if (contexts.length === 2) {
+            const partial = assistant([{ type: 'text', text: 'Abandoned partial response' }], 'pending');
+            yield { type: 'start', partial };
+            yield { type: 'text_delta', contentIndex: 0, delta: partial.content[0].text, partial };
+            if (failure === 'incomplete response') {
+              yield { type: 'error', reason: 'error', error: {
+                ...assistant([{ type: 'toolCall', id: 'never-execute', name: 'bash', arguments: { command: 'printf BAD >> completed.txt' } }], 'error'),
+                errorMessage: 'OpenAI Responses stream ended before a terminal response event',
+              } };
+              return;
+            }
+            if (failure === 'quota') {
+              await options.onResponse({ status: 429, headers: { 'retry-after': '1' } });
+              yield { type: 'error', reason: 'error', error: { ...assistant([], 'error'), errorMessage: 'rate limited' } };
+              return;
+            }
+            await new Promise(() => {});
+          }
+          const message = contexts.length === 1
+            ? assistant([{ type: 'toolCall', id: 'completed-once', name: 'bash', arguments: { command: 'printf x >> completed.txt' } }], 'toolUse')
+            : assistant([{ type: 'text', text: '{"final":"Recovered at the caller","exception":null}' }]);
+          yield { type: 'start', partial: assistant([], 'pending') };
+          yield { type: 'done', reason: message.stopReason, message };
+        } },
+      };
+      const handler = connectNodeAdapter({ routes(router) { router.service(Provider, {
+        listModels() { return { models: [model, { ...model, id: 'other/model' }] }; },
+        async *infer(request, { signal }) { yield* adapter.infer(route, request.payload, signal); },
+      }); } });
+      const server = createServer((request, response) => {
+        if (request.url.endsWith('/Infer') && ++calls === 2 && failure === 'RPC disconnect') {
+          const timer = setTimeout(() => response.destroy(), 50);
+          response.once('close', () => clearTimeout(timer));
+        }
+        handler(request, response);
+      });
+      let endpoint = await listen(t, server, join(f.root, 'gateway.sock'));
+      if (pooled) {
+        const services = createPoolerServices({ componentName: 'pool',
+          config: poolArguments([model.id, 'other/model', 'model=balanced']),
+          upstream: { client: providerClient({ DCOMP_IN_INFERENCE: endpoint }),
+            callOptions(signal, timeoutMs) { return { signal, ...(timeoutMs === undefined ? {} : { timeoutMs }) }; } },
+        });
+        const pool = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, services.provider); } }));
+        endpoint = await listen(t, pool, join(f.root, 'pool.sock'));
+      }
+      f.start({ DCOMP_IN_INFERENCE: endpoint, ASYS_INFERENCE_IDLE_TIMEOUT_MS: '150' });
+      await f.queue.submit('agent', 'recovering', { input: { prompt: 'Perform the work and report the result.', maxSteps: 2 } });
+      const state = await f.queue.wait('recovering', { timeoutMs: 10000 });
+      assert.equal(state.status, 'done', state.error);
+      assert.equal(state.result.final, 'Recovered at the caller');
+      assert.equal(await readFile(join(f.queue.workspace('recovering'), 'completed.txt'), 'utf8'), 'x');
+      assert.equal(calls, 3);
+      assert.equal(contexts.length, 3);
+      assert.deepEqual(contexts[1], contexts[2]);
+      assert.ok(contexts[2].messages.some(message => message.role === 'toolResult' && message.toolCallId === 'completed-once'));
+      assert.ok(attempts[1].aborted);
+      const directory = f.queue.executionDirectory('recovering');
+      const saved = JSON.parse(await readFile(join(directory, 'agent.json'), 'utf8'));
+      assert.equal(saved.agent.steps, 2);
+      const events = (await readFile(join(directory, 'stdout.log'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      assert.ok(events.some(event => event.type === (failure === 'quota' ? 'agent.provider_exhausted' : 'agent.provider_retrying')));
+    });
+  }
+}
 
 test('the environment supplies agent memory; job data cannot replace the global system prompt', async t => {
   const f = await fixture(t, { agentArgs: ['--model', 'fixture/model'] });
@@ -242,7 +349,7 @@ test('retrying a failed agent starts the stage again with its original prompt an
   assert.equal(await readFile(firstResult, 'utf8'), original);
 });
 
-test('a failed stage restarts after a partial tool call', async t => {
+test('inference recovery discards an incomplete tool call without consuming an agent step', async t => {
   const f = await fixture(t, { agentArgs: ['--model', 'fixture/model'] });
   const directory = f.queue.executionDirectory('interrupted-write');
   const target = join(f.queue.workspace('interrupted-write'), 'unfinished.txt');
@@ -264,17 +371,13 @@ test('a failed stage restarts after a partial tool call', async t => {
     },
   }); } }));
   f.start({ DCOMP_IN_INFERENCE: await listen(t, server, join(f.root, 'provider.sock')) });
-  // One inference step ends the first job after the broken response.
   await f.queue.submit('agent', 'interrupted-write', { input: { prompt: 'Perform the original stage.', maxSteps: 1 } });
-  assert.equal((await f.queue.wait('interrupted-write', { timeoutMs: 10000 })).status, 'failed');
-  const checkpoint = join(directory, 'agent.json');
-  const saved = JSON.parse(await readFile(checkpoint, 'utf8'));
-  assert.ok(saved.agent.session.entries.some(e => e.message?.content?.some(c => c.id === 'unfinished-write')));
-  await f.queue.resubmit('interrupted-write', 'fresh-write');
-  const result = await f.queue.wait('fresh-write', { timeoutMs: 10000 });
+  const result = await f.queue.wait('interrupted-write', { timeoutMs: 10000 });
   assert.equal(result.status, 'done', result.error);
-  assert.equal((await f.queue.state('interrupted-write')).status, 'failed');
   assert.equal(requests.length, 2);
+  const saved = JSON.parse(await readFile(join(directory, 'agent.json'), 'utf8'));
+  assert.equal(saved.agent.steps, 1);
+  assert.ok(!saved.agent.session.entries.some(e => e.message?.content?.some(c => c.id === 'unfinished-write')));
   await assert.rejects(readFile(target), { code: 'ENOENT' });
 });
 

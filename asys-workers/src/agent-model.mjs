@@ -19,15 +19,14 @@ export async function agentModel({ config, agentDir, provider: providerClient, s
         const route = routes.find(r => r.model.id === model.id);
         if (!route) throw new Error('Pi selected a model outside the Provider catalogue');
         beforeRequest(context);
-        // The timeout bounds one inference attempt. Waiting for an exhausted
-        // provider to come back is not work the agent can hurry, so it runs
-        // outside that budget until the job is cancelled.
+        // Count the logical inference call once; transport retries stay inside
+        // streamProvider and preserve this context, including completed tools.
         return streamProvider(providerClient, route.publicId, { ...model, api: 'cyclo-pi' }, context,
           { ...options, ...config.options,
-            signal: AbortSignal.any([signal, ...(options.signal ? [options.signal] : [])]),
-            attemptTimeoutMs: (config.timeoutSeconds ?? 600) * 1000 },
-          { onExhaustion: ({ retryAt, delayMs }) => event('agent.provider_exhausted', { retryAt: retryAt.toISOString(), delayMs }),
-            onRetry: () => event('agent.provider_retrying', {}) });
+            signal: AbortSignal.any([signal, ...(options.signal ? [options.signal] : [])]) },
+          { idleTimeoutMs: config.inferenceIdleTimeoutMs,
+            onExhaustion: ({ retryAt, ...data }) => event('agent.provider_exhausted', { ...data, retryAt: retryAt.toISOString() }),
+            onRetry: ({ retryAt, ...data }) => event('agent.provider_retrying', { ...data, retryAt: retryAt.toISOString() }) });
       },
     });
     for (const route of routes) if (route.publicId === config.model) selected = modelRuntime.getModel(provider, route.model.id);

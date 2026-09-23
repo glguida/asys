@@ -91,7 +91,7 @@ def main():
             output = temp / f"{label}.log"
             with output.open("w") as stream:
                 process = subprocess.Popen([sys.executable, str(ROOT / "tools/asys-human-prompt"), "--system", system,
-                    "--dcomp-state-root", str(temp / "dcomp"), "--root", str(current_handler_root), "--claimant", "alice", *extra],
+                    "--dcomp-state-root", str(temp / "dcomp"), "--root", str(current_handler_root.parent), "--claimant", "alice", *extra],
                     stdin=subprocess.PIPE, stdout=stream, stderr=stream, text=True,
                     env={**os.environ, 'ASYS_HUMAN_INTERFACE_IMAGE': human_image})
             processes.append(process)
@@ -128,7 +128,7 @@ def main():
             early_log = temp / 'early.log'
             with early_log.open('w') as output:
                 early = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
-                    str(early_workflow), str(early_environment), '--root', str(temp / 'early-runs'),
+                    str(early_workflow), str(early_environment), '--root', str(temp / 'first'),
                     '--workspace', str(temp), '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
                     stdin=subprocess.DEVNULL, stdout=output, stderr=output, text=True,
                     env={**os.environ, 'ASYS_STATE_ROOT': str(temp / 'first'), 'ASYS_HUMAN_INTERFACE_IMAGE': human_image})
@@ -200,7 +200,7 @@ def main():
             with private_log.open('w') as output:
                 private = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
                     str(private_workflow), str(private_environment), '--human',
-                    '--root', str(temp / 'runs'), '--workspace', str(beta.workspace.resolve()),
+                    '--root', str(temp), '--workspace', str(beta.workspace.resolve()),
                     '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
                     stdin=subprocess.PIPE, stdout=output, stderr=output, text=True)
             processes.append(private)
@@ -229,10 +229,11 @@ def main():
             shared_workflow.write_text(private_workflow.read_text().replace('Private request?', 'Shared workflow request?')
                                        .replace('type: "boolean"', 'type: "string"'))
             shared_log = temp / 'shared-workflow.log'
-            shared_runs = temp / 'shared-runs'
+            shared_root = temp / 'shared-state'
+            shared_runs = shared_root / 'runs'
             with shared_log.open('w') as output:
                 shared = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
-                    str(shared_workflow), str(terminal_environment), '--root', str(shared_runs),
+                    str(shared_workflow), str(terminal_environment), '--root', str(shared_root),
                     '--workspace', str(beta.workspace.resolve()), '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
                     stdin=subprocess.DEVNULL, stdout=output, stderr=output, text=True)
             processes.append(shared)
@@ -270,9 +271,10 @@ def main():
             terminal_workflow = temp / 'terminal.bpmn'
             terminal_workflow.write_text(private_workflow.read_text().replace('Private request?', 'Terminal request?')
                                          .replace('type: "boolean"', 'type: "string"'))
-            terminal_runs = temp / 'terminal-runs'
+            terminal_root = temp / 'terminal-state'
+            terminal_runs = terminal_root / 'runs'
             arguments = ['run', str(terminal_workflow), str(terminal_environment), '--human',
-                '--root', str(terminal_runs), '--workspace', str(terminal_workspace),
+                '--root', str(terminal_root), '--workspace', str(terminal_workspace),
                 '--system', system, '--dcomp-state-root', str(temp / 'dcomp')]
             for attempt, expected_exit in [(1, 0), (2, 1), (3, 0)]:
                 master, slave = pty.openpty()
@@ -345,7 +347,7 @@ def main():
                     if attempt == 1:
                         (terminal_workspace / 'reviewed-once').unlink()
                     else:
-                        arguments = ['resume', record['id'], '--human', '--root', str(terminal_runs)]
+                        arguments = ['resume', record['id'], '--human', '--root', str(terminal_root)]
                 finally:
                     if process.poll() is None:
                         process.terminate()
@@ -554,7 +556,7 @@ def main():
             run(['make'], '-C', str(ROOT), 'install-host', f'PREFIX={prefix}')
             run(['make'], '-C', str(ROOT.parent / 'asys-inference'), 'install', f'PREFIX={prefix}')
             installation = temp / 'updated-state'
-            inference = [str(prefix / 'bin/asys-inference'), '--root', str(installation / 'inference')]
+            inference = [str(prefix / 'bin/asys-inference'), '--root', str(installation)]
             run(inference, 'init', '--empty', '--system', update_system, '--dcomp-state-root', str(temp / 'dcomp'))
             run(inference, 'start')
             installed_update = [str(prefix / 'bin/asys'), 'update', '--root', str(installation)]
@@ -570,7 +572,7 @@ def main():
             run(installed_update)
             assert installed_service() == installed_id, 'unchanged image must keep its container'
             result = subprocess.run([str(prefix / 'bin/asys-human-prompt'), '--plain', '--system', update_system,
-                                     '--root', str(installation / 'human'), '--dcomp-state-root', str(temp / 'dcomp')],
+                                     '--root', str(installation), '--dcomp-state-root', str(temp / 'dcomp')],
                                     input='', capture_output=True, text=True, timeout=30)
             assert result.returncode == 0, result.stdout + result.stderr
             assert installed_service() == installed_id, 'EOF must detach without stopping the service'

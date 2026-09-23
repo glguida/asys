@@ -84,16 +84,16 @@ test('a failed compaction cannot turn the preceding tool call into a successful 
   assert.ok(f.events.some(e => e.type === 'agent.compaction_ended' && e.errorMessage));
 });
 
-test('Pi retries a terminated compaction and continues the agent with completed tools intact', async t => {
+test('the inference client retries a terminated compaction and continues the agent with completed tools intact', async t => {
   const f = await fixture(t);
   let summaries = 0;
   f.onSummary = () => { f.summaryError = ++summaries === 1 ? 'terminated' : false; };
   const result = await f.run();
   assert.equal(result.final, 'Finished after recovery');
-  assert.equal(f.saved.agent.steps, 5);
+  assert.equal(f.saved.agent.steps, 4);
   assert.equal(summaries, 2);
   assert.equal(f.toolCalls, 1);
-  assert.ok(f.events.some(e => e.type === 'agent.provider_retrying' && e.errorMessage === 'terminated'));
+  assert.ok(f.events.some(e => e.type === 'agent.provider_retrying' && /terminated/.test(e.errorMessage)));
   assert.ok(f.events.some(e => e.type === 'agent.compaction_ended' && e.willRetry && !e.errorMessage));
 });
 
@@ -111,7 +111,7 @@ test('cancellation during compaction stops the job without declaring success', a
   assert.ok(!f.saved.agent.session.entries.some(e => e.type === 'compaction'));
 });
 
-test('the agent waits through provider exhaustion longer than its attempt timeout and then finishes', async t => {
+test('the agent waits through provider exhaustion and then finishes', async t => {
   const workspace = await mkdtemp(join(tmpdir(), 'asys-agent-exhausted-'));
   t.after(() => rm(workspace, { recursive: true, force: true }));
   const events = [];
@@ -121,13 +121,12 @@ test('the agent waits through provider exhaustion longer than its attempt timeou
     async *infer(_request, { signal }) {
       calls++;
       assert.equal(signal.aborted, false);
-      // The reset lies well beyond the 50 ms attempt timeout used below.
       if (calls === 1) throw createResourceExhaustedError(new Date(Date.now() + 1_100));
       yield { payload: JSON.stringify({ type: 'done', reason: 'stop', message: assistant([{ type: 'text', text: JSON.stringify({ final: 'Finished after the limit reset', exception: null }) }]) }) };
     },
   };
   const result = await runAgent({
-    config: { model: 'fixture/model', prompt: 'Perform the task.', maxSteps: 3, timeoutSeconds: 0.05, options: {} },
+    config: { model: 'fixture/model', prompt: 'Perform the task.', maxSteps: 3, options: {} },
     job: { id: 'exhausted' }, workspace, signal: new AbortController().signal,
     provider, save() {}, event(type, data) { events.push({ type, ...data }); },
   });

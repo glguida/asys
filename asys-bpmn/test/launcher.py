@@ -35,7 +35,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         example = json.loads(run(launcher, 'run', 'workflow.bpmn', 'env/dummy', *common,
                                  cwd=root / 'examples/hello'))
         assert example['greet']['message'] == 'Hello from asys.', example
-        hello_run = max(cli_root.glob('*/run.json'), key=lambda path: path.stat().st_mtime)
+        hello_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime)
         saved_hello = json.loads(hello_run.read_text())
         assert saved_hello['components'] == {'engine': f"hello-workflow-{saved_hello['id'][:16]}",
                                             'workers': f"hello-workers-{saved_hello['id'][:16]}"}, saved_hello
@@ -70,7 +70,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1 and 'Program exited with status 7' in failed.stderr, failed.stderr
         assert 'The design input is invalid' in failed.stderr and 'asys logs ' in failed.stderr, failed.stderr
-        failed_run = max(cli_root.glob('*/run.json'), key=lambda path: path.stat().st_mtime).parent
+        failed_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime).parent
         observed = json.loads(run(observer, 'status', str(failed_run), '--json'))
         assert observed['status'] == 'failed' and observed['jobs'][0]['detail'] == 'The design input is invalid', observed
         assert 'The design input is invalid' in run(observer, 'logs', str(failed_run), 'greet')
@@ -91,7 +91,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         failed = subprocess.run(launcher + ['run', str(workflow_file), str(image_environment), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1 and 'status 17' in failed.stderr, failed.stderr
-        retry_run = max(cli_root.glob('*/run.json'), key=lambda path: path.stat().st_mtime).parent
+        retry_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime).parent
         job, = json.loads(run(observer, 'status', str(retry_run), '--json'))['jobs']
         previous_image = (retry_run / 'environment/component.dcomp').read_text()
         (project / 'workflow.bpmn').rename(project / 'hidden.bpmn')
@@ -126,7 +126,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         failed = subprocess.run(launcher + ['run', str(workflow_file), str(environment), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1 and 'status 17' in failed.stderr, failed.stderr
-        retry_run = max(cli_root.glob('*/run.json'), key=lambda path: path.stat().st_mtime).parent
+        retry_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime).parent
         job, = json.loads(run(observer, 'status', str(retry_run), '--json'))['jobs']
         manifest = retry_run / 'environment/component.dcomp'
         previous_image = manifest.read_text()
@@ -147,7 +147,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         for scenario in ['interrupt', 'worker-exit', 'engine-exit']:
             release = project / f'release-{scenario}'
             workflow_file.write_text(hello.replace('import json', f'from pathlib import Path\nimport time\nwhile not Path({str(release.name)!r}).exists():\n    time.sleep(0.1)\nimport json'))
-            existing_runs = set(cli_root.iterdir())
+            existing_runs = set((cli_root / 'runs').iterdir())
             egress = scenario == 'interrupt'
             configuration['egress'] = egress
             (environment / 'workers.json').write_text(json.dumps(configuration))
@@ -157,7 +157,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
                 try:
                     def running_cli():
                         assert process.poll() is None, 'launcher exited before cancellation'
-                        for directory in set(cli_root.iterdir()) - existing_runs:
+                        for directory in set((cli_root / 'runs').iterdir()) - existing_runs:
                             path = directory / 'run.json'
                             if path.exists():
                                 record = json.loads(path.read_text())
@@ -239,14 +239,14 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         # Invalid environments fail validation before any component is started.
         configuration['types']['program']['command'] = []
         (environment / 'workers.json').write_text(json.dumps(configuration))
-        existing_runs = set(cli_root.iterdir())
+        existing_runs = set((cli_root / 'runs').iterdir())
         failed = subprocess.run(launcher + ['run', str(workflow_file), str(environment), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1, failed.stderr
-        directory, = set(cli_root.iterdir()) - existing_runs
+        directory, = set((cli_root / 'runs').iterdir()) - existing_runs
         assert 'program: command must be a nonempty argument list' in failed.stderr
         assert not (directory / 'components.log').exists()
-        records = [json.loads((directory / 'run.json').read_text()) for directory in cli_root.iterdir()]
+        records = [json.loads((directory / 'run.json').read_text()) for directory in (cli_root / 'runs').iterdir()]
         assert len(records) == 13 and all(record['components_removed'] for record in records), records
         after = {item['name']: item['status']['container_id'] for item in
                  json.loads(run(dcomp, 'view', '--json', system))['components']}

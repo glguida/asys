@@ -355,8 +355,7 @@ input supplies instructions:
 
 ```xml
 <asys:job type="agent" input='= {
-  prompt: "Read architecture.json in the workspace. Design the assigned module in pcb/.",
-  timeoutSeconds: 600
+  prompt: "Read architecture.json in the workspace. Design the assigned module in pcb/."
 }'/>
 ```
 
@@ -364,8 +363,10 @@ The result is the agent's final JSON object with `final`, `exception`, and any
 task-specific fields. Conversation and execution metadata stay in the job
 transcript. Refer to workspace files by their project paths. Agents have no step
 limit unless `maxSteps` is explicitly supplied; that limit includes compaction
-and retry calls. `timeoutSeconds` bounds one inference attempt; provider
-exhaustion can put the agent into a visible waiting state until capacity returns.
+but excludes transport retries. The agent's inference client times out inactive
+RPC attempts and retries without failing the assignment or repeating completed
+tools. `ASYS_INFERENCE_IDLE_TIMEOUT_MS` controls inactivity (default ten minutes).
+Provider exhaustion puts the agent into a visible waiting state until capacity returns.
 The environment's `timeout` separately limits program execution.
 
 Prompts should identify inputs, deliverables, checks, and when to report inability
@@ -687,9 +688,10 @@ shows its transcript, including assistant text, tools, and readable thinking
 when the provider supplies it. Press `l` to switch between the transcript and
 the saved run log.
 
-`--root ./state` chooses the run-state parent. Pass the same option to `status`,
-`logs`, and `top`. A run selector can be `latest`, an ID, a unique ID prefix, or
-the run directory.
+`--root ./state` chooses the asys system root: runs are saved in `./state/runs`
+and model defaults come from `./state/config.json`. Pass the same option to
+`status`, `logs`, and `top`. A run selector can be `latest`, an ID, a unique
+ID prefix, or the run directory.
 
 | Symptom | Check |
 | --- | --- |

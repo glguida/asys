@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 
 
-def state_root(section=None):
-    base = Path(os.environ.get('ASYS_STATE_ROOT') or
+def state_root(section=None, *, root=None):
+    base = Path(root if root is not None else os.environ.get('ASYS_STATE_ROOT') or
                 Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'asys').expanduser()
     return base / section if section else base
 

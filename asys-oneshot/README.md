@@ -48,8 +48,9 @@ asys logs latest simple
 asys top
 ```
 
-`--root DIRECTORY` selects another run-state root; model defaults still come
-from the selected asys state directory. `--system NAME` selects
+`--root DIRECTORY` selects the asys system root, overriding `ASYS_STATE_ROOT`.
+Runs are saved in `ROOT/runs` and model defaults come from `ROOT/config.json`.
+`--system NAME` selects
 the dcomp system, defaulting to `asys`. `-L inference=COMPONENT.OUTPUT` selects
 another Provider output; other declared environment inputs use the same syntax.
 

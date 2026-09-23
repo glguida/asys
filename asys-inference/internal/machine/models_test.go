@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +16,10 @@ import (
 func TestModelsIsAReadCommand(t *testing.T) {
 	root := t.TempDir()
 	document, _ := NewDocument(Config{System: "test", DCompRoot: filepath.Join(root, "dcomp")})
-	store := Store{Root: root}
+	store := Store{Root: filepath.Join(root, "inference")}
+	if err := os.MkdirAll(store.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Write(document); err != nil {
 		t.Fatal(err)
 	}

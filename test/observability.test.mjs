@@ -18,7 +18,7 @@ const json = (path, value) => writeFile(path, JSON.stringify(value));
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'workflow-observe-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const run = join(root, runId);
+  const run = join(root, 'runs', runId);
   const job = join(run, 'runtime/environments/kicad/jobs', jobId);
   const execution = join(run, 'jobs', jobId), workspace = join(run, 'workspaces', jobId);
   await mkdir(job, { recursive: true });
@@ -71,7 +71,7 @@ test('status resolves caller-selected job and workspace directories', async t =>
 
 test('run prefixes must be unambiguous and nonexistent state stays nonexistent', async t => {
   const { root, run } = await fixture(t);
-  const other = join(root, 'abcd9999999999999999999999999999');
+  const other = join(root, 'runs', 'abcd9999999999999999999999999999');
   await mkdir(other);
   const record = JSON.parse(await readFile(join(run, 'run.json')));
   await json(join(other, 'run.json'), { ...record, id: 'abcd9999999999999999999999999999' });

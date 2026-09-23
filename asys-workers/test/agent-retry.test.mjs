@@ -33,7 +33,7 @@ async function fixture(t) {
   return f;
 }
 
-test('Pi retries a terminated response after partial output without repeating completed tools', async t => {
+test('the inference client retries a terminated response after partial output without repeating completed tools', async t => {
   const f = await fixture(t);
   f.infer = async function* (frame, attempt) {
     if (attempt === 1) {
@@ -54,26 +54,29 @@ test('Pi retries a terminated response after partial output without repeating co
   };
   const result = await f.run();
   assert.equal(result.final, 'Integration completed.');
-  assert.equal(f.job.agent.steps, 3);
+  assert.equal(f.job.agent.steps, 2);
   assert.equal(f.calls, 3);
   assert.equal(await readFile(join(f.workspace, 'prepared.txt'), 'utf8'), 'prepared\n');
   assert.ok(f.events.some(e => e.type === 'agent.message_delta' && e.kind === 'thinking'));
   const retry = f.events.find(e => e.type === 'agent.provider_retrying');
   assert.equal(retry?.attempt, 1);
-  assert.equal(retry.maxAttempts, 3);
-  assert.equal(retry.delayMs, 2000);
-  assert.equal(retry.errorMessage, 'terminated');
+  assert.equal(retry.maxAttempts, undefined);
+  assert.ok(retry.delayMs >= 500 && retry.delayMs <= 1000);
+  assert.match(retry.errorMessage, /terminated/);
 });
 
-test('persistent terminated responses stop after Pi exhausts its three retries', async t => {
+test('persistent transient failures keep the logical call pending until cancellation', async t => {
   const f = await fixture(t);
   f.infer = async function* () { yield response({ type: 'error', reason: 'error', error: failure() }); };
-  await assert.rejects(f.run(), /terminated/);
+  f.onEvent = (type, data) => {
+    if (type === 'agent.provider_retrying' && data.attempt === 4) f.controller.abort(new Error('Stop repeated retries'));
+  };
+  await assert.rejects(f.run({ maxSteps: 1 }), /Stop repeated retries/);
   assert.equal(f.calls, 4);
-  assert.deepEqual(f.events.filter(e => e.type === 'agent.provider_retrying').map(e => e.delayMs), [2000, 4000, 8000]);
+  assert.equal(f.job.agent.steps, 1);
 });
 
-test('cancelling a job interrupts Pi retry backoff without another inference call', async t => {
+test('cancelling a job interrupts inference retry backoff without another inference call', async t => {
   const f = await fixture(t);
   f.infer = async function* () { yield response({ type: 'error', reason: 'error', error: failure() }); };
   f.onEvent = type => {

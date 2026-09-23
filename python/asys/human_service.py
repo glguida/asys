@@ -28,7 +28,7 @@ class SharedHumanService(ComponentHost):
             self.dcomp += ['--state-root', str(selected.expanduser().resolve())]
         identity = self.dcomp[self.dcomp.index('--state-root') + 1] + '\0' + args.system
         key = hashlib.sha256(identity.encode()).hexdigest()[:16]
-        self.directory = directory or (root or state_root('human')) / ('shared-' + key)
+        self.directory = directory or (root or state_root('human', root=getattr(args, 'root', None))) / ('shared-' + key)
         self.directory = self.directory.expanduser().resolve()
         self.name = name or 'asys-human'
 

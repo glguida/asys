@@ -53,7 +53,7 @@ def update(args):
     config = json.loads(machine.read_text())['config'] if machine.is_file() else {}
     if config.get('running'):
         print('Updating inference services…', flush=True)
-        subprocess.run([inference_command(), '--root', str(machine.parent), 'start'], check=True)
+        subprocess.run([inference_command(), '--root', str(root), 'start'], check=True)
         args = Namespace(system=config['system'],
                          dcomp_state_root=Path(config['dcomp_state_root']),
                          runtime_root=Path(config['runtime_root']) if config.get('runtime_root') else None)

@@ -1,6 +1,7 @@
 """Settings for system agents in the selected asys setup."""
 import json
 from pathlib import Path
+import shlex
 
 from asys_runtime.files import file_lock, read_json, validate_name, write_json
 from asys_runtime.permissions import mkdir
@@ -34,26 +35,27 @@ def model_name(value, label):
     return value
 
 
-def system_model(name, override=None):
+def system_model(name, override=None, *, root=None):
     if override is not None:
         return model_name(override, '--model')
 
-    path = config_path()
+    path = config_path(root)
     model = read_config(path).get('system_models', {}).get(name)
     if model is not None:
         return model_name(model, f'{path}: system_models.{name}')
 
+    root_option = f' --root {shlex.quote(str(path.parent))}' if root is not None else ''
     raise ValueError(
         f"No model configured for system agent '{name}'.\n"
-        f'List available models with: asys-inference models\n'
-        f'Set the default with: asys system-model set {name} MODEL\n'
+        f'List available models with: asys-inference{root_option} models\n'
+        f'Set the default with: asys system-model set {name} MODEL{root_option}\n'
         f'Or pass --model MODEL for this run.\n'
         f'Configuration: {path}'
     )
 
 
-def system_models():
-    path = config_path()
+def system_models(root=None):
+    path = config_path(root)
     models = read_config(path).get('system_models', {})
     for name, model in models.items():
         validate_name(f'{path}: system model name', name)

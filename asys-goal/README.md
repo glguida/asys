@@ -22,6 +22,10 @@ corrections stay within the current attempt. If the last permitted turn requests
 review, that verification still runs; it must pass for the goal to succeed.
 The workspace defaults to the current directory and must already exist.
 
+`--root DIRECTORY` selects the asys system root, overriding `ASYS_STATE_ROOT`.
+Runs are saved in `ROOT/runs` and model defaults come from `ROOT/config.json`.
+Pass the same root to `asys status`, `asys logs`, and `asys top`.
+
 Install everything with `make install` from the repository root, or use
 `make -C asys-goal install` to install the goal launcher and human handler and
 build their worker and Human images. The selected environment needs the

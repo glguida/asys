@@ -114,7 +114,7 @@ class OneShotTests(unittest.TestCase):
 
     def launcher(self, prompt='Finish the change.', model='fixture/model'):
         argv = [str(self.environment), '--workspace', str(self.workspace), prompt,
-                '--root', str(self.root / 'runs')]
+                '--root', str(self.state)]
         if model is not None:
             argv += ['--model', model]
         args = arguments(argv)
@@ -125,6 +125,7 @@ class OneShotTests(unittest.TestCase):
     def test_one_job_edits_the_real_workspace_and_is_visible_to_asys(self):
         launcher = self.launcher()
         launcher.setup()
+        self.assertEqual(launcher.directory.parent, self.state / 'runs')
         with contextlib.redirect_stdout(io.StringIO()) as output:
             launcher.execute()
         self.assertEqual(json.loads(output.getvalue())['final'], 'Finish the change.')
@@ -148,7 +149,7 @@ class OneShotTests(unittest.TestCase):
         self.assertIn(f'{external},/opt/asys/environment/external,ro', launcher.launch_arguments)
         self.assertEqual(external.joinpath('agents/simple/prompt.md').read_text(), agent_prompt('simple'))
         self.assertFalse(external.joinpath('agents/simple/memory.md').exists())
-        observed = Runs(self.root / 'runs').snapshot(launcher.directory)
+        observed = Runs(self.state / 'runs').snapshot(launcher.directory)
         self.assertEqual(observed['status'], 'completed')
         self.assertEqual(observed['jobs'][0]['workspace'], str(self.workspace))
         self.assertEqual(observed['jobs'][0]['directory'], str(job))
@@ -194,6 +195,17 @@ class OneShotTests(unittest.TestCase):
         command = config['types']['agent']['command']
         self.assertEqual(command[command.index('--model') + 1], 'fixture/model')
 
+    def test_explicit_root_selects_model_defaults_instead_of_the_shell_environment(self):
+        self.set_model('fixture/model')
+        other = self.root / 'other-system'
+        other.mkdir()
+        (other / 'config.json').write_text('invalid ambient configuration')
+        with patch.dict(os.environ, {'ASYS_STATE_ROOT': str(other)}):
+            launcher = self.launcher(model=None)
+            launcher.setup()
+        self.assertEqual(launcher.record['model'], 'fixture/model')
+        self.assertEqual(launcher.directory.parent, self.state / 'runs')
+
     def test_explicit_model_overrides_configuration_without_changing_it(self):
         self.set_model('account/default')
         config = self.state / 'config.json'
@@ -214,14 +226,15 @@ class OneShotTests(unittest.TestCase):
 
     def test_missing_model_explains_setup_before_creating_a_run(self):
         result = subprocess.run([sys.executable, str(ROOT / 'asys-oneshot/tools/asys-oneshot'),
-            str(self.root / 'absent-environment'), 'Complete the work', '--root', str(self.root / 'runs')],
+            str(self.root / 'absent-environment'), 'Complete the work', '--root', str(self.state)],
             capture_output=True, text=True)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('asys system-model set simple MODEL', result.stderr)
-        self.assertIn('asys-inference models', result.stderr)
+        self.assertIn(f'asys-inference --root {self.state} models', result.stderr)
+        self.assertIn(f'asys system-model set simple MODEL --root {self.state}', result.stderr)
         self.assertIn('--model MODEL', result.stderr)
         self.assertIn(str(self.state / 'config.json'), result.stderr)
-        self.assertFalse((self.root / 'runs').exists())
+        self.assertFalse((self.state / 'runs').exists())
         self.assertFalse(self.state.exists())
 
     def test_internal_override_runs_with_a_readonly_bundle_mount(self):
@@ -231,7 +244,7 @@ class OneShotTests(unittest.TestCase):
                   'types': {'agent': {'command': [sys.executable, '-c', WORKER]}}}
         (external / 'workers.json').write_text(json.dumps(config))
         args = arguments([str(self.environment), 'Use the internal worker.', '--model', 'fixture/model',
-            '--external', str(external), '--workspace', str(self.workspace), '--root', str(self.root / 'runs')])
+            '--external', str(external), '--workspace', str(self.workspace), '--root', str(self.state)])
         launcher = LocalEnvironment(args)
         self.addCleanup(launcher.close)
         launcher.setup()

@@ -17,7 +17,7 @@ class Resume(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="asys-resume-cli-")
         self.addCleanup(self.temp.cleanup)
-        self.directory = Path(self.temp.name) / "abc123"
+        self.directory = Path(self.temp.name) / "runs" / "abc123"
         for child in ["environment", "engine", "workflow", "workspace"]:
             (self.directory / child).mkdir(parents=True)
         (self.directory / "workflow/workflow.sqlite").touch()

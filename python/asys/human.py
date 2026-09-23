@@ -19,7 +19,7 @@ class HumanHandler:
         if not executable.is_file():
             raise LaunchError('--human requires asys-human-prompt; install the human interface')
         command = [sys.executable, str(executable), '--private', '--name', self.name,
-                   '--system', self.host.args.system, '--root', str(self.host.directory / 'human')]
+                   '--system', self.host.args.system, '--root', str(self.host.args.root)]
         options = self.host.dcomp[1:]
         for index in range(0, len(options), 2):
             flag = '--dcomp-state-root' if options[index] == '--state-root' else options[index]

@@ -98,7 +98,7 @@ test("disables native SDK retries for every supported Pi API", async () => {
     await collect(adapter.infer(
       route(api, (_model, _context, options) => {
         invocation = options;
-        return stream([]);
+        return stream([{ type: "done", reason: "stop", message: { usage: usage() } }]);
       }),
       JSON.stringify({
         context: {},
@@ -235,81 +235,61 @@ test("never replays ambiguous native failures", async () => {
 });
 
 for (const status of [408, 500, 502, 503, 504, 529]) {
-  test(`retries HTTP ${status} before any native output, preserving the request`, async () => {
-    const delays = [], contexts = [];
-    const adapter = createPiAdapter({ sleep: async delay => { delays.push(delay); } });
-    const frame = { context: { messages: [{ role: 'user', content: 'Continue the saved job.' }] } };
-    const done = { type: 'done', reason: 'stop', message: { content: [{ type: 'text', text: 'Finished.' }], usage: usage() } };
-    const responses = await collect(adapter.infer(route('openai-codex-responses', (_model, context, options) => {
-      contexts.push(structuredClone(context));
-      return contexts.length < 3 ? terminalProviderError(options, status) : stream([done]);
-    }), JSON.stringify(frame), new AbortController().signal));
-    assert.deepEqual(contexts, [frame.context, frame.context, frame.context]);
-    assert.deepEqual(delays, [1000, 2000]);
-    assert.deepEqual(responses.map(response => JSON.parse(response.payload)), [done]);
-  });
+  for (const partial of [false, true]) {
+    test(`HTTP ${status} ${partial ? 'after partial output' : 'before output'} returns a retryable error without replay`, async () => {
+      let calls = 0;
+      const events = [];
+      const adapter = createPiAdapter();
+      await assert.rejects(async () => {
+        for await (const response of adapter.infer(route('openai-codex-responses', (_model, _context, options) => {
+          calls++;
+          return (async function* () {
+            if (partial) yield { type: 'start', partial: {} };
+            yield* terminalProviderError(options, status);
+          })();
+        }), JSON.stringify({ context: {} }), new AbortController().signal)) events.push(JSON.parse(response.payload));
+      }, error => error.code === Code.Unavailable && error.message.includes(`HTTP ${status}`));
+      assert.equal(calls, 1);
+      assert.deepEqual(events.map(event => event.type), partial ? ['start'] : []);
+    });
+  }
 }
 
-test('persistent HTTP 502 stops after three retries with a useful error', async () => {
-  const delays = [];
-  let calls = 0;
-  const adapter = createPiAdapter({ sleep: async delay => { delays.push(delay); } });
-  await assert.rejects(collect(adapter.infer(route('openai-codex-responses', (_model, _context, options) => {
+test('cancellation releases a stalled native iterator without replay', { timeout: 2000 }, async () => {
+  const controller = new AbortController(), waiting = Promise.withResolvers();
+  let calls = 0, nativeSignal;
+  const pending = collect(createPiAdapter().infer(route('openai-codex-responses', (_model, _context, options) => {
     calls++;
-    return terminalProviderError(options, 502);
+    nativeSignal = options.signal;
+    return (async function* () { waiting.resolve(); await new Promise(() => {}); })();
+  }), JSON.stringify({ context: {} }), controller.signal));
+  await waiting.promise;
+  controller.abort();
+  await assert.rejects(pending, error => error.code === Code.Canceled);
+  assert.equal(calls, 1);
+  assert.ok(nativeSignal.aborted);
+});
+
+test('a native iterator ending without a terminal event returns a retryable error', async () => {
+  let calls = 0;
+  await assert.rejects(collect(createPiAdapter().infer(route('openai-codex-responses', () => {
+    calls++;
+    return stream([{ type: 'start', partial: {} }]);
   }), JSON.stringify({ context: {} }), new AbortController().signal)), error =>
-    error instanceof ConnectError && error.code === Code.Unavailable
-    && /HTTP 502 Bad Gateway.*4 attempts/.test(error.message));
-  assert.equal(calls, 4);
-  assert.deepEqual(delays, [1000, 2000, 4000]);
-});
-
-test('does not retry a server error after native output has started', async () => {
-  let calls = 0;
-  const adapter = createPiAdapter({ sleep: async () => assert.fail('Must not replay partial output') });
-  const responses = await collect(adapter.infer(route('openai-codex-responses', (_model, _context, options) => {
-    calls++;
-    return (async function* () {
-      await options.onResponse({ status: 502, headers: {} });
-      yield { type: 'start', partial: {} };
-      yield { type: 'error', reason: 'error', error: { errorMessage: 'Bad gateway' } };
-    })();
-  }), JSON.stringify({ context: {} }), new AbortController().signal));
-  assert.equal(calls, 1);
-  assert.deepEqual(responses.map(response => JSON.parse(response.payload).type), ['start', 'error']);
-});
-
-test('cancellation during retry backoff stops the request', async () => {
-  const controller = new AbortController();
-  let calls = 0;
-  const adapter = createPiAdapter({ sleep: async (_delay, signal) => {
-    assert.equal(signal, controller.signal);
-    controller.abort(new Error('Stop the job'));
-    signal.throwIfAborted();
-  } });
-  await assert.rejects(collect(adapter.infer(route('openai-codex-responses', (_model, _context, options) => {
-    calls++;
-    return terminalProviderError(options, 502);
-  }), JSON.stringify({ context: {} }), controller.signal)), error =>
-    error instanceof ConnectError && error.code === Code.Canceled);
+    error.code === Code.Unavailable && /terminal Pi event/.test(error.message));
   assert.equal(calls, 1);
 });
 
-test("never retries Codex after native output has started", async () => {
+test('exhaustion after partial output propagates immediately with its reset time', async () => {
   let calls = 0;
-  const adapter = createPiAdapter();
-
-  const responses = await collect(adapter.infer(
-    route("openai-codex-responses", (_model, _context, options) => {
-      calls += 1;
+  const now = Date.parse('2031-02-03T04:05:06Z');
+  await assert.rejects(collect(createPiAdapter({ now: () => now }).infer(
+    route('openai-codex-responses', (_model, _context, options) => {
+      calls++;
       return partialThenLimited(options);
-    }),
-    JSON.stringify({ context: {}, options: {} }),
-    new AbortController().signal,
-  ));
-
+    }), JSON.stringify({ context: {} }), new AbortController().signal,
+  )), error => error.code === Code.ResourceExhausted && resourceExhaustedRetryAt(error)?.getTime() === now + 7_200_000);
   assert.equal(calls, 1);
-  assert.deepEqual(responses.map(({ payload }) => JSON.parse(payload).type), ["start", "error"]);
 });
 
 test("preserves Pi event content that contains no gateway credential", async () => {
@@ -409,7 +389,7 @@ test("sanitizes Connect errors thrown by a native iterator", async () => {
       new AbortController().signal,
     )),
     (error) => error instanceof ConnectError
-      && error.code === Code.Unavailable
+      && error.code === Code.Internal
       && error.rawMessage === "upstream inference failed"
       && !Array.from(error.metadata.entries()).flat().join("\n").includes(secret),
   );

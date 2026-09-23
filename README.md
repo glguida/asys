@@ -243,6 +243,12 @@ sourcing it selects this setup and adds `{ host }` to the existing shell
 prompt. The label comes from the asys state directory's final name. Sourcing
 another setup replaces the label; repeated sourcing does not accumulate it.
 
+Every host tool uses `--root DIRECTORY` for this same asys system root,
+overriding `ASYS_STATE_ROOT`. Model defaults live in `ROOT/config.json`, runs
+in `ROOT/runs`, inference state in `ROOT/inference`, and human service state
+in `ROOT/human`. Dcomp state is selected with `DCOMP_STATE_ROOT` or
+`--dcomp-state-root`.
+
 Start and authenticate inference once under this shared setup, using the
 commands above. Each user then sources the same generated file and runs work
 from a project directory:

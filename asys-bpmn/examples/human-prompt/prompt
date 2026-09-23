@@ -3,4 +3,4 @@ set -eu
 demo_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 exec "$demo_directory/../../../asys-human-interface/tools/asys-human-prompt" \
   --system human-prompt-demo --dcomp-state-root "$demo_directory/.asys/dcomp" \
-  --root "$demo_directory/.asys/human" "$@"
+  --root "$demo_directory/.asys" "$@"

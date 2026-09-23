@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { Code, ConnectError } from "@connectrpc/connect";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import { Modality } from "@cyclo/provider/contract";
 import {
   decodePayload,
@@ -16,6 +17,14 @@ const ZERO_COST = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite:
 const MAX_SAFE_UINT64 = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MIN_EXHAUSTION_RETRY_DELAY_MS = 1_000;
+const RETRYABLE_RPC_CODES = new Set([Code.Unavailable, Code.DeadlineExceeded, Code.Aborted, Code.Canceled]);
+const NETWORK_ERRORS = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "EPIPE", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND",
+  "ENETUNREACH", "EHOSTUNREACH", "ERR_STREAM_PREMATURE_CLOSE", "ERR_STREAM_DESTROYED",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET",
+]);
+
+export const DEFAULT_INFERENCE_IDLE_TIMEOUT_MS = 600_000;
 
 export function groupModels(models, { onInvalid = console.warn } = {}) {
   if (!Array.isArray(models)) throw new TypeError("Provider catalogue has no model list");
@@ -60,18 +69,18 @@ export function streamProvider(
   model,
   context,
   options = {},
-  { now = Date.now, sleep = abortableSleep, onExhaustion = () => {}, onRetry = () => {} } = {},
+  { now = Date.now, sleep = abortableSleep, random = Math.random,
+    idleTimeoutMs = DEFAULT_INFERENCE_IDLE_TIMEOUT_MS, onExhaustion = () => {}, onRetry = () => {} } = {},
 ) {
   const output = createAssistantMessageEventStream();
-  void pump(output, client, publicId, model, context, options, { now, sleep, onExhaustion, onRetry });
+  void pump(output, client, publicId, model, context, options, { now, sleep, random, idleTimeoutMs, onExhaustion, onRetry });
   return output;
 }
 
-async function pump(output, client, publicId, model, context, options, { now, sleep, onExhaustion, onRetry }) {
-  const { attemptTimeoutMs } = options;
+async function pump(output, client, publicId, model, context, options, { now, sleep, random, idleTimeoutMs, onExhaustion, onRetry }) {
   try {
-    if (attemptTimeoutMs !== undefined && !(Number.isFinite(attemptTimeoutMs) && attemptTimeoutMs > 0)) {
-      throw new TypeError("attemptTimeoutMs must be a positive number of milliseconds");
+    if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > MAX_TIMER_DELAY_MS) {
+      throw new TypeError(`inference idle timeout must be an integer between 1 and ${MAX_TIMER_DELAY_MS} milliseconds`);
     }
     const request = Object.freeze({
       model: publicId,
@@ -80,53 +89,54 @@ async function pump(output, client, publicId, model, context, options, { now, sl
         options: inferenceOptions(options),
       }),
     });
-    // Relays and poolers get the first chance to handle exhaustion. If it
-    // reaches this terminal adapter, keep Pi's stream open and wait outside the
-    // completed RPC before replaying the same request. The wait lasts until the
-    // provider is expected back, however long that is; only operator
-    // cancellation ends it. The attempt timeout bounds each RPC on its own.
-    while (true) {
+    // One logical Pi call can make several RPC attempts against any Provider.
+    // The saved request excludes unfinished output and retains completed tools.
+    let emitted = false;
+    for (let retry = 0; ; retry++) {
       options.signal?.throwIfAborted();
-      let receivedResponse = false;
-      const attempt = attemptSignal(options.signal, attemptTimeoutMs);
+      const replacingPartial = emitted;
       try {
-        for await (const response of client.infer(
-          request,
-          cancellationOptions(attempt),
-        )) {
-          receivedResponse = true;
+        for await (const response of inferenceAttempt(client, request, options.signal, idleTimeoutMs)) {
           const event = decodePayload(response.payload);
+          if (event.type === "error" && !isContextOverflow(event.error, model.contextWindow)
+            && isRetryableAssistantError(event.error)) {
+            // Reuse the pinned Pi classifier for native error events. RPC
+            // failures below are classified by codes, not by error text.
+            throw new ConnectError(providerErrorMessage(event.error.errorMessage), Code.Unavailable);
+          }
+          const terminal = event.type === "done" || event.type === "error";
+          // A second Pi start would append another assistant message. Complete
+          // the existing pending message with the replacement's final result.
+          if (replacingPartial && !terminal) continue;
           // Every streamed view must agree with the model registered in Pi.
           for (const field of ["partial", "message", "error"]) {
             if (event[field]?.role === "assistant") event[field] = toPiMessage(event[field], publicId);
           }
           output.push(event);
-          if (event.type === "done" || event.type === "error") return;
+          emitted = true;
+          if (terminal) return;
         }
-        throw new Error("Provider stream ended without a terminal Pi event");
+        throw new ConnectError("Provider stream ended without a terminal Pi event", Code.Unavailable);
       } catch (error) {
-        if (attempt?.aborted && !options.signal?.aborted) {
-          throw new Error(
-            `Provider produced no complete response within ${attemptTimeoutMs} ms`,
-          );
-        }
-        const retryAt = receivedResponse || options.signal?.aborted
-          ? undefined
-          : resourceExhaustedRetryAt(error);
-        if (retryAt === undefined) throw error;
-        const delayMs = Math.max(
-          MIN_EXHAUSTION_RETRY_DELAY_MS,
-          retryAt.getTime() - now(),
-        );
-        onExhaustion({ retryAt, delayMs });
+        options.signal?.throwIfAborted();
+        const retryAt = resourceExhaustedRetryAt(error);
+        const exhausted = error instanceof ConnectError && error.code === Code.ResourceExhausted;
+        if (!exhausted && !retryableTransportError(error)) throw error;
+        const delayMs = retryAt === undefined
+          ? Math.round(Math.min(30_000, 1000 * 2 ** Math.min(retry, 5)) * (0.5 + random() * 0.5))
+          : Math.max(MIN_EXHAUSTION_RETRY_DELAY_MS, retryAt.getTime() - now());
+        const detail = { attempt: retry + 1, delayMs, errorMessage: providerErrorMessage(error),
+          outputStarted: emitted, idleTimeoutMs, retryAt: new Date(now() + delayMs) };
+        if (exhausted) onExhaustion(detail);
+        else onRetry(detail);
+        // End the failed RPC before waiting; capacity waits have no idle timer.
         await sleep(delayMs, options.signal);
         options.signal?.throwIfAborted();
-        onRetry();
+        if (exhausted) onRetry({ ...detail, delayMs: 0 });
       }
     }
   } catch (error) {
-    const aborted = options.signal?.aborted
-      || (error instanceof ConnectError && error.code === Code.Canceled);
+    const aborted = options.signal?.aborted;
     const message = assistantMessage(model);
     message.stopReason = aborted ? "aborted" : "error";
     message.errorMessage = aborted
@@ -138,6 +148,46 @@ async function pump(output, client, publicId, model, context, options, { now, sl
       error: message,
     });
   }
+}
+
+async function* inferenceAttempt(client, request, signal, idleTimeoutMs) {
+  const controller = new AbortController();
+  const attempt = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  let iterator, started = false;
+  try {
+    attempt.throwIfAborted();
+    iterator = client.infer(request, { signal: attempt })[Symbol.asyncIterator]();
+    while (true) {
+      attempt.throwIfAborted();
+      const aborted = Promise.withResolvers();
+      const onAbort = () => aborted.reject(attempt.reason);
+      attempt.addEventListener("abort", onAbort, { once: true });
+      const timer = setTimeout(() => controller.abort(new ConnectError(
+        `Provider ${started ? "stream inactivity" : "first response timeout"} after ${idleTimeoutMs} ms`, Code.DeadlineExceeded,
+      )), idleTimeoutMs);
+      let next;
+      try { next = await Promise.race([iterator.next(), aborted.promise]); }
+      finally { clearTimeout(timer); attempt.removeEventListener("abort", onAbort); }
+      attempt.throwIfAborted();
+      if (next.done) return;
+      started = true;
+      yield next.value;
+    }
+  } catch (error) {
+    throw attempt.aborted ? attempt.reason : error;
+  } finally {
+    controller.abort(new Error("inference attempt finished"));
+    // A disconnected or broken iterator must not trap cancellation/recovery.
+    void Promise.resolve().then(() => iterator?.return?.()).catch(() => {});
+  }
+}
+
+function retryableTransportError(error) {
+  if (error instanceof ConnectError && RETRYABLE_RPC_CODES.has(error.code)) return true;
+  for (let depth = 0; error && depth < 8; depth++, error = error.cause) {
+    if (NETWORK_ERRORS.has(error.code)) return true;
+  }
+  return false;
 }
 
 // Pi compares assistant identities with the selected public route when deciding
@@ -184,29 +234,12 @@ function inferenceOptions(options) {
     onResponse: _onResponse,
     transport: _transport,
     timeoutMs: _timeoutMs,
-    attemptTimeoutMs: _attemptTimeoutMs,
     websocketConnectTimeoutMs: _websocketConnectTimeoutMs,
     maxRetries: _maxRetries,
     maxRetryDelayMs: _maxRetryDelayMs,
     ...inference
   } = options;
   return inference;
-}
-
-// Infer has no pipeline-wide deadline. Pi's timeout controls describe its
-// native provider request, which is owned by the gateway, and must not become
-// an absolute ConnectRPC deadline across every provider component. Operator
-// cancellation is the only Pi process control propagated through the call.
-function cancellationOptions(signal) {
-  return signal === undefined ? {} : { signal };
-}
-
-// One RPC attempt ends on operator cancellation or its own timeout. Exhaustion
-// waits between attempts are deliberately outside this signal.
-function attemptSignal(signal, attemptTimeoutMs) {
-  if (attemptTimeoutMs === undefined) return signal;
-  const timeout = AbortSignal.timeout(attemptTimeoutMs);
-  return signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
 }
 
 function providerErrorMessage(error) {

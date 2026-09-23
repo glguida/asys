@@ -24,7 +24,7 @@ try:
     from asys_runtime.environment import Environment
     from asys_runtime.permissions import mkdir, shared
     from asys_runtime.files import read_json, timestamp, write_json
-    from asys.runs import default_root
+    from asys.state import state_root
     from asys.lifecycle import LaunchError, Interrupted
     from asys.execution import EnvironmentHost, execution_options, prepare_run
     from asys.human import HumanHandler
@@ -48,8 +48,8 @@ def read_object(path):
 
 def arguments(argv):
     common = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    common.add_argument("--root", type=Path, default=default_root(),
-                        metavar="DIRECTORY", help="saved run state (default: XDG state directory/asys/runs)")
+    common.add_argument("--root", type=Path, default=state_root(),
+                        metavar="DIRECTORY", help="asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)")
     global_args, remaining = common.parse_known_args(argv)
     commands = {
         "run": "Run WORKFLOW.bpmn in ENVIRONMENT_DIRECTORY and wait for its result",
@@ -134,7 +134,7 @@ class Launcher(EnvironmentHost):
         if args.input:
             self.variables["request"] = (sys.stdin.read() if args.input == "-"
                                          else Path(args.input).expanduser().read_text(encoding="utf-8"))
-        self.id, self.directory, workspace = prepare_run(args.root, args.workspace)
+        self.id, self.directory, workspace = prepare_run(state_root('runs', root=args.root), args.workspace)
         self.lease = (self.directory / "launcher.lock").open("xb")
         fcntl.flock(self.lease, fcntl.LOCK_EX)
         for child in ("workflow", "engine"):
@@ -165,7 +165,7 @@ class Launcher(EnvironmentHost):
             raise LaunchError(f"Workflow image {image} is unavailable. Build the asys images with make -C asys-bpmn build.\n{error}") from error
 
     def setup_resume(self):
-        directory = Runs(self.args.root).select(self.args.run)
+        directory = Runs(state_root('runs', root=self.args.root)).select(self.args.run)
         if shared(directory):
             os.umask(0o007)
         lease = (directory / "launcher.lock").open("a+b")
@@ -266,7 +266,7 @@ class Launcher(EnvironmentHost):
         resuming = self.args.command == "resume"
         after = max(self.outbound.sequences(), default=0) if resuming else 0
         history = WorkflowHistory(self.directory)
-        observer = Runs(self.args.root)
+        observer = Runs(state_root('runs', root=self.args.root))
         notices = set()
         if resuming:
             history.read(self.record)
@@ -315,7 +315,7 @@ class Launcher(EnvironmentHost):
                         failed = None
                         if event["type"] == "job.failed":
                             job_id = data["data"].get("jobId")
-                            jobs = Runs(self.args.root).jobs(self.directory)
+                            jobs = Runs(state_root('runs', root=self.args.root)).jobs(self.directory)
                             failed = next((job for job in jobs if job["id"] == job_id), None)
                             observed = {**self.record, "jobs": jobs}
                         progress = history.consume(saved, observed)

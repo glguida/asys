@@ -3,4 +3,4 @@ set -eu
 demo_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 exec "$demo_directory/../../tools/asys-bpmn" run "$demo_directory/workflow.bpmn" "$demo_directory/env/human" \
   --system human-prompt-demo --dcomp-state-root "$demo_directory/.asys/dcomp" \
-  --root "$demo_directory/.asys/workflow" "$@"
+  --root "$demo_directory/.asys" "$@"

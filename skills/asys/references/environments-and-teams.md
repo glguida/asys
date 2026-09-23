@@ -223,7 +223,7 @@ reports and goal lessons stay in run state.
 ## Agent input and execution options
 
 Ordinary `asys-agent` input is an object with required `prompt` and optional
-`maxSteps`, `timeoutSeconds`, and `options` (an object passed to the inference
+`maxSteps` and `options` (an object passed to the inference
 provider). Positional worker arguments can supply the prompt instead. These
 are worker options, not extra flags accepted by the one-shot host launcher:
 
@@ -233,11 +233,13 @@ are worker options, not extra flags accepted by the one-shot host launcher:
 | `--model MODEL` | Required exported inference model ID |
 | `--extension PATH` | Additional Pi extension; repeatable |
 | `--max-steps N` | Override input `maxSteps`; positive integer; no default cap |
-| `--timeout SECONDS` | Override input `timeoutSeconds`; default 600, positive and at most 86400 |
 
-`timeoutSeconds` bounds an inference attempt, excluding provider-exhaustion
-waiting. It is not the whole-job timeout. `maxSteps` counts inference calls,
-including compaction and retries. `workers.json` type `timeout` independently
+The agent's inference client retries inactive or interrupted RPC attempts while
+the assignment remains pending. `ASYS_INFERENCE_IDLE_TIMEOUT_MS` controls the
+inactivity limit (default ten minutes); progressing requests have no absolute
+deadline. Recovery works through any Provider endpoint, with or without a pooler.
+`maxSteps` counts logical inference calls, including compaction, but not transport
+retries. `workers.json` type `timeout` independently
 bounds the whole program. Cancellation interrupts waits. Avoid imposing these
 limits simply because a role exists; choose them when the task needs a bound.
 

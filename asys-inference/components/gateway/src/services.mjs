@@ -147,7 +147,7 @@ export async function createGatewayServices(options = {}) {
               : "ok",
       );
       if (failure instanceof GatewayCredentialError) {
-        throw new ConnectError("gateway credential unavailable", Code.Unavailable);
+        throw new ConnectError("gateway credential unavailable", Code.FailedPrecondition);
       }
       if (failure instanceof ConnectError) throw failure;
       if (failure) throw new ConnectError("gateway inference failed", Code.Internal);

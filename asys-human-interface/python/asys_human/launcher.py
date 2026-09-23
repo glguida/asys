@@ -38,8 +38,8 @@ def arguments(argv):
     parser.add_argument("--name", help="dcomp component name (default: generated)")
     parser.add_argument("--system", default="asys", help="dcomp system (default: asys)")
     parser.add_argument("--claimant", default=getpass.getuser(), help="human identity for candidate checks (default: login name)")
-    parser.add_argument("--root", type=Path, default=state_root("human"),
-                        metavar="DIRECTORY", help="saved handler sessions")
+    parser.add_argument("--root", type=Path, default=state_root(),
+                        metavar="DIRECTORY", help="asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)")
     parser.add_argument("--dcomp-state-root", type=Path, metavar="DIRECTORY")
     parser.add_argument("--runtime-root", type=Path, metavar="DIRECTORY", help="dcomp proxy root, if nondefault")
     parser.add_argument("--once", action="store_true", help="exit after completing one answer")
@@ -95,7 +95,7 @@ class Launcher(ComponentHost):
         if not self.args.private:
             self.setup_shared()
             return
-        root = self.args.root.expanduser().resolve()
+        root = state_root('human', root=self.args.root).resolve()
         if "," in str(root):
             raise LaunchError("The state path cannot contain a comma (dcomp mount syntax)")
         mkdir(root, parents=True, exist_ok=True)
@@ -131,7 +131,7 @@ class Launcher(ComponentHost):
         self.next_discovery = time.monotonic() + 2
 
     def setup_shared(self):
-        component = ensure_human(self, self.args.root, name=self.args.name)
+        component = ensure_human(self, name=self.args.name)
         if self.args.name and component['name'] != self.args.name:
             raise LaunchError(f"@human_endpoint is already provided by {component['name']}; use --private for a separate service")
         runtime = next((Path(bind['source']) for bind in component.get('binds', [])

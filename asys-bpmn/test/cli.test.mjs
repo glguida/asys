@@ -36,7 +36,7 @@ test('resume preserves saved configuration, enforces launcher ownership and skip
 async function preparedVariables(t, text, stdin = false) {
   const root = await mkdtemp(join(tmpdir(), 'workflow-cli-request-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const args = ['run', workflow, environment, '--root', join(root, 'runs')];
+  const args = ['run', workflow, environment, '--root', root];
   if (text !== undefined) {
     const path = join(root, 'design brief.md');
     if (!stdin) await writeFile(path, text);
@@ -85,7 +85,7 @@ test('workflows without an input file need no request variables', async t => {
 test('Ctrl-C while waiting for stdin exits without creating components or run state', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'workflow-cli-input-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const child = spawn('python3', [cli, 'run', '--input', '-', workflow, '--root', join(root, 'runs'), environment]);
+  const child = spawn('python3', [cli, 'run', '--input', '-', workflow, '--root', root, environment]);
   t.after(() => { child.kill('SIGTERM'); child.stdin.destroy(); });
   let output = '';
   const closed = once(child, 'close');
@@ -105,7 +105,7 @@ test('dcomp without container user support is rejected before starting component
   t.after(() => rm(root, { recursive: true, force: true }));
   const dcomp = join(root, 'dcomp');
   await writeFile(dcomp, '#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:] == ["version", "--json"]\nprint(\'{"version":"0.3.0","api_version":2}\')\n', { mode: 0o755 });
-  const child = spawn('python3', [cli, 'run', workflow, environment, '--root', join(root, 'runs')], {
+  const child = spawn('python3', [cli, 'run', workflow, environment, '--root', root], {
     env: { ...process.env, DCOMP_BINARY: dcomp },
   });
   let error = '';
@@ -120,10 +120,10 @@ test('the launcher gives both components fixed queue, job and workspace mounts t
 import json, os, runpy, tempfile
 from pathlib import Path
 module = runpy.run_path(${JSON.stringify(fileURLToPath(new URL('../tools/asys-bpmn', import.meta.url)))})
-launcher = module['Launcher'](module['arguments'](['run', 'workflow.bpmn', 'env']))
 temporary = tempfile.TemporaryDirectory()
+os.environ['ASYS_STATE_ROOT'] = str(Path(temporary.name) / 'other-system')
+launcher = module['Launcher'](module['arguments'](['run', 'workflow.bpmn', 'env', '--root', temporary.name]))
 launcher.directory = Path(temporary.name)
-os.environ['ASYS_STATE_ROOT'] = temporary.name
 (launcher.directory / 'config.json').write_text(json.dumps({'system_models': {'simple': 'account/goal'}, 'private': 'not mounted'}))
 launcher.record = {'links': {}, 'egress': False, 'workspace': str(Path.cwd())}
 launcher.wait_ready = lambda: None

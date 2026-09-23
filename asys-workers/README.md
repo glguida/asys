@@ -146,14 +146,19 @@ The assignment's JSON data is:
 ```json
 {
   "prompt": "Create a PCB for the supplied schematic and board constraints.",
-  "timeoutSeconds": 600,
   "options": {}
 }
 ```
 
 `prompt` is required. Positional command arguments can supply it instead.
-`--max-steps` and `--timeout` override the corresponding input fields.
+`--max-steps` overrides the corresponding input field.
 There is no step limit unless `--max-steps` or `maxSteps` is explicitly supplied.
+The agent's Provider client owns inference recovery, with or without a pooler.
+`ASYS_INFERENCE_IDLE_TIMEOUT_MS` sets the first-response and stream inactivity
+limit (default `600000`, positive integer milliseconds). Each response refreshes
+the timer; there is no absolute deadline for a progressing inference call.
+A timeout cancels that RPC attempt and retries the same input. The assignment
+remains pending until success, cancellation, or a nonretryable failure.
 The environment command selects the model. Provider options pass through the
 existing inference payload.
 
@@ -177,11 +182,18 @@ For example, `{"final":"Routing is incomplete","exception":"15 nets remain
 unconnected"}` returns that report and a failing exit status. BPMN can catch it
 with a boundary error event; other callers choose their own response.
 
-Pi owns the agent loop, local tools, compaction and automatic retries. Transient
-inference failures retry up to three times with delays of 2, 4 and 8 seconds.
-Provider exhaustion waits until the reported reset time. `timeoutSeconds`
-bounds an inference attempt, excluding that exhaustion wait. `maxSteps` bounds
-inference calls including compaction and retries. Cancellation interrupts waits.
+Pi owns the agent loop, local tools, and compaction. Its separate retry loop is
+disabled: the Provider client handles transient RPC failures, incomplete streams,
+and native errors classified as retryable by the pinned Pi SDK. It retries with
+exponential backoff and jitter, capped at 30 seconds, until success or cancellation.
+After partial output, replacement attempts complete the existing pending assistant
+message; completed tools are retained and incomplete tool calls are not executed.
+Provider exhaustion propagates through optional poolers and waits at the client
+until the reported reset, outside the ended RPC. Unknown reset times use bounded
+backoff. Cancellation interrupts active attempts and waits. Retry and capacity
+wait events include the reason, attempt, next retry time, delay, and idle threshold.
+`maxSteps` counts logical inference calls, including compaction, but not transport
+retries. Whole-program timeouts remain separate.
 Provider identities and native message signatures are preserved through the
 existing adapter.
 

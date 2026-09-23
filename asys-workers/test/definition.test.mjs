@@ -11,6 +11,11 @@ import { runAgent } from '../src/agent-session.mjs';
 import { agent } from '../src/agent.mjs';
 import { assistant, model } from './helpers.mjs';
 
+test('the removed inference timeout flag is rejected', async () => {
+  await assert.rejects(agent({ argv: ['--timeout', '1'], job: {}, env: {}, signal: new AbortController().signal },
+    { provider: {} }), /Unknown option '--timeout'/);
+});
+
 test('named agents share environment resources and load their own memory and skills', async t => {
   const root = await mkdtemp(join(tmpdir(), 'asys-agent-definition-'));
   t.after(() => rm(root, { recursive: true, force: true }));
