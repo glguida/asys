@@ -67,6 +67,61 @@ for (const verified of [true, false]) {
   });
 }
 
+for (const approved of [true, false]) {
+  test(`a Senate structured result selects the BPMN gateway branch with approved=${approved}`, async t => {
+    const report = { final: 'Committee review complete.', exception: null, approved,
+      reason: approved ? 'The numerical method is correct.' : 'The uncertainty calculation is incorrect.',
+      evidence: { checks: [{ name: 'weighted fit', passed: approved }], source: 'fit.py' } };
+    const f = await senateFixture(t, data => data.phase === 'assess' ? { ...report, consensus: true } : null);
+    const source = workflow(`<bpmn:serviceTask id="committee">${binding('senate', 'result="review" input="= {topic: &quot;Review the weighted fit.&quot;, senate: senate}"')}</bpmn:serviceTask>
+      <bpmn:exclusiveGateway id="choose" default="no"/>
+      <bpmn:task id="accept">${binding('program', 'input="= {approved: review.approved, reason: review.reason, evidence: review.evidence}"')}</bpmn:task>
+      <bpmn:task id="reject">${binding('program', 'input="= {approved: review.approved, reason: review.reason, evidence: review.evidence}"')}</bpmn:task>
+      ${flow('choose_next', 'committee', 'choose')}${flow('yes', 'choose', 'accept', 'review.approved = true')}${flow('no', 'choose', 'reject')}`);
+    const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: source });
+    await f.runtime.startRun({ environment: 'senates', id: 'run', workflowId, variablesJson: JSON.stringify({ senate: f.senate }) });
+    const run = await finished(f);
+    const variables = JSON.parse(run.variablesJson);
+    const selected = approved ? 'accept' : 'reject';
+    assert.deepEqual(variables.review, { ...report, consensus: true, rounds: 1, decision: 'consensus' });
+    assert.deepEqual(variables[selected], { approved, reason: report.reason, evidence: report.evidence });
+    assert.equal(variables[approved ? 'reject' : 'accept'], undefined);
+    const jobs = Object.values(f.runtime.record('run').jobs);
+    assert.deepEqual(jobs.map(job => job.activityId).sort(), ['committee', selected].sort());
+    const committee = jobs.find(job => job.activityId === 'committee');
+    const state = await f.senateQueue.state(committee.id);
+    assert.equal(state.status, 'done');
+    assert.equal(state.exit_code, 0, 'a rejected review is a successful deliberation');
+    assert.deepEqual(state.result, variables.review);
+    assert.deepEqual(f.senatePhases, ['introduce:Princeps', 'intervene:Engineer', 'intervene:Scientist', 'assess:Princeps']);
+  });
+}
+
+test('a Senate participant exception reaches the BPMN boundary with its structured diagnostic', async t => {
+  const report = { final: 'The uncertainty calculation cannot be checked.', exception: 'Measurement uncertainties are missing',
+    diagnostic: { file: 'observations.csv', missing: ['sigma'] } };
+  const f = await senateFixture(t, data => data.phase === 'intervene' ? report : null);
+  const source = workflow(`<bpmn:serviceTask id="committee">${binding('senate', 'result="review" input="= {topic: &quot;Review the weighted fit.&quot;, senate: senate}"')}</bpmn:serviceTask>
+    <bpmn:task id="after">${binding('program')}</bpmn:task>${flow('next', 'committee', 'after')}
+    <bpmn:boundaryEvent id="caught" attachedToRef="committee"><bpmn:errorEventDefinition errorRef="SenateFailure"/></bpmn:boundaryEvent>
+    <bpmn:task id="recover">${binding('program', 'input="= {reason: review.exception, diagnostic: review.diagnostic}"')}</bpmn:task>
+    ${flow('handled', 'caught', 'recover')}`)
+    .replace('<bpmn:process', '<bpmn:error id="SenateFailure" errorCode="1"/><bpmn:process');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: source });
+  await f.runtime.startRun({ environment: 'senates', id: 'run', workflowId, variablesJson: JSON.stringify({ senate: f.senate }) });
+  const run = await finished(f);
+  assert.deepEqual(JSON.parse(run.outputJson).recover, { reason: report.exception, diagnostic: report.diagnostic });
+  const jobs = Object.values(f.runtime.record('run').jobs);
+  assert.deepEqual(jobs.map(job => job.activityId).sort(), ['committee', 'recover']);
+  const committee = jobs.find(job => job.activityId === 'committee');
+  assert.equal(committee.error.message, report.exception);
+  const state = await f.senateQueue.state(committee.id);
+  assert.equal(state.status, 'failed');
+  assert.equal(state.exit_code, 1);
+  assert.deepEqual(state.result, { ...report, consensus: false, rounds: 1, decision: null });
+  assert.deepEqual(f.senatePhases, ['introduce:Princeps', 'intervene:Engineer']);
+});
+
 for (const hasCheckpoint of [true, false]) {
   test(hasCheckpoint ? 'resuming a failed workflow preserves completed work and retries only the failed job'
     : 'resume rejects a missing failure checkpoint without replaying or changing saved work', async t => {
@@ -380,6 +435,35 @@ async function fixture(t) {
   await f.addEnvironment('test', {
     program: { command: ['python3', worker] }, coordinator: { command: ['python3', coordinator] },
   });
+  return f;
+}
+
+async function senateFixture(t, response) {
+  const f = await fixture(t);
+  f.senate = { version: 1, princeps: { name: 'Princeps' }, senators: [{ name: 'Engineer' }, { name: 'Scientist' }] };
+  f.senatePhases = [];
+  const server = createServer(connectNodeAdapter({ routes(router) { router.service(Provider, {
+    listModels() { return { models: [model] }; },
+    async *infer(request) {
+      assert.equal(request.model, model.id);
+      const { context } = JSON.parse(request.payload);
+      const users = context.messages.filter(message => message.role === 'user');
+      const data = JSON.parse(users.at(-1).content[0].text.split('Assignment data:\n')[1]);
+      assert.equal(users.length, data.phase === 'assess' ? 2 : 1, 'the Princeps assessment continues its introduction session');
+      f.senatePhases.push(`${data.phase}:${data.participant}`);
+      const result = response(data) ?? { final: `${data.participant}: ${data.phase}.`, exception: null };
+      const message = assistant([{ type: 'text', text: JSON.stringify(result) }]);
+      yield { payload: JSON.stringify({ type: 'done', reason: message.stopReason, message }) };
+    },
+  }); } }));
+  const socket = join(f.root, 'senate-provider.sock');
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const senate = fileURLToPath(new URL('../../asys-workers/tools/asys-senate', import.meta.url));
+  f.senateQueue = await f.addEnvironment('senates', {
+    senate: { command: [process.execPath, senate, '--model', model.id] },
+    program: { command: ['python3', worker] },
+  }, { DCOMP_IN_INFERENCE: `unix://${socket}` });
   return f;
 }
 

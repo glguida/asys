@@ -275,6 +275,13 @@ introduces the topic, senators intervene in order, and the Princeps assesses
 consensus after each round. A consensus returns the answer immediately. After
 three rounds without consensus, the Princeps makes a final decision.
 
+The terminal Princeps report supplies the ordinary `final`/`exception` result
+and any requested structured fields, such as `approved`, `reason`, or `findings`.
+BPMN receives those fields directly, like an ordinary agent result. An explicit
+participant exception preserves that participant's report in the failed result.
+The controller adds or overwrites its reserved `consensus`, `rounds`, and
+`decision` metadata; intermediate reports are not merged into the result.
+
 Participants run through the same agent execution library and Provider input.
 They can select named environment agents or use the built-in `simple` agent,
 with optional participant prompts and models. Separate participant conversations

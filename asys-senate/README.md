@@ -215,11 +215,24 @@ consensus by the result fields:
 
 An agreed rejection of a proposal can have `consensus: true`. Successful
 execution means the Senate produced an answer; it does not mean that answer
-approves the proposal. Only these five fields are returned: additional fields
-in participants' reports, such as `approved`, are not copied to the Senate
-result. For a machine-readable verdict, request JSON inside the `final` string
-and validate it in a subsequent program task, as shown in the
-[review guide](reviewing.md).
+approves the proposal.
+
+The result preserves the terminal Princeps report's structured fields alongside
+the ordinary `final` and `exception` envelope. Request fields such as `approved`,
+`reason`, or `findings` in the topic or Princeps instructions. A BPMN binding with
+`result="review"` makes them available directly as `review.approved`,
+`review.reason`, and `review.findings`, just like an ordinary agent's result.
+Keep `final` as readable text; no JSON encoding inside that string is needed.
+See the [review guide](reviewing.md) for an approval contract and ordinary BPMN
+routing or validation.
+
+Only the report that ends the discussion supplies these fields: the successful
+consensus assessment or final Princeps decision. Intermediate reports are not
+merged into the result. When a participant explicitly reports an exception, its
+report's fields are preserved in the failed result. The controller owns
+`consensus`, `rounds`, and `decision` and overwrites any participant-supplied values
+for that metadata. Task-defined fields have no built-in schema or approval
+semantics; request their meaning and validate them as your workflow requires.
 
 A participant exception fails the Senate instead of becoming a Princeps
 decision. Invalid phase reports can receive one format correction; an unresolved
@@ -331,6 +344,6 @@ turn may continue with partial tool effects already present. Recovery is not a
 rollback or a guarantee that every tool operation runs exactly once.
 
 Completed and failed checkpoints return their saved result; re-execution does
-not reopen their discussion. A new launcher invocation creates a new job. There
-is no host Senate resume command, and runtime does not automatically rerun
-terminal jobs.
+not reopen their discussion or transform an older result into a new schema.
+A new launcher invocation creates a new job. There is no host Senate resume
+command, and runtime does not automatically rerun terminal jobs.

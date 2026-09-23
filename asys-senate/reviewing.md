@@ -3,15 +3,17 @@
 A Senate can review the output of an author agent within a normal BPMN workflow:
 
 ```text
-author (agent) -> committee (senate) -> verdict gate (program) -> next step
-                                           |
-                                           +-> rejection: fail the workflow
+author (agent) -> committee (senate) -> next task or approval gateway
 ```
 
-The entire discussion runs inside the committee's single job. The verdict gate
-only interprets the answer and applies the workflow's acceptance policy. It does
-not coordinate the senators. The example below fails on rejection, without an
-automatic author revision or review retry.
+The entire discussion runs inside the committee's single job. Its structured
+result is available to subsequent tasks and gateways directly, using the same
+contract as an ordinary agent. No Senate-specific decoding step is needed.
+
+For a policy that fails the workflow on rejection, the optional program gate
+below validates the verdict and exits nonzero. It works with ordinary agent
+results too and does not coordinate the senators. This example has no automatic
+author revision or review retry.
 
 For setup, model selection, web research, and reading the debate, see the
 [Senate guide](README.md).
@@ -51,7 +53,7 @@ These are separate outcomes:
 | --- | --- |
 | Did the committee execute successfully? | Runtime job status and `review.exception` |
 | Did the Princeps report agreement? | `review.consensus` and `review.decision` |
-| Did the committee approve the submission? | An explicit verdict requested inside `review.final` |
+| Did the committee approve the submission? | The requested boolean `review.approved`, explained by `review.reason` |
 
 A unanimous rejection is a successfully completed discussion with
 `consensus: true`. A Princeps decision after three rounds can approve or reject
@@ -59,30 +61,52 @@ with `consensus: false`. Decide whether your workflow accepts a chair's decision
 or additionally requires consensus; the example gate below accepts either kind
 of decision when its verdict is approval.
 
-The Senate returns only `final`, `exception`, `consensus`, `rounds`, and
-`decision`. Unlike an ordinary agent's result, arbitrary participant result
-fields are not propagated. Asking for an outer `approved` field does not make
-`review.approved` available to BPMN.
-
-The example roster instead asks the Princeps to encode a small JSON verdict
-inside its final answer string. A completed review can therefore return:
+The example roster requests `approved` and `reason` as top-level fields alongside
+`final` and `exception`. The Senate preserves the terminal Princeps report and
+adds its deliberation metadata. A completed review can return:
 
 ```json
 {
-  "final": "{\"approved\":false,\"reason\":\"Reject: uncertainty estimates fail the supplied reference cases.\"}",
+  "final": "The committee recommends rejecting this submission until its uncertainty calculation is corrected.",
   "exception": null,
+  "approved": false,
+  "reason": "Uncertainty estimates fail the supplied reference cases.",
   "consensus": true,
   "rounds": 1,
   "decision": "consensus"
 }
 ```
 
-This is a prompt-level contract. Senate does not validate this inner JSON, so a
-deterministic program must parse and validate it before acting on it. The roster
-requests this format only for the terminal answer; intermediate speeches remain
-readable prose.
+The task defines the meaning and types of `approved` and `reason`, as it would
+for an ordinary agent. Senate validates the ordinary report envelope but does
+not impose a schema on these extra fields. A workflow can validate its required
+fields before acting on them. Keep `final` as readable prose.
 
-## Bind the Senate and gate in BPMN
+Only the terminating assessment or final Princeps decision supplies the result's
+custom fields; the controller does not combine individual senators' verdicts.
+The fields `consensus`, `rounds`, and `decision` are reserved controller metadata.
+An explicit execution exception preserves the failing participant's report,
+including any supplied diagnostic fields, and fails the Senate job.
+
+With `result="review"`, an exclusive gateway can use the verdict directly:
+
+```xml
+<bpmn:exclusiveGateway id="review_decision" default="review_declined"/>
+<bpmn:sequenceFlow id="review_accepted" sourceRef="review_decision" targetRef="next_step">
+  <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="feel">
+    review.approved = true
+  </bpmn:conditionExpression>
+</bpmn:sequenceFlow>
+<bpmn:sequenceFlow id="review_declined" sourceRef="review_decision" targetRef="record_rejection"/>
+```
+
+Declare `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` on the definitions
+for this expression. Connect the Senate task to the gateway and define the
+`next_step` and `record_rejection` activities. This routes a successful answer;
+a rejection path is not itself an execution failure. Use the following optional
+gate when rejection must fail the workflow instead.
+
+## Fail on rejection with an ordinary program gate
 
 The following fragments belong in an existing workflow with
 `xmlns:asys="urn:asys:workflow:1"`. Supply `review_request` as a string and
@@ -131,8 +155,17 @@ its image. The standard environment layout places it under
 ```
 
 Connect the author to `committee_review` and `review_gate` to the next activity
-using ordinary sequence flows. This gate implements a strict two-field verdict
-contract and saves its structured result before exiting:
+using ordinary sequence flows:
+
+```text
+author -> committee -> approval gate -> next step
+                            |
+                            +-> rejection: fail the workflow
+```
+
+This gate validates the ordinary report envelope and the required approval
+fields, retains all result fields, and saves its result before exiting. It
+consumes `review` directly and can follow any worker that returns this contract:
 
 ```python
 import json
@@ -143,22 +176,21 @@ import sys
 try:
     assignment = json.loads(Path(os.environ["ASYS_INPUT"]).read_text(encoding="utf-8"))
     review = assignment["review"]
+    if not isinstance(review, dict):
+        raise ValueError("Review must be an object")
     if review["exception"] is not None:
-        raise ValueError("Senate execution did not succeed")
-    if not isinstance(review["final"], str):
-        raise ValueError("Senate final must be a JSON string")
-    verdict = json.loads(review["final"])
-    if not isinstance(verdict, dict) or set(verdict) != {"approved", "reason"}:
-        raise ValueError("Verdict must contain exactly approved and reason")
-    if type(verdict["approved"]) is not bool:
+        raise ValueError("Review execution did not succeed")
+    if not isinstance(review["final"], str) or not review["final"].strip():
+        raise ValueError("final must be nonempty text")
+    if type(review["approved"]) is not bool:
         raise ValueError("approved must be a JSON boolean")
-    if not isinstance(verdict["reason"], str) or not verdict["reason"].strip():
+    if not isinstance(review["reason"], str) or not review["reason"].strip():
         raise ValueError("reason must be nonempty text")
-    result = {**verdict, "exception": None}
-    code = 0 if verdict["approved"] else 17
+    result = review
+    code = 0 if review["approved"] else 17
 except (KeyError, TypeError, ValueError) as error:
-    reason = f"Invalid Senate verdict: {error}"
-    result = {"approved": False, "reason": reason, "exception": reason}
+    reason = f"Invalid review result: {error}"
+    result = {"final": reason, "approved": False, "reason": reason, "exception": reason}
     code = 18
 
 Path(os.environ["ASYS_RESULT"]).write_text(

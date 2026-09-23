@@ -12,4 +12,10 @@ If consensus is false, `final` must summarize the disagreements and focus the
 next round. After round three, a separate decision phase will follow if needed;
 do not claim consensus just because the round limit is reached.
 If you cannot proceed, return a factual `final` and a nonempty `exception`.
+When consensus is true, include any structured result fields requested by the
+original topic (such as approved, reason, findings or artifacts) at the top level
+of the same object, alongside final and exception. Use ordinary JSON values;
+keep final as readable prose rather than encoding a second JSON document in it.
+This terminal report becomes the Senate job result. The controller supplies
+rounds and decision; do not use those names for task-specific results.
 Do not use Markdown fences around the JSON.

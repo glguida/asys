@@ -57,10 +57,11 @@ export async function senate({ job, argv, env, signal }, { executeAgent = agent,
     return state.result;
   }
   const save = () => writeJSON(checkpoint, { ...state, updatedAt: now() });
-  const finish = (final, exception, decision = null) => {
-    state.status = exception === null ? 'completed' : 'failed';
+  const finish = (result, decision = null) => {
+    state.status = result.exception === null ? 'completed' : 'failed';
     state.finishedAt = now();
-    state.result = { final, exception, consensus: decision === 'consensus', rounds: state.round, decision };
+    // Preserve the ordinary agent result; deliberation metadata belongs to the controller.
+    state.result = { ...result, consensus: decision === 'consensus', rounds: state.round, decision };
   };
   const finishedEvent = () => event('senate.finished', { status: state.status,
     rounds: state.result.rounds, consensus: state.result.consensus, decision: state.result.decision });
@@ -113,7 +114,7 @@ export async function senate({ job, argv, env, signal }, { executeAgent = agent,
     }
     if (result.exception !== null) {
       session.status = 'failed';
-      finish(result.final, result.exception);
+      finish(result);
     } else {
       session.status = 'completed';
       state.transcript.push({ phase, round, participant: participant.name, final: result.final,
@@ -125,10 +126,10 @@ export async function senate({ job, argv, env, signal }, { executeAgent = agent,
         if (state.nextSenator + 1 < config.senators.length) state.nextSenator++;
         else { state.nextPhase = 'assess'; state.nextSenator = 0; }
       } else if (phase === 'assess') {
-        if (result.consensus) finish(result.final, null, 'consensus');
+        if (result.consensus) finish(result, 'consensus');
         else if (round === 3) state.nextPhase = 'decide';
         else { state.round++; state.nextPhase = 'intervene'; }
-      } else finish(result.final, null, 'princeps');
+      } else finish(result, 'princeps');
     }
     save();
     event('senate.phase_finished', { phase, round, participant: participant.name, status: session.status, session: session.id });
@@ -163,7 +164,7 @@ export async function senate({ job, argv, env, signal }, { executeAgent = agent,
       save();
       throw error;
     }
-    finish(`Senate execution stopped: ${error.message}`, error.message);
+    finish({ final: `Senate execution stopped: ${error.message}`, exception: error.message });
     save();
     finishedEvent();
     return state.result;
