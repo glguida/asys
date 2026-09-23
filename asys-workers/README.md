@@ -213,6 +213,47 @@ Streaming text, thinking, tool activity, inference retries, exhaustion, and
 compaction are emitted on stdout with timestamps. The host monitor combines
 these events with the saved transcript without changing execution state.
 
+## Swarm decisions
+
+`asys-swarm-agent --agent NAME [--model MODEL]` makes one bounded decision from
+a mission, optional objective, local observation and private memory. It uses the existing Provider
+input, selecting the configured `simple` model when `--model` is omitted. An
+environment exposes it as an ordinary job type:
+
+```json
+{
+  "version": 1,
+  "name": "habitat",
+  "types": {
+    "swarm-step": {
+      "command": ["/opt/asys/asys-workers/tools/asys-swarm-agent", "--agent", "inhabitant"]
+    }
+  }
+}
+```
+
+The named directory `agents/inhabitant` supplies an optional `prompt.md`.
+The worker also reads the environment's optional `tools.md` instruction text.
+The decision has no shell, file editing, skill discovery or extension loading;
+it proposes actions through a `submit_plan` function tool, or a JSON response
+when the selected model does not advertise function tools.
+
+Its JSON input contains `mission`, `agent`, `turn`, `observation`, `memory`,
+`actionSchema`, `maxActions` and `memoryBytes`, with optional `objective`,
+`timeoutSeconds` and inference `options`. `actionSchema` is a Draft-07 schema for one action.
+The result is `{ "actions": [...], "memory": ..., "usage": ... }`; memory
+replaces the previous value. The worker validates the plan and its bounds,
+records the actual Provider conversation in `agent.json`, and fails on invalid
+output or a failed inference call. It makes no automatic retry or correction.
+
+The [swarm controller](../asys-swarm/README.md) schedules decisions, retains
+private memories and owns authoritative world state. It validates each action
+again before the world's rules apply it, and the world's evaluator determines
+goal completion. The runtime and Provider protocols are unchanged. An ordinary
+program can return the same plan format, as the
+[terrarium's scripted environment](../asys-swarm/examples/terrarium/env/scripted)
+does without inference.
+
 ## Programs and humans
 
 The [Senate worker](../asys-senate/README.md) is an ordinary program at

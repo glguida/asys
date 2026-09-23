@@ -52,12 +52,13 @@ Completed work and project files remain available. See the
 | Part | What it defines |
 | --- | --- |
 | Workflow | Assignments, dependencies, branches, parallel work, human decisions, and error handling. |
+| Swarm controller | A population's observations, decision scheduling, persistent world state, budgets, and objective evaluation. |
 | Worker environment | Named agents and their models, memory, skills, extensions, and installed programs, packaged in a Docker image. |
 | Inference service | Providers and poolers composed behind the named `@inference_endpoint` interface. |
 | Project workspace | The actual repository or directory where jobs read and modify files. |
 | Run state | Job requests, logs, transcripts, reports, proposed lessons, results, and workflow checkpoints. |
 
-A workflow and its environments are ordinary project files. Keep one workflow
+Workflows, swarm scenarios, and environments are ordinary project files. Keep one workflow
 with several environments, or many workflows and environments in one
 repository. The launcher takes paths; it imposes no repository layout. Before
 execution, the BPMN runner checks that the selected environment declares the
@@ -83,6 +84,14 @@ or group deliberation. `asys` reads saved
 runs independently of the engine. Other orchestration programs can reuse the
 runtime and workers. The BPMN engine accepts BPMN 2.0 XML with a small asys
 execution binding; see its [format and scope](asys-bpmn/README.md#bpmn-binding).
+
+[asys-swarm](asys-swarm/README.md) supplies another orchestration component.
+Its controller owns a scenario's world and submits bounded decisions as ordinary
+worker jobs. Each worker proposes actions using the existing Provider interface;
+the scenario validates their effects and measures success. Host controls and
+viewer updates use runtime channels. A scenario is an external configuration,
+Python world module, optional view, and worker environment; its directory name
+has no special meaning to the launcher.
 
 ## 03 · Install and run
 
@@ -121,6 +130,29 @@ asys logs latest
 The report contains “First section” and “Second section”. The launcher prints
 the run ID and saved-state directory, and removes the run's components when
 execution finishes. The project files and run records remain.
+
+### Watch a swarm build a habitat
+
+The [Rainkeepers terrarium](asys-swarm/examples/terrarium) starts eight inhabitants
+building water collectors and gardens. Every agent then leaves, rain stops, and
+the constructions must keep six gardens healthy through twelve drought turns.
+Run its deterministic baseline without a model account:
+
+```sh
+asys-swarm run ./asys-swarm/examples/terrarium/swarm.json \
+  ./asys-swarm/examples/terrarium/env/scripted --view
+```
+
+The launcher prints a local browser address. The view shows constructions,
+recorded interactions, measured outcomes and pause/resume controls. Select
+`env/agents` after configuring inference below to use model decisions through
+the same runtime. The scripted policy demonstrates execution and evaluation;
+it does not establish an advantage from collective intelligence. See the
+[swarm authoring guide](asys-swarm/AUTHORING.md) to define a different world or goal.
+
+World packages define their own information-sharing and evaluation rules.
+A world can expose local observations or a shared archive of checked results;
+the controller supplies execution, persistence and runtime communication.
 
 ### Add inference and run agents
 
@@ -297,6 +329,7 @@ The full command is `asys init DIR [--dcomp DIR] [--group GROUP]`; it creates
 | [asys-goal](asys-goal/README.md) | Continue implementation until independent verification accepts the requested outcome. |
 | [asys-senate](asys-senate/README.md) | Deliberate through sequential senator interventions and return a consensus or Princeps decision. |
 | [asys-bpmn](asys-bpmn/README.md) | Execute BPMN workflows, handle control flow, and resume failed runs. |
+| [asys-swarm](asys-swarm/README.md) | Run external swarm scenarios with runtime jobs, persistent constructions, measured goals, and a live viewer. |
 | [asys-workers](asys-workers/README.md) | Define worker environments, agent memory, skills, tools, and execution behavior. |
 | [asys-runtime](asys-runtime/README.md) | Execute filesystem jobs, supervise processes, and record their outcomes. |
 | [asys-inference](asys-inference/README.md) | Build and manage the providers behind `@inference_endpoint`. |

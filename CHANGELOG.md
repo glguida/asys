@@ -1,5 +1,19 @@
 # Release notes
 
+## Unreleased
+
+- Add `asys-swarm`, an orchestration component for user-defined world packages.
+  Host control uses runtime channels, decisions execute as ordinary worker jobs,
+  and model calls retain the existing Provider interface. Worlds own action
+  validation, persistent artifacts and objective evaluation; runs record bounded
+  execution, checkpoints, events and deterministic replay data.
+- Add an action-only `asys-swarm-agent` worker and the editable Rainkeepers
+  terrarium example, with scripted and model environments and a live browser
+  view. The example measures whether constructions keep gardens alive through
+  a drought after every agent has been removed.
+- Document per-agent observations, world-module loading, and local or shared
+  information policies through the runtime and world interfaces.
+
 ## 0.1.5
 
 - Strengthen goal prompts to finish actionable implementation before handing off

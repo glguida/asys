@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+import { program } from '../src/program.mjs';
+import { swarmAgent } from '../src/swarm-agent.mjs';
+
+program(swarmAgent).catch(error => { console.error(error.message); process.exitCode = 1; });

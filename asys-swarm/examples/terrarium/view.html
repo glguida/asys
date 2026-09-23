@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Rainkeepers · Swarm Terrarium</title>
+  <style>
+    :root { color-scheme:dark; --bg:#0b1619; --panel:#112126; --line:#284046; --muted:#91aaad; --ink:#e7f4eb; --mint:#a2f1bd; --blue:#75bfef; --orange:#ffbf79; }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,sans-serif} button,a{font:inherit} button{cursor:pointer} button:disabled{opacity:.4;cursor:default}
+    .shell{max-width:1500px;margin:auto;padding:30px 34px 20px} .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mint)}
+    header{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:25px} h1{font-size:36px;line-height:1.1;letter-spacing:-.055em;margin:7px 0} .subtitle{color:var(--muted);max-width:690px;margin:10px 0 0}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end} button{background:#1b3338;border:1px solid #385258;color:var(--ink);border-radius:7px;padding:9px 13px;transition:background .2s} button:hover{background:#2b464b} button.danger{color:#ffb8a4}
+    .badge{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mint);display:inline-flex;gap:8px;align-items:center} .badge:before{content:'';height:7px;width:7px;border-radius:50%;background:currentColor}
+    .metrics{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:20px;overflow:hidden}.metric{padding:17px 22px;border-right:1px solid var(--line)}.metric:last-child{border:0}.metric-label{color:var(--muted);font-size:12px}.metric-value{font-variant-numeric:tabular-nums;font-size:27px;letter-spacing:-.04em;line-height:1.3}.metric small{font-size:13px;letter-spacing:0;color:var(--muted);margin-left:5px}
+    main{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}.panel-head{padding:17px 20px;display:flex;gap:15px;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}h2{font-size:14px;margin:0;font-weight:600}.small{font-size:12px;color:var(--muted)} .phase{color:var(--mint);font-size:12px}.phase.drought{color:var(--orange)}
+    #world{display:block;width:100%;padding:24px 24px 12px;min-height:260px} .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);font-size:11px;padding:2px 24px 18px}.legend span:before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c);margin-right:6px}.mission{padding:14px 20px;background:#172c2f;border-top:1px solid var(--line);color:#bed3c8;font-size:12px}.mission strong{color:var(--mint);font-weight:600}
+    .timeline{padding:18px 22px}.timeline-label{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:8px}.track{display:flex;height:5px;gap:4px}.track div{background:#294247;border-radius:2px;overflow:hidden}.track i{display:block;background:var(--mint);height:100%;width:0;transition:width .5s}.track .dry i{background:var(--orange)}
+    aside{display:flex;flex-direction:column;gap:20px} #network{display:block;width:100%;height:225px} .network-note{padding:0 18px 17px;font-size:11px;color:var(--muted)}.inspect{padding:16px 19px;min-height:135px}.inspect-title{font-size:17px;letter-spacing:-.025em;margin-bottom:7px}.inspect-detail{font-size:12px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere} .inspect-row{display:flex;justify-content:space-between;margin:5px 0}.inspect-row span:first-child{color:var(--muted)}
+    .bottom{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}.chart-wrap{padding:16px 20px 7px}#chart{display:block;width:100%;height:130px}.chart-key{padding:0 20px 15px;color:var(--muted);font-size:11px}.chart-key b{color:var(--mint);font-weight:500} #feed{height:191px;overflow:auto;margin:0;padding:8px 18px;list-style:none}.event{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #20363b;font-size:12px}.event-turn{color:#64868d;min-width:30px;font-variant-numeric:tabular-nums}.event-body{overflow-wrap:anywhere}.event.rejected{color:var(--orange)}
+    footer{display:flex;justify-content:space-between;gap:20px;font-size:11px;color:#708f95;margin-top:18px}#connection{max-width:70%;overflow-wrap:anywhere}.world-cell,.world-agent{cursor:pointer}.world-cell:hover rect{stroke:#b5dec8;stroke-width:1.3}.world-agent:hover circle{stroke:white;stroke-width:2}.empty{color:var(--muted);padding:18px;font-size:12px}
+    @media(max-width:1000px){main{grid-template-columns:minmax(0,1fr) 280px}.shell{padding:24px 20px}.metric{padding:15px}h1{font-size:31px}}
+    @media(max-width:760px){header{align-items:flex-start;flex-direction:column}.controls{justify-content:flex-start}main{grid-template-columns:1fr}aside{display:grid;grid-template-columns:1fr 1fr}.bottom{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}#network{height:190px}.shell{padding:22px 14px}#world{padding:14px;min-height:210px}.legend{padding:0 14px 15px;gap:10px}}
+    @media(max-width:460px){aside{grid-template-columns:1fr}.subtitle{font-size:13px}.metric-value{font-size:24px}footer{flex-direction:column;gap:5px}#connection{max-width:100%}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div><div class="eyebrow">ASYS / a collective experiment</div><h1>Rainkeepers</h1><p class="subtitle">Build together. Leave something that lasts. A small habitat tests what a population leaves behind when every agent disappears.</p></div>
+    <div class="controls"><button id="pause">Pause</button><button id="resume">Resume</button><button id="export">Save snapshot</button><button class="danger" id="cancel">Stop</button></div>
+  </header>
+  <div class="metrics">
+    <div class="metric"><div class="metric-label">Healthy gardens</div><div class="metric-value"><span id="healthy">—</span><small id="target">/ — required</small></div></div>
+    <div class="metric"><div class="metric-label">Stored water</div><div class="metric-value"><span id="water">—</span><small>units</small></div></div>
+    <div class="metric"><div class="metric-label">Agents in habitat</div><div class="metric-value"><span id="population">—</span><small id="decisions">local decisions</small></div></div>
+    <div class="metric"><div class="metric-label">Agent-free drought</div><div class="metric-value"><span id="drought">—</span><small id="drought-total">/ — turns</small></div></div>
+  </div>
+  <main>
+    <section class="panel">
+      <div class="panel-head"><h2>The habitat</h2><span id="phase" class="phase">Waiting for the first world state</span></div>
+      <svg id="world" role="img" aria-label="Habitat grid showing agents, water collectors, gardens and resources"></svg>
+      <div class="legend"><span style="--c:#a8d2e9">Collector</span><span style="--c:#9de6aa">Garden</span><span style="--c:#5e9ea9">Channel</span><span style="--c:#bbae8c">Material</span><span style="--c:#edbd83">Agent</span></div>
+      <div class="mission" id="verdict"><strong>The test:</strong> at least six gardens must stay healthy for twelve rainless turns after all agents leave.</div>
+      <div class="timeline"><div class="timeline-label"><span>01 / construction &amp; rain</span><span>02 / agents removed · no rain</span></div><div class="track"><div style="width:67%"><i id="build-progress"></i></div><div class="dry" style="width:33%"><i id="dry-progress"></i></div></div></div>
+    </section>
+    <aside>
+      <section class="panel"><div class="panel-head"><h2>Connections</h2><span class="small" id="link-count">0 recorded</span></div><svg id="network" role="img" aria-label="Recorded local messages and construction reuse between agents"></svg><div class="network-note">Solid: adjoining another agent’s usable construction. Dashed: a delivered local message. Hubs are observed, never assigned.</div></section>
+      <section class="panel"><div class="panel-head"><h2>Field notes</h2><span class="small">Select a cell or agent</span></div><div class="inspect" id="inspect"><div class="inspect-title">Nothing selected</div><div class="inspect-detail">Inspect a construction to see its builder, stored water and measured condition.</div></div></section>
+    </aside>
+  </main>
+  <div class="bottom">
+    <section class="panel"><div class="panel-head"><h2>What survives</h2><span class="small">Measured after each world turn</span></div><div class="chart-wrap"><svg id="chart" role="img" aria-label="Healthy gardens over time"></svg></div><div class="chart-key"><b>Healthy gardens</b> · dotted line: objective · shaded area: agent-free drought</div></section>
+    <section class="panel"><div class="panel-head"><h2>Live journal</h2><span id="run-status" class="badge">Connecting</span></div><ul id="feed"><li class="empty">Waiting for runtime events…</li></ul></section>
+  </div>
+  <footer><span id="connection">Connecting through the runtime host bridge.</span><span>Teaching simulation · inspired by swarm research, not a reproduction</span></footer>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id), NS='http://www.w3.org/2000/svg';
+let snapshot=null, sequence=0, selected=null, journal=[], polling=false;
+function svg(tag, attrs={}, text){const n=document.createElementNS(NS,tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));if(text!==undefined)n.textContent=text;return n;}
+function add(parent,tag,attrs,text){const n=svg(tag,attrs,text);parent.append(n);return n;}
+function color(id){let n=0;for(const c of String(id))n=(n*31+c.charCodeAt(0))>>>0;return `hsl(${(n*137.508)%360} 55% 72%)`;}
+function label(id){return String(id).replace(/^agent[-_]?/,'A');}
+function metric(id,value){$(id).textContent=value??'—';}
+function stateOf(data){return data?.state??data?.world??data;}
+function render(data){
+  const state=stateOf(data);if(!state?.cells||!state?.rules)return;
+  snapshot=data;const m=data.metrics??data.evaluation?.metrics??{},phase=state.phase;
+  metric('healthy',m.healthyGardens??state.cells.filter(c=>c.kind==='garden'&&c.health>=50).length);
+  metric('target',`/ ${m.targetGardens??6} required`);metric('water',m.storedWater??state.cells.reduce((n,c)=>n+(c.water??0),0));
+  metric('population',Object.keys(state.agents).length);metric('drought',state.drought.elapsed);metric('drought-total',`/ ${state.rules.droughtTurns} turns`);
+  metric('phase',`${phase==='discovery'?'Rain / building':phase==='drought'?'Drought / agents removed':'Evaluation complete'} · turn ${state.turn}`);
+  $('phase').className='phase'+(phase==='discovery'?'':' drought');
+  $('build-progress').style.width=`${Math.min(100,100*state.turn/state.rules.discoveryTurns)}%`;
+  $('dry-progress').style.width=`${Math.min(100,100*state.drought.elapsed/state.rules.droughtTurns)}%`;
+  const summary=data.summary??data.evaluation?.summary;
+  if(summary)metric('verdict',summary);else if(phase==='complete')metric('verdict',`Drought finished. Minimum healthy gardens: ${state.drought.minimumHealthyGardens}; required: ${m.targetGardens??6}.`);
+  else if(phase==='drought')metric('verdict','Every agent has left. No model calls are needed: stored water and physical connections now decide what survives.');
+  const status=data.status??(phase==='complete'?'complete':'running');metric('run-status',status);
+  const terminal=['complete','completed','cancelled','failed','succeeded'].includes(status);
+  $('pause').disabled=terminal||phase==='complete'||status==='paused';$('resume').disabled=terminal||status!=='paused';$('cancel').disabled=terminal;
+  drawWorld(state);drawNetwork(state);drawChart(state,m.targetGardens??6);inspect(state);
+  metric('connection',`${data.runId??data.run_id??'Runtime connected'} · snapshot turn ${state.turn} · ${state.counts.rejected} rejected actions`);
+}
+function drawWorld(s){
+  const root=$('world'),size=34;root.replaceChildren();root.setAttribute('viewBox',`0 0 ${s.width*size} ${s.height*size}`);
+  for(const c of s.cells){const g=add(root,'g',{transform:`translate(${c.x*size},${c.y*size})`,class:'world-cell'});g.addEventListener('click',()=>{selected={kind:'cell',x:c.x,y:c.y};inspect(s);});
+    const fills={ground:'#182e31',resource:'#343b32',collector:'#204957',garden:c.health>=50?'#26452f':'#443933',channel:'#213c42'};
+    add(g,'rect',{x:1,y:1,width:32,height:32,rx:4,fill:fills[c.kind]??fills.ground,stroke:'#274147','stroke-width':.5});
+    if(c.kind==='collector'){add(g,'path',{d:'M17 6 C14 11 10 14 10 19 A7 7 0 0 0 24 19 C24 14 20 11 17 6Z',fill:'#8ccae7',opacity:.8});add(g,'rect',{x:6,y:29,width:22*c.water/s.rules.collectorCapacity,height:2,rx:1,fill:'#b3e5ff'});}
+    else if(c.kind==='garden'){add(g,'path',{d:'M17 26V13M17 19C8 19 8 13 9 11C15 10 18 14 17 19M17 15C25 15 26 9 24 7C18 7 16 10 17 15',fill:c.health>=50?'#a8df9c':'#af9674',stroke:c.health>=50?'#a8df9c':'#af9674','stroke-width':1.2});add(g,'rect',{x:6,y:29,width:22*c.health/100,height:2,rx:1,fill:c.health>=50?'#b5eea8':'#dda476'});}
+    else if(c.kind==='resource'){add(g,'path',{d:'M8 24L10 15L17 11L24 18L23 25Z',fill:'#aaab8c'});add(g,'path',{d:'M10 15L18 19L24 18M18 19L17 25',stroke:'#6f7d70',fill:'none'});}
+    else if(c.kind==='channel'){add(g,'path',{d:'M0 17H34M17 0V34',stroke:'#74adbb','stroke-width':5,opacity:.55});}
+    if(selected?.kind==='cell'&&selected.x===c.x&&selected.y===c.y)add(g,'rect',{x:1,y:1,width:32,height:32,rx:4,fill:'none',stroke:'#e7f4eb','stroke-width':1.5});
+  }
+  const groups=new Map();for(const agent of Object.values(s.agents)){const k=`${agent.x},${agent.y}`;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(agent);}
+  for(const occupants of groups.values())occupants.forEach((a,i)=>{const shift=occupants.length>1?(i-(occupants.length-1)/2)*7:0;const g=add(root,'g',{transform:`translate(${a.x*size+25+shift},${a.y*size+8})`,class:'world-agent'});add(g,'circle',{r:6.5,fill:color(a.id),stroke:'#15282d','stroke-width':2});add(g,'circle',{cx:0,cy:-.5,r:1.4,fill:'#223737'});g.addEventListener('click',()=>{selected={kind:'agent',id:a.id};inspect(s);});add(g,'title',{},a.id);});
+}
+function drawNetwork(s){
+  const root=$('network');root.replaceChildren();root.setAttribute('viewBox','0 0 300 225');
+  const agents=Object.values({...s.retired_agents,...s.agents}).sort((a,b)=>a.id.localeCompare(b.id)),positions=new Map();
+  agents.forEach((a,i)=>{const t=-Math.PI/2+i*2*Math.PI/agents.length;positions.set(a.id,{x:150+80*Math.cos(t),y:111+76*Math.sin(t)});});
+  const links=new Map();for(const l of s.links){const k=`${l.source}|${l.target}|${l.kind}`;if(!links.has(k))links.set(k,{...l,count:0});links.get(k).count++;}
+  metric('link-count',`${s.links.length} recorded`);
+  for(const l of links.values()){const a=positions.get(l.source),b=positions.get(l.target);if(!a||!b)continue;add(root,'line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:l.kind==='reuse'?'#a2f1bd':'#71949b','stroke-width':Math.min(3,1+l.count/4),'stroke-dasharray':l.kind==='message'?'3 5':'none',opacity:.6});}
+  for(const a of agents){const p=positions.get(a.id),g=add(root,'g',{class:'world-agent'});add(g,'circle',{cx:p.x,cy:p.y,r:8+Math.min(5,s.links.filter(l=>l.source===a.id||l.target===a.id).length),fill:color(a.id),opacity:s.phase==='discovery'?1:.6});add(g,'text',{x:p.x,y:p.y+(p.y>110?28:-20),'text-anchor':'middle',fill:'#c4d8d8','font-size':10},label(a.id));g.addEventListener('click',()=>{selected={kind:'agent',id:a.id};inspect(s);});}
+  if(!s.links.length)add(root,'text',{x:150,y:116,'text-anchor':'middle',fill:'#76969c','font-size':11},'No exchanges yet');
+}
+function inspect(s){
+  if(!selected)return;const root=$('inspect');root.replaceChildren();
+  function line(k,v){const row=document.createElement('div');row.className='inspect-row';for(const t of[k,v]){const span=document.createElement('span');span.textContent=t;row.append(span);}root.append(row);}
+  const title=document.createElement('div');title.className='inspect-title';root.append(title);
+  if(selected.kind==='agent'){const a=s.agents[selected.id]??s.retired_agents[selected.id];if(!a)return;title.textContent=a.id;line('Status',s.agents[a.id]?'In habitat':'Removed for evaluation');line('Material',a.stock);line('Constructions',a.built);line('Local messages',a.inbox.length);if(a.inbox.length){const p=document.createElement('div');p.className='inspect-detail';p.textContent=a.inbox.at(-1).text;root.append(p);}}
+  else{const c=s.cells.find(c=>c.x===selected.x&&c.y===selected.y);title.textContent=`${c.kind[0].toUpperCase()+c.kind.slice(1)} · ${c.x}, ${c.y}`;if(c.built_by)line('Builder',c.built_by);if(c.health!==undefined)line('Health',`${c.health} / 100`);if(c.kind==='collector')line('Stored water',`${c.water} / ${s.rules.collectorCapacity}`);if(c.kind==='garden')line('Water this turn',c.supplied?'Supplied':'Dry');if(c.kind==='resource')line('Material remaining',c.amount);if(c.kind==='ground')line('Available for construction','Yes');}
+}
+function drawChart(s,target){
+  const root=$('chart');root.replaceChildren();const w=600,h=125,left=24,right=590,top=12,bottom=105,maxX=s.rules.discoveryTurns+s.rules.droughtTurns,maxY=Math.max(target+2,...s.history.map(p=>p.healthyGardens)),x=t=>left+(right-left)*t/maxX,y=n=>bottom-(bottom-top)*n/maxY;
+  root.setAttribute('viewBox',`0 0 ${w} ${h}`);add(root,'rect',{x:x(s.rules.discoveryTurns),y:top,width:right-x(s.rules.discoveryTurns),height:bottom-top,fill:'#64462b',opacity:.2});
+  for(const n of[0,target,maxY]){add(root,'line',{x1:left,y1:y(n),x2:right,y2:y(n),stroke:n===target?'#748b75':'#284046','stroke-dasharray':n===target?'3 5':'none'});add(root,'text',{x:left-6,y:y(n)+3,'text-anchor':'end',fill:'#76949a','font-size':9},n);}
+  for(const t of[0,s.rules.discoveryTurns,maxX])add(root,'text',{x:x(t),y:121,'text-anchor':'middle',fill:'#76949a','font-size':9},t);
+  if(s.history.length){const points=s.history.map(p=>`${x(p.turn)},${y(p.healthyGardens)}`).join(' ');add(root,'polyline',{points,fill:'none',stroke:'#a2f1bd','stroke-width':2.5,'stroke-linejoin':'round'});const p=s.history.at(-1);add(root,'circle',{cx:x(p.turn),cy:y(p.healthyGardens),r:3.5,fill:'#a2f1bd'});}
+}
+function unpack(event){const data=event.data??event;return data.event??data;}
+function appendEvents(envelopes){
+  for(const envelope of envelopes){if(String(envelope.type??'').includes('snapshot'))continue;const d=unpack(envelope);const nested=Array.isArray(d.events)?d.events:[d];for(const event of nested){const type=event.type??envelope.type??'event';if(['wait','swarm.snapshot','snapshot'].includes(type))continue;journal.push({...event,type});}}
+  journal=journal.slice(-60);const root=$('feed');root.replaceChildren();
+  for(const event of [...journal].reverse()){const li=document.createElement('li');li.className='event'+(event.type==='rejected'?' rejected':'');const turn=document.createElement('span');turn.className='event-turn';turn.textContent=event.turn!=null?String(event.turn).padStart(2,'0'):'·';const text=document.createElement('span');text.className='event-body';const who=event.agent_id??event.agent??event.source??'';
+    let detail=event.message??event.reason??event.summary??'';if(!detail&&event.x!==undefined)detail=`${event.kind??''} at ${event.x},${event.y}`;if(!detail&&event.phase)detail=event.phase;if(!detail&&event.target)detail=`→ ${event.target}`;
+    text.textContent=`${who?label(who)+' · ':''}${event.type}${detail?' / '+detail:''}`;li.append(turn,text);root.append(li);}
+}
+async function control(type){try{const r=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type})});if(!r.ok)throw new Error(await r.text());metric('connection',`${type} requested through the runtime.`);await poll();}catch(e){metric('connection',e.message);}}
+for(const type of['pause','resume','cancel'])$(type).addEventListener('click',()=>control(type));
+$('export').addEventListener('click',()=>{if(!snapshot)return;const url=URL.createObjectURL(new Blob([JSON.stringify(snapshot,null,2)+'\n'],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='terrarium-snapshot.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+async function poll(){if(polling)return;polling=true;try{const [stateResponse,eventResponse]=await Promise.all([fetch('/api/state',{cache:'no-store'}),fetch(`/api/events?after=${sequence}`,{cache:'no-store'})]);if(!stateResponse.ok)throw new Error('Waiting for the runtime bridge…');const data=await stateResponse.json();if(data)render(data);if(eventResponse.ok){const payload=await eventResponse.json();const events=Array.isArray(payload)?payload:payload.events??[];if(events.length)appendEvents(events);sequence=payload.after??sequence;}}catch(e){metric('connection',e.message);}finally{polling=false;}}
+poll();setInterval(poll,900);
+</script>
+</body>
+</html>

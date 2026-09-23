@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "name": "terrarium-agents",
+  "description": "Identical habitat inhabitants using the existing inference Provider.",
+  "types": {"swarm-step": {"command": ["/opt/asys/asys-workers/tools/asys-swarm-agent", "--agent", "inhabitant"]}}
+}

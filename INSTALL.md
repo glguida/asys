@@ -50,6 +50,9 @@ and builds the shared worker images.
 builds the worker and Human images.
 `make -C asys-senate install` installs the Senate launcher and observer and
 builds the shared worker images.
+`make -C asys-swarm install` installs the swarm launcher and example scenarios
+and builds the runtime, worker, and swarm controller images. Its `install-host`
+target installs the host files when those images are already available.
 `make -C asys-human-interface install` builds the human interface component and
 installs the `asys-human-prompt` terminal handler; its `install-host` target
 installs just the host tool when the image is already available.
@@ -64,8 +67,12 @@ An environment's own Dockerfile is also built on each run and resume, using
 the current installed base images and Docker's build cache. Node, Pi, and the
 worker execution dependencies live in those images.
 
-The host commands include the Python packages they need. No separate Python
-package installation is needed to use them. The optional standalone
+The host commands include their asys Python packages. Starting and viewing swarm
+runs needs no additional host Python dependency. The local developer replay
+helper and swarm development tests also need `jsonschema`, available as the
+`python3-jsonschema` package on Debian and Ubuntu, or through
+`python3 -m pip install jsonschema` in your Python environment. The swarm image
+installs its own copy for action validation. The optional standalone
 `asys-runtime` CLI has its own [installation instructions](asys-runtime/README.md#run).
 
 | Installed path under `PREFIX` | Contents |
@@ -73,6 +80,7 @@ package installation is needed to use them. The optional standalone
 | `bin/asys` | State initialization, shared-service updates, run listing, status, logs, and terminal monitor |
 | `bin/asys-inference` | Inference server management command |
 | `bin/asys-bpmn` | BPMN workflow launcher |
+| `bin/asys-swarm` | Swarm launcher, runtime controls, and viewer |
 | `bin/asys-oneshot` | Run an assignment with the simple system agent in an environment |
 | `bin/asys-goal` | Implement and verify a goal, repeating with the simple system agent |
 | `bin/asys-senate` | Ask configured senators for a consensus or Princeps decision in up to three rounds |
@@ -85,6 +93,8 @@ package installation is needed to use them. The optional standalone
 | `share/asys-inference/provider-channel` | Private host client for the exported model catalogue |
 | `share/asys-inference/python/` | Bundled runtime channel library |
 | `share/asys-bpmn/python/` | BPMN progress formatting |
+| `share/asys-swarm/python/` | Swarm configuration, world adapters, controller, and replay code |
+| `share/asys-swarm/examples/` | Editable scenario packages, including the terrarium and its environments |
 | `share/asys-human/python/` | Human handler lifecycle, terminal presentation, and runtime channel libraries |
 
 ## Agent skill
@@ -201,6 +211,29 @@ custom state directories, and terminal controls.
 Workflows and environment definitions remain ordinary files in their project
 repositories. The launcher accepts their paths directly.
 
+## Check the swarm installation
+
+The terrarium's scripted environment runs ordinary Python jobs without inference:
+
+```sh
+asys-swarm run ./asys-swarm/examples/terrarium/swarm.json \
+  ./asys-swarm/examples/terrarium/env/scripted --view
+```
+
+Open the printed loopback browser address to inspect agents building a habitat,
+then watch its constructions survive an agent-free drought. The scripted
+baseline should finish with eight healthy gardens, exceeding the objective of
+six. `--view` keeps the viewer available after completion; press Ctrl-C to close
+it. Installed copies are under `PREFIX/share/asys-swarm/examples/terrarium` and
+can be copied or renamed. There is no compiled-in demo name.
+
+After inference is configured, select the example's `env/agents` environment
+instead. It uses the `simple` system-model setting and the Provider endpoint.
+See the [example guide](asys-swarm/examples/terrarium/README.md) and
+[swarm guide](asys-swarm/README.md) for budgets, controls and saved artifacts.
+
+## Run assignments and goals
+
 To run one assignment with the `simple` system agent, give the environment
 directory and assignment. `--model` can select the inference model for this run:
 
@@ -292,7 +325,7 @@ The inference server continues running after the command exits and exports
 `@inference_endpoint` in the `asys` dcomp system by default. See the
 [inference guide](asys-inference/README.md) for adding poolers and other providers.
 
-Host workflow control, model listing, and gateway administration use filesystem channels.
+Host workflow and swarm control, model listing, and gateway administration use filesystem channels.
 Component RPC uses dcomp interfaces; workflow jobs and results use the shared
 runtime filesystem. Dcomp handles container lifecycle and container logs.
 
@@ -451,8 +484,10 @@ does not need changing.
 
 ## Development tests
 
-Tests additionally require Node 22.19 or newer and npm on the host. From the
-repository root:
+Tests additionally require Node 22.19 or newer, npm, and Python's `jsonschema`
+package on the host. Install `python3-jsonschema` using your distribution's
+package manager, or install `jsonschema` in the Python environment running the
+tests. From the repository root:
 
 ```sh
 make test-deps
@@ -460,7 +495,8 @@ make test
 ```
 
 This runs the Go, Python, and Node suites. Docker acceptance tests are separate:
-`make -C asys-inference integration` and `asys-bpmn/tools/integration-test`.
+`make -C asys-inference integration`, `asys-bpmn/tools/integration-test`, and
+`make -C asys-swarm integration-test`.
 
 The shared-state acceptance test runs two Unix identities in an isolated
 container, checking initialization, job execution, logs, and saved workflow

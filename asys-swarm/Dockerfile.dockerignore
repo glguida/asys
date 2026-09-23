@@ -1,0 +1,6 @@
+**
+!asys-swarm/
+!asys-swarm/asys_swarm/
+!asys-swarm/asys_swarm/**
+**/__pycache__
+**/*.pyc

@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Exercise the scripted terrarium with real, isolated dcomp components.
+
+Build images with ``make -C asys-swarm build``, then run
+``make -C asys-swarm integration-test``. Requires Docker, dcomp and Python
+jsonschema. Uses a private temporary system, cleans up its containers, and
+does not call an inference provider. Standard TMPDIR selects test scratch space.
+"""
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.request import Request, urlopen
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CLI = ROOT / 'tools/asys-swarm'
+DEMO = ROOT / 'examples/terrarium'
+sys.path[:0] = [str(ROOT), str(ROOT.parent / 'asys-runtime')]
+from asys_swarm.replay import replay as replay_trusted_world
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix='asys-sw-') as temporary:
+        root = Path(temporary)
+        system = 'swarm-test-' + root.name.removeprefix('asys-sw-').replace('_', '-')
+        dcomp = [os.environ.get('DCOMP_BINARY', 'dcomp'), '--state-root', str(root / 'dcomp'),
+                 '--runtime-root', str(root / 'proxy')]
+        commands = root / 'commands.log'
+        system_file = root / 'system.dcomp'
+        system_file.write_text(f'system {system}\n')
+        workspace = root / 'workspace'
+        workspace.mkdir()
+        process = None
+
+        def run(command, timeout=180):
+            result = subprocess.run(list(map(str, command)), capture_output=True, text=True, timeout=timeout)
+            with commands.open('a') as output:
+                output.write(f'{command!r}\n{result.stdout}\n{result.stderr}\n')
+            if result.returncode:
+                raise AssertionError(f'{command!r}: {result.stdout[-2000:]}\n{result.stderr[-6000:]}')
+            return result.stdout
+
+        def until(function, timeout=120):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                value = function()
+                if value:
+                    return value
+                if process is not None and process.poll() is not None:
+                    raise AssertionError(f'Launcher exited early ({process.returncode}):\n{stderr.read_text()}')
+                time.sleep(0.1)
+            raise AssertionError(f'Timed out:\n{stderr.read_text()}')
+
+        def http(url, path, body=None):
+            request = Request(url.rstrip('/') + path,
+                              data=json.dumps(body).encode() if body is not None else None,
+                              headers={'Content-Type': 'application/json', 'Origin': url.rstrip('/')})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        try:
+            run(dcomp + ['up', system_file])
+            for cancel in (False, True):
+                label = 'cancel' if cancel else 'complete'
+                stderr, stdout = root / f'{label}.log', root / f'{label}.json'
+                with stdout.open('w') as output, stderr.open('w') as errors:
+                    process = subprocess.Popen([str(CLI), 'run', str(DEMO / 'swarm.json'),
+                        str(DEMO / 'env/scripted'), '--root', str(root / 'runs'),
+                        '--workspace', str(workspace), '--system', system,
+                        '--dcomp-state-root', str(root / 'dcomp'), '--runtime-root', str(root / 'proxy'),
+                        '--view'], stdout=output, stderr=errors)
+                    match = until(lambda: re.search(r'Viewer: (http://127\.0\.0\.1:\d+/)', stderr.read_text()))
+                    url = match.group(1)
+                    with urlopen(url, timeout=5) as response:
+                        assert b'Rainkeepers' in response.read()
+                    record = http(url, '/api/run')
+                    directory = root / 'runs' / record['id']
+                    channel = directory / 'runtime/channels/swarm'
+                    start = channel / 'in/000000001.json'
+                    until(start.is_file)
+                    assert json.loads(start.read_text())['type'] == 'start'
+                    view = json.loads(run(dcomp + ['view', '--json', system]))
+                    components = {item['name']: item for item in view['components']}
+                    for name in record['components'].values():
+                        assert components[name]['status']['status'] == 'running'
+                        assert not components[name]['status'].get('published_ports')
+                        assert not components[name].get('egress')
+                    engine = components[record['components']['engine']]
+                    workers = components[record['components']['workers']]
+                    containers = json.loads(run(['docker', 'inspect', engine['status']['container_id'],
+                                                 workers['status']['container_id']]))
+                    assert '/var/lib/asys-swarm' in {mount['Destination'] for mount in containers[0]['Mounts']}
+                    assert '/var/lib/asys-swarm' not in {mount['Destination'] for mount in containers[1]['Mounts']}
+                    assert not next(mount for mount in containers[0]['Mounts']
+                                    if mount['Destination'] == '/opt/asys/swarm-package')['RW']
+                    http(url, '/api/control', {'type': 'pause'})
+                    paused = until(lambda: (state if (state := http(url, '/api/state')).get('status') == 'paused' else None))
+                    assert http(url, '/api/events?after=0')['events']
+                    run([CLI, 'resume', directory])
+                    if cancel:
+                        run([CLI, 'cancel', directory])
+                        assert process.wait(timeout=45) == 130
+                        record = json.loads((directory / 'run.json').read_text())
+                        assert record['status'] == 'cancelled' and record['components_removed'], record
+                        assert json.loads((directory / 'result.json').read_text())['status'] == 'cancelled'
+                        print('PASS: pause/resume/cancel through runtime channel; containers cleaned', flush=True)
+                    else:
+                        record = until(lambda: (record if (record := json.loads((directory / 'run.json').read_text())).get('components_removed') else None))
+                        assert record['status'] == 'completed', record
+                        assert process.poll() is None, 'The viewer should stay available after completion'
+                        output = json.loads(stdout.read_text())
+                        assert output['achieved'] is True, output
+                        assert output['turns'] == 36 and output['decisions'] == 192, output
+                        assert output['usage']['totalTokens'] == 0, output
+                        for artifact in output['files'].values():
+                            assert (workspace / artifact).is_file(), artifact
+                        # Developer-only replay executes this known, trusted
+                        # demo world locally; the production launcher never does.
+                        replay = replay_trusted_world(directory / 'package',
+                            json.loads((directory / 'config.json').read_text()), directory / 'swarm/events.jsonl')
+                        assert replay['verified'] and replay['terminal'] and replay['turns'] == 36, replay
+                        assert http(url, '/api/state')['status'] == 'completed'
+                        process.send_signal(signal.SIGINT)
+                        assert process.wait(timeout=10) == 0
+                        assert json.loads((directory / 'run.json').read_text())['status'] == 'completed'
+                        print('PASS: 36 turns, 192 real runtime jobs, goal achieved, artifacts and replay verified', flush=True)
+                    process = None
+                    assert not json.loads(run(dcomp + ['view', '--json', system]))['components']
+            return 0
+        except BaseException:
+            saved = ROOT / 'integration-failure.log'
+            with saved.open('w') as output:
+                for path in [commands, *root.glob('*.log'), *root.glob('runs/*/components.log'),
+                             *root.glob('runs/*/jobs/*/stderr.log')]:
+                    if path.exists():
+                        output.write(f'\n{path.name}\n{path.read_text()}')
+            print(f'Failure logs: {saved}', file=sys.stderr)
+            raise
+        finally:
+            if process is not None and process.poll() is None:
+                process.send_signal(signal.SIGINT)
+                try:
+                    process.wait(timeout=45)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+            subprocess.run(dcomp + ['down', system], capture_output=True, timeout=60)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
