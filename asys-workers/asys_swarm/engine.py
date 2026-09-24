@@ -27,11 +27,13 @@ class TimeLimit(TimeoutError):
 
 class Engine:
     def __init__(self, root, state, workspace, environment, *, channel='swarm', external=None,
-                 executor_factory=Executor, world_factory=World, stopping=lambda: False, health=lambda: None):
+                 executor_factory=Executor, world_factory=World, world_root=None,
+                 stopping=lambda: False, health=lambda: None):
         self.root, self.directory, self.workspace = (
             Path(path).resolve() for path in (root, state, workspace))
         self.environment = Environment(environment, external=external)
         self.world_factory = world_factory
+        self.world_root = Path(world_root).resolve() if world_root is not None else self.root
         self.channel = channel
         self.stopping = stopping
         self.health = health
@@ -189,7 +191,7 @@ class Engine:
                 raise ValueError('A swarm member type cannot recursively run a named swarm worker')
         expired = self.state and (self.state['status'] in TERMINAL or time.time() >= self.start_deadline)
         if self.world is None and not expired:
-            self.world = self.world_factory(self.root, config, data['id'], poll=self.world_poll)
+            self.world = self.world_factory(self.world_root, config, data['id'], poll=self.world_poll)
             if self.state and self.world.identity != self.state['worldIdentity']:
                 raise ValueError('World service identity differs; cannot recover')
         identity = self.state['worldIdentity'] if expired else self.world.identity

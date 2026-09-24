@@ -10,6 +10,7 @@ from asys_runtime.files import read_json, write_json, write_text_atomic
 from .worker_definitions import (BUILTINS, KINDS, authoring_lock, bind_definition, builtin_definition,
     definition_path, edit_validated, ensure_environment, environment_config,
     initial_definition, list_definitions, load_definition, scoped_path, validate_definition)
+from .world_packages import resolve_package
 
 
 @contextmanager
@@ -46,24 +47,20 @@ def _swarm_assets(root, name, definition, config, remember):
     agent = f'{name[:121]}-member'
     if member in config['types'] or definition_path(root, member).exists():
         raise ValueError(f'Swarm member type {member} already exists')
-    base = Path(__file__).resolve().parents[2]
-    renderer = next((path for path in (base / 'asys-workers/worlds/leaderboard/view.mjs',
-                                      base / 'workers/worlds/leaderboard/view.mjs') if path.is_file()), None)
-    if renderer is None:
-        raise ValueError('Bundled leaderboard renderer is missing; reinstall asys')
+    template = resolve_package(root, 'builtin:leaderboard')['root']
+    package = definition['config']['world']['package']
     files = {
         f'agents/{agent}/prompt.md': 'Pursue the supplied mission by proposing candidate artifacts.\n'
             'Use the world observation, task specification, and independent evaluator feedback.\n'
             'Do not claim success unless the evaluator has verified the required properties.\n',
-        f'programs/{name}-evaluate.py': '"""Replace this stub with task-specific validation and measurement.\n\n'
-            'Input: {"candidate": ..., "problem": ...}.\n'
-            'Successful output: {"accepted": true, "score": NUMBER, "details": {...}}.\n'
-            'Only accept candidates after independently checking their required properties.\n'
-            'The configured initial candidate is checked before any member uses inference.\n'
-            '"""\nimport json\nimport sys\n\njson.load(sys.stdin)\n'
-            'print(json.dumps({"accepted": False, "reason": "Configure this evaluator for the intended task."}))\n',
-        definition['config']['world']['view']: renderer.read_text(encoding='utf-8'),
     }
+    for relative in ('world.json', 'view.mjs', 'component/Dockerfile', 'component/serve.py', 'component/evaluate.py'):
+        files[f'{package}/{relative}'] = (template / relative).read_text(encoding='utf-8')
+    # Docker repository components use lowercase names; hash the authoring name
+    # so distinct case-sensitive worker names cannot silently share an image.
+    import hashlib
+    tag = hashlib.sha256(name.encode()).hexdigest()[:20]
+    files[f'{package}/component/component.dcomp'] = f'docker asys-world-{tag}:dev\n'
     for relative in files:
         if scoped_path(root, relative).exists():
             raise ValueError(f'Swarm asset already exists: {relative}')
@@ -76,18 +73,99 @@ def _swarm_assets(root, name, definition, config, remember):
 
 
 def arguments(argv):
-    parser = argparse.ArgumentParser(prog='asys-workers', description=__doc__)
-    parser.add_argument('environment', type=Path, metavar='ENV')
-    commands = parser.add_subparsers(dest='command', required=True)
-    listing = commands.add_parser('list', help='List named workers and ordinary program types')
+    kinds = '''Worker kinds:
+  agent   One agent carrying out an assignment with tools and a saved session.
+  goal    Implementation followed by independent verification; retries until
+          verified or the configured attempt limit is reached.
+  senate  A princeps senatus and senators with distinct professional roles
+          deliberate on a request and produce a decision.
+  swarm   Multiple agents explore a world with independently evaluated artifacts.
+'''
+    parser = argparse.ArgumentParser(prog='asys-workers', allow_abbrev=False,
+        description='Create, inspect and edit named workers in an environment directory.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=kinds + '''
+Examples:
+  asys-workers list ./env/development
+  asys-workers add ./env/development agent editor
+  asys-workers describe ./env/development editor
+  asys-workers edit ./env/development editor
+
+Use "asys-workers COMMAND --help" for arguments and configuration details.
+ENVIRONMENT is the directory containing Dockerfile, component.dcomp and
+workers.json. Run a configured worker with:
+  asys-run ENVIRONMENT NAME "Assignment to carry out"
+''')
+    commands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND', title='commands')
+
+    def command(name, summary, **kwargs):
+        result = commands.add_parser(name, help=summary, description=summary,
+            allow_abbrev=False, formatter_class=argparse.RawDescriptionHelpFormatter, **kwargs)
+        result.add_argument('environment', type=Path, metavar='ENVIRONMENT',
+            help='environment directory containing workers.json and worker assets')
+        return result
+
+    listing = command('list', 'List named workers, built-in workers and program types',
+        epilog='Shows each worker name, kind and description. Built-ins appear unless\n'
+               'the environment defines its own worker with the same name.\n\n'
+               'Example: asys-workers list ./env/development --json')
     listing.add_argument('--json', action='store_true', help='Print structured definitions and command bindings')
-    add = commands.add_parser('add', help='Create a named worker without replacing an existing type')
-    add.add_argument('kind', choices=KINDS, metavar='KIND')
-    add.add_argument('name', metavar='NAME')
-    add.add_argument('--file', type=Path, help='Import a complete JSON worker definition')
-    for name in ('describe', 'edit'):
-        command = commands.add_parser(name, help=f'{name.capitalize()} a worker')
-        command.add_argument('name', metavar='NAME')
+    add = command('add', 'Create a named worker and its runtime binding',
+        epilog=kinds + '''
+Files and configuration:
+  Every kind creates ENVIRONMENT/workers/NAME.json and adds a binding to
+  workers.json. Missing Dockerfile, component.dcomp and workers.json are
+  created. Existing files are preserved; an existing worker name is an error.
+
+  agent   Also creates agents/NAME/prompt.md. Write the agent's instructions
+          there. In workers/NAME.json, config.agent selects these assets;
+          config.model and config.maxSteps optionally select a model and limit.
+  goal    No agent prompt is required. Put the task in the run request.
+          config.model selects a model; config.maxAttempts limits retries
+          (unlimited when omitted).
+  senate  Edit config.princeps and config.senators. Each participant has a
+          unique name, optional prompt or agent assets, and optional model.
+          Give senators professional roles, such as Seasoned engineer or
+          Numerical analyst; preserve the princeps senatus's configured name.
+  swarm   Also creates worlds/NAME/ (world definition, component, evaluator
+          and view), a member prompt and a NAME-step command binding.
+          Implement worlds/NAME/component/evaluate.py and configure
+          config.world.settings before running. Set config.agents.count/type
+          and config.limits.turns/decisions for the search. The starter
+          evaluator rejects work until it is configured.
+
+  Model defaults come from "asys system-model" in the selected state root.
+  Use "asys-workers edit ENVIRONMENT NAME" to edit the definition with
+  $VISUAL or $EDITOR; edit prompt and evaluator files in your editor.
+
+Import:
+  --file FILE reads a complete version-1 JSON definition containing version,
+  kind and config (plus optional description). Its kind must match KIND.
+  Supply any referenced world packages and other assets yourself; importing
+  a swarm does not generate its world package.
+
+Examples:
+  asys-workers add ./env/development agent editor
+  asys-workers add ./env/development goal repair
+  asys-workers add ./env/development senate review
+  asys-workers add ./env/development swarm search
+  asys-workers add ./env/development senate review --file review.json
+  asys-run ./env/development repair "Fix the parser and verify the tests"
+''')
+    add.add_argument('kind', choices=KINDS, metavar='KIND',
+        help='worker behavior: agent, goal, senate or swarm (described below)')
+    add.add_argument('name', metavar='NAME', help='unique worker name; used by asys-run and workflow job types')
+    add.add_argument('--file', type=Path, metavar='FILE', help='import a complete JSON definition instead of the starter configuration')
+    describe = command('describe', 'Print one worker definition and its runtime binding as JSON',
+        epilog='Works for named workers, built-ins and ordinary program types.\n\n'
+               'Example: asys-workers describe ./env/development review')
+    describe.add_argument('name', metavar='NAME', help='worker name from asys-workers list')
+    edit = command('edit', 'Edit and validate one worker using $VISUAL or $EDITOR',
+        epilog='Edits workers/NAME.json for a named worker, or its command specification\n'
+               'in workers.json for an ordinary program. Invalid edits leave the original\n'
+               'configuration intact. Prompt files and world code are edited separately.\n\n'
+               'Example: asys-workers edit ./env/development review')
+    edit.add_argument('name', metavar='NAME', help='existing environment worker or program type to edit')
     return parser.parse_args(argv)
 
 
@@ -192,7 +270,7 @@ def main(argv=None):
         if args.command == 'add':
             print(add_worker(args.environment, args.kind, args.name, args.file))
             if args.kind == 'swarm' and args.file is None:
-                print(f'Before running, configure programs/{args.name}-evaluate.py and the world settings.', file=sys.stderr)
+                print(f'Before running, configure worlds/{args.name}/component/evaluate.py and the world settings.', file=sys.stderr)
         elif args.command == 'edit':
             print(edit_worker(args.environment, args.name))
         else:

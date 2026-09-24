@@ -7,15 +7,16 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CLI = ROOT / "asys-bpmn/tools/asys-bpmn"
+CLI = ROOT / "tools/asys-run"
 EXAMPLE = ROOT / "asys-bpmn/examples/hello"
 
 HOST = '''
 import json, runpy, sys
 from pathlib import Path
 module = runpy.run_path(sys.argv[1])
-Launcher = module['Launcher']
-args = module['arguments'](['run', sys.argv[2] + '/workflow.bpmn', sys.argv[2] + '/env/dummy', '--root', sys.argv[3]])
+from asys.workflow import Launcher
+from asys.run import arguments
+args = arguments([sys.argv[2] + '/env/dummy', sys.argv[2] + '/workflow.bpmn', '--root', sys.argv[3]])
 launcher = Launcher(args)
 launcher.say = lambda *args: None
 if sys.argv[4] == 'setup':
@@ -57,7 +58,8 @@ await runtime.close();
 
 def main():
     assert os.getuid() == 0, "Run this test in the Docker test image as root"
-    subprocess.run(['python3', str(ROOT / 'asys-oneshot/test/test_oneshot.py')],
+    subprocess.run(['python3', str(ROOT / 'test/run.py'),
+                    'RunTests.test_program_uses_actual_workspace_and_is_visible_in_standard_status'],
                    user=1001, group=1001, extra_groups=[], check=True, timeout=30)
     with tempfile.TemporaryDirectory(prefix="asys-host-permissions-") as temporary:
         root = Path(temporary)

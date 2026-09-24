@@ -7,8 +7,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'python'), str(ROOT.parent / 'python')]
-from asys_bpmn.journal import WorkflowHistory, agent_notices
-from asys_bpmn.runs import Runs, component_names, workflow_name
+from asys.workflow_journal import WorkflowHistory, agent_notices
+from asys.workflow_runs import Runs, component_names, workflow_name
 
 
 def write_json(path, value):

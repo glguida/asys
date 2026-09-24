@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "kind": "agent",
+  "config": {
+    "agent": "reviewer",
+    "model": "account/model"
+  }
+}

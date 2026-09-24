@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "component": "component/component.dcomp",
+  "view": "view.mjs"
+}

@@ -1,21 +1,20 @@
-# Shared workspace example
+# Shared workspace
 
-Four program jobs prepare a project, write two sections in parallel, and assemble
-the report after both sections finish. They work directly in one supplied
-workspace. No inference provider is required.
+Four program jobs prepare a project, write two sections in parallel, then join
+to assemble a report. Each job receives the same actual workspace and its own
+evidence directory. Concurrent writers use separate output paths. No model is
+required.
 
-From the repository root:
+From the repository root after building the images:
 
 ```sh
-make -C asys-bpmn build
 mkdir -p /tmp/report-project
-asys-bpmn/bin/asys-bpmn run \
+tools/asys-run asys-bpmn/examples/shared-workspace/env/dummy \
   asys-bpmn/examples/shared-workspace/workflow.bpmn \
-  asys-bpmn/examples/shared-workspace/env/dummy \
   --workspace /tmp/report-project \
   --input asys-bpmn/examples/shared-workspace/request.md
 ```
 
-The report is `/tmp/report-project/project/report.txt`. Execution logs and
-results remain in the run state directory printed by the launcher. The BPMN
-includes diagram interchange data and can be opened in bpmn.io.
+The deliverable is `/tmp/report-project/project/report.txt`. Inspect the printed
+run ID with `tools/asys status RUN` or `tools/asys dashboard`. Logs and per-job
+results remain in run state; project deliverables stay in the workspace.

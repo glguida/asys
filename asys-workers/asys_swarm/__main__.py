@@ -10,7 +10,7 @@ from asys_runtime.channel import channel_root
 
 from .engine import Engine, TERMINAL, TimeLimit
 from .config import validate_config
-from .world_process import WorldProcess
+from .world_binding import bound_world_root
 
 
 def runtime_root(environment):
@@ -46,7 +46,7 @@ def main(argv=None, *, environment=None):
         stopping = True
 
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
-    engine, output, code, world_process = None, None, 1, None
+    engine, output, code = None, None, 1
     channel_leases = []
     try:
         payload = read_json(environment['ASYS_INPUT'])
@@ -54,11 +54,12 @@ def main(argv=None, *, environment=None):
             raise ValueError('Swarm job input accepts only id, config, and channel')
         root = args.root or runtime_root(environment)
         configuration = validate_config(payload.get('config'))
+        world_root = bound_world_root(root, configuration, environment)
         channels = (payload.get('channel', 'swarm'), configuration['world']['channel'])
         if channels[0] == channels[1]:
             raise ValueError('World and swarm control channels must be different')
-        for channel in sorted(channels):
-            channel_directory = channel_root(root, channel)
+        for channel_runtime, channel in ((root, channels[0]), (world_root, channels[1])):
+            channel_directory = channel_root(channel_runtime, channel)
             channel_directory.mkdir(parents=True, exist_ok=True)
             client_lease = acquire_lock(channel_directory / '.swarm-client.lease')
             if client_lease is None:
@@ -69,10 +70,7 @@ def main(argv=None, *, environment=None):
         engine = Engine(root, state_directory,
                         environment['ASYS_WORKSPACE'], definition, channel=payload.get('channel', 'swarm'),
                         external=workers if workers != definition else None, stopping=lambda: stopping,
-                        health=lambda: world_process.check() if world_process else None)
-        if configuration['world'].get('command') and (not engine.state or engine.state['status'] not in TERMINAL):
-            world_process = WorldProcess(state_directory / 'world', configuration['world']['command'],
-                                         environment, root, configuration['world']['channel'])
+                        world_root=world_root)
         engine.start(payload)
         while not stopping and engine.state['status'] not in TERMINAL:
             engine.pump()
@@ -100,12 +98,8 @@ def main(argv=None, *, environment=None):
                   'status': 'interrupted' if isinstance(error, InterruptedError) else 'failed'}
     finally:
         try:
-            try:
-                if engine is not None:
-                    engine.close(interrupted=stopping or engine.state is None or engine.state['status'] not in TERMINAL)
-            finally:
-                if world_process is not None:
-                    world_process.close()
+            if engine is not None:
+                engine.close(interrupted=stopping or engine.state is None or engine.state['status'] not in TERMINAL)
             if output is not None:
                 write_json(environment['ASYS_RESULT'], output)
         finally:

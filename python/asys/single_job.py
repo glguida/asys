@@ -1,44 +1,13 @@
-"""Host lifecycle for a single job using the simple system-model default."""
-import argparse
-import fcntl
+"""Shared persistence and cleanup for the unified worker launcher."""
 import json
 import os
-from pathlib import Path
-import re
 import signal
 import sys
-import time
-import uuid
 
-from asys_runtime.environment import Environment, describe, environment_root
 from asys_runtime.files import timestamp, write_json
-from asys_runtime.queue import Queue, TERMINAL
-from asys_runtime.permissions import mkdir
-from .config import system_model
-from .execution import EnvironmentHost, execution_options, prepare_run
+from asys_runtime.queue import TERMINAL
+from .execution import EnvironmentHost
 from .lifecycle import Interrupted, LaunchError
-from .state import state_root
-
-
-AGENT = 'simple'
-
-
-def job_parser(prog, assignment, description):
-    parser = argparse.ArgumentParser(prog=prog, allow_abbrev=False, description=description)
-    parser.add_argument('environment', type=Path, metavar='ENVIRONMENT_DIRECTORY')
-    parser.add_argument(assignment, metavar=assignment.upper())
-    parser.add_argument('--model', metavar='MODEL', help="override the 'simple' system model for this run")
-    parser.add_argument('--root', type=Path, default=state_root(), metavar='DIRECTORY', help='asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)')
-    execution_options(parser)
-    return parser
-
-
-def validate_assignment(parser, args, assignment):
-    if not getattr(args, assignment).strip():
-        parser.error(f'{assignment} must be nonempty')
-    if args.model is not None and not args.model.strip():
-        parser.error('model must be nonempty')
-    return args
 
 
 class SingleJob(EnvironmentHost):
@@ -70,80 +39,6 @@ class SingleJob(EnvironmentHost):
                 'type': kind, 'time': timestamp(), 'data': data}, ensure_ascii=False) + '\n')
             output.flush()
             os.fsync(output.fileno())
-
-    def run_fields(self):
-        return {}
-
-    def resolve_model(self):
-        return system_model(AGENT, self.args.model, root=self.args.root)
-
-    def worker_models(self):
-        # The explicit override must work even when default settings are broken.
-        model = self.record['model']
-        return {AGENT: model} if model is not None else {}
-
-    def poll(self):
-        pass
-
-    def setup(self):
-        model = self.resolve_model()
-        environment = self.args.environment.expanduser().resolve(strict=True)
-        definition = Environment(environment, external=self.args.external)
-        if self.args.external is not None and self.job_type not in definition.types:
-            raise LaunchError(f"{self.manager} workers must define the {self.job_type!r} job type")
-        self.id, self.directory, workspace = prepare_run(state_root('runs', root=self.args.root), self.args.workspace)
-        self.lease = (self.directory / 'launcher.lock').open('xb')
-        fcntl.flock(self.lease, fcntl.LOCK_EX)
-        prefix = re.sub('[^a-z0-9-]', '-', definition.name.lower()).strip('-')[:37] or self.manager
-        if not prefix[0].isalpha():
-            prefix = 'env-' + prefix[:33]
-        self.names = {'workers': f'{prefix}-workers-{self.id[:16]}'}
-        self.record = {'id': self.id, 'manager': self.manager, 'name': f'{definition.name}.{self.label}',
-            'environment': definition.name, 'agent': AGENT, 'model': model, 'workspace': str(workspace),
-            'created_at': timestamp(), 'status': 'starting', 'system': self.args.system,
-            'components': self.names, 'dcomp': self.dcomp, **self.run_fields()}
-        self.snapshot()
-        self.say(f'Run {self.id}\nState: {self.directory}\nWorkspace: {workspace}')
-        external = definition.external if self.args.external is not None else self.prepare_workers(definition, model)
-        self.prepare_environment(environment, self.args.link, external=external)
-        self.snapshot()
-        self.start_workers()
-        self.wait_ready()
-        descriptor = describe(self.directory / 'runtime', definition.name)
-        if descriptor['definition'] != self.definition:
-            raise LaunchError("The running environment's workers.json differs from the selected workers.json")
-        self.queue = Queue(environment_root(self.directory / 'runtime', definition.name))
-
-    def execute(self):
-        self.job_id = uuid.uuid4().hex
-        directory = self.directory / 'jobs' / self.job_id
-        mkdir(directory)
-        self.record.update(job_id=self.job_id, status='running')
-        self.snapshot()
-        self.event('job.created', jobId=self.job_id, agent=AGENT, workspace=self.record['workspace'])
-        self.queue.submit(self.job_type, self.job_id, directory=directory, workspace=self.directory / 'workspace',
-            input=self.job_input(), metadata={'name': self.label, 'run_id': self.id, 'environment': self.record['environment']})
-        self.say(f'Job {self.job_id}: {self.label}')
-        health_check = time.monotonic() + 2
-        while True:
-            self.check_interrupt()
-            state = self.queue.state(self.job_id)
-            self.poll()
-            if state['status'] in TERMINAL:
-                success = state['status'] == 'done'
-                result = state.get('result')
-                self.event('job.completed' if success else 'job.failed', jobId=self.job_id, reason=state.get('error', ''))
-                self.record.update(status='completed' if success else 'failed', error=state.get('error', ''))
-                write_json(self.directory / 'result.json', result)
-                self.snapshot()
-                if not success:
-                    raise LaunchError(state.get('error') or f"Job {state['status']}")
-                print(json.dumps(result, indent=2, ensure_ascii=False))
-                return
-            if time.monotonic() >= health_check:
-                self.check_components(self.observe()[1])
-                health_check = time.monotonic() + 2
-            self.interrupted.wait(0.1)
 
     def close(self):
         try:

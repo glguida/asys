@@ -94,8 +94,10 @@ def validate_definition(value, environment=None):
     else:
         if not isinstance(config, dict):
             raise ValueError('swarm config must be an object')
-        if not isinstance(config.get('world'), dict) or 'command' not in config['world']:
-            raise ValueError('Named swarm definitions require world.command')
+        if not isinstance(config.get('world'), dict) or 'package' not in config['world']:
+            raise ValueError('Named swarm definitions require world.package')
+        if 'channel' in config['world']:
+            raise ValueError('Named swarm world channels are assigned per job')
         # The request supplies the mission. Reuse the engine's validation for
         # limits and world settings rather than maintain another schema here.
         from asys_swarm.config import validate_config
@@ -103,6 +105,7 @@ def validate_definition(value, environment=None):
         candidate = deepcopy(config)
         candidate.setdefault('mission', 'Request supplied at execution.')
         value['config'] = validate_config(candidate)
+        value['config']['world'].pop('channel', None)
         if not had_mission:
             value['config'].pop('mission', None)
     if kind in {'agent', 'goal'} and 'model' in config:
@@ -273,13 +276,10 @@ def initial_definition(kind, name):
     elif kind == 'goal':
         config = {}
     elif kind == 'senate':
-        config = {'version': 1, 'princeps': {'name': 'Chair'},
+        config = {'version': 1, 'princeps': {'name': 'Princeps senatus'},
                   'senators': [{'name': 'Reviewer', 'prompt': 'Check assumptions and supporting evidence.'}]}
     elif kind == 'swarm':
-        evaluator = json.dumps(['python3', f'/opt/asys/environment/programs/{name}-evaluate.py'])
-        config = {'version': 1, 'world': {'command': ['python3', '/opt/asys/asys-workers/worlds/leaderboard/serve.py',
-                                                    '--evaluator', evaluator],
-                                        'view': f'worlds/{name}/view.mjs',
+        config = {'version': 1, 'world': {'package': f'worlds/{name}',
                                         'settings': {'top_k': 0, 'problem': {'initial': {}}}},
                   'agents': {'count': 4, 'type': f'{name[:123]}-step'},
                   'limits': {'turns': 20, 'decisions': 80}}

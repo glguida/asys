@@ -46,7 +46,7 @@ func TestAddPassesAllArgumentsExceptLinks(t *testing.T) {
 	}
 	config := Config{ComponentsRoot: components}
 	literal := []string{"--arg", "--context", "--no-select", "--egress", "--help", "-x", "", "--", "model=balanced"}
-	if err := cli.add(&config, append([]string{"trace", "passthrough"}, literal...)); err != nil {
+	if err := cli.add(&config, append([]string{"trace", "passthrough", "--"}, literal...)); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(config.Providers[0].Runtime.Args, literal) || config.Providers[0].Runtime.ExternalEgress {

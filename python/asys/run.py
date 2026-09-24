@@ -5,7 +5,6 @@ import fcntl
 import json
 from pathlib import Path
 import re
-import shutil
 import sys
 import time
 import uuid
@@ -22,32 +21,62 @@ from .lifecycle import LaunchError
 from .runs import LogReader
 from .single_job import SingleJob, run as run_job
 from .state import state_root
+from .options import ROOT_HELP
 from .worker_definitions import builtin_definition, definition_command, load_definition
 
 
 def arguments(argv):
     parser = argparse.ArgumentParser(prog='asys-run', allow_abbrev=False,
-        description='Run a named worker with a request in the selected environment.')
-    parser.add_argument('environment', type=Path, metavar='ENVIRONMENT')
-    parser.add_argument('worker', metavar='WORKER')
-    parser.add_argument('request', metavar='REQUEST')
-    parser.add_argument('--model', metavar='MODEL', help='override the worker model for this run')
-    parser.add_argument('--parameters', type=Path, metavar='FILE', help='JSON parameters accepted by this worker')
-    parser.add_argument('--root', type=Path, default=state_root(), metavar='DIRECTORY', help='asys system root')
-    parser.add_argument('--view', action='store_true', help='open a local world view and retain it after completion')
-    parser.add_argument('--port', type=int, default=0, help='world view port (default: select an available port)')
+        description='Run a named worker or a BPMN workflow in the selected environment.',
+        usage='%(prog)s ENVIRONMENT WORKER|WORKFLOW.bpmn [REQUEST] [OPTIONS]\n       %(prog)s --resume RUN [--root DIRECTORY] [--human]')
+    parser.add_argument('environment', type=Path, nargs='?', metavar='ENVIRONMENT')
+    parser.add_argument('worker', nargs='?', metavar='WORKER|WORKFLOW.bpmn')
+    parser.add_argument('request', nargs='?', metavar='REQUEST')
+    parser.add_argument('--input', metavar='FILE', help='read the Markdown request from a file; - reads stdin')
+    parser.add_argument('--resume', metavar='RUN', help='resume a failed workflow using its saved definition and environment')
+    parser.add_argument('--model', metavar='MODEL', help='override a named worker model for this run')
+    parser.add_argument('--parameters', type=Path, metavar='FILE', help='JSON parameters accepted by a named worker')
+    parser.add_argument('--name', metavar='NAME', help='name displayed for this run')
+    parser.add_argument('--process', default='', metavar='ID', help='select a process in a BPMN document')
+    parser.add_argument('--human', action='store_true', help='answer workflow human requests in this terminal')
+    parser.add_argument('--root', type=Path, default=state_root(), metavar='DIRECTORY', help=ROOT_HELP)
     execution_options(parser)
+    parser.set_defaults(workspace=None, system=None, link=None)
     args = parser.parse_intermixed_args(argv)
-    try:
-        validate_name('worker name', args.worker)
-    except ValueError as error:
-        parser.error(str(error))
-    if not args.request.strip():
+    args.workflow = None
+    args.command = 'resume' if args.resume else 'run'
+    if args.resume:
+        if any(value is not None for value in (args.environment,args.worker,args.request,args.input,args.model,args.parameters,args.name)) or args.process:
+            parser.error('--resume uses the saved run; do not supply a new environment, worker, request or configuration')
+        if any(getattr(args, name) is not None for name in ('workspace','system','link','dcomp_state_root','runtime_root')):
+            parser.error('--resume restores the saved workspace, system and connections; only --root and --human can be supplied')
+        args.run = args.resume
+        return args
+    args.workspace = args.workspace or Path.cwd()
+    args.system = args.system or 'asys'
+    args.link = args.link or []
+    if args.environment is None or args.worker is None:
+        parser.error('ENVIRONMENT and WORKER or WORKFLOW.bpmn are required')
+    if args.input is not None and args.request is not None:
+        parser.error('Supply REQUEST or --input FILE, not both')
+    if Path(args.worker).suffix.lower() == '.bpmn':
+        args.workflow = Path(args.worker)
+        args.worker = None
+        if args.model is not None or args.parameters is not None:
+            parser.error('Workflow models and worker parameters belong in its named worker definitions')
+    else:
+        try:
+            validate_name('worker name', args.worker)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.request is None and args.input is None:
+            parser.error('A named worker requires REQUEST or --input FILE')
+        if args.human or args.process:
+            parser.error('--human and --process apply to workflows')
+    if args.request is not None and not args.request.strip():
         parser.error('REQUEST must be nonempty')
     if args.model is not None and not args.model.strip():
         parser.error('--model must be nonempty')
-    if not 0 <= args.port <= 65535:
-        parser.error('--port must be between 0 and 65535')
     return args
 
 
@@ -83,56 +112,6 @@ def execution_models(root, definition, kind, override=None, command=()):
     return system_models(root)
 
 
-def view_source(environment, value):
-    """Resolve environment assets or files supplied by the installed worlds."""
-    if not isinstance(value, str) or not value:
-        raise ValueError('World view must name a renderer file')
-    prefix = '/opt/asys/asys-workers/'
-    if value.startswith(prefix):
-        relative = Path(value[len(prefix):])
-        if relative.parts[:1] != ('worlds',) or '..' in relative.parts:
-            raise ValueError('Built-in view must remain inside the worlds package')
-        base = Path(__file__).resolve().parents[2]
-        roots = (base / 'asys-workers', base / 'workers')
-        for root in roots:
-            if (root / relative).is_file():
-                return (root / relative).resolve(), root.resolve()
-        raise ValueError('Built-in world renderer is unavailable; reinstall the asys world resources')
-    relative = Path(value)
-    if relative.is_absolute() or '..' in relative.parts:
-        raise ValueError('Custom world view must be relative to the environment')
-    root = Path(environment).resolve()
-    source = (root / relative).resolve(strict=True)
-    if not source.is_relative_to(root) or not source.is_file():
-        raise ValueError('World view must be a file inside the environment')
-    return source, root
-
-
-def retain_view(environment, value, run_directory):
-    source, root = view_source(environment, value)
-    destination = Path(run_directory) / 'view'
-    mkdir(destination)
-    # A root-level entry copies only itself. A dedicated view directory carries
-    # its complete static resources, bounded independently of the source image.
-    sources = [source] if source.parent == root else sorted(source.parent.rglob('*'))
-    total = 0
-    for path in sources:
-        if path.is_symlink():
-            raise ValueError('World view assets must not contain symlinks')
-        if not path.is_file():
-            continue
-        if path.suffix in {'.py', '.pyc'} or any(part in {'.git', '__pycache__', 'node_modules'} for part in path.parts):
-            continue
-        total += path.stat().st_size
-        if total > 32 * 1024 * 1024:
-            raise ValueError('World view assets exceed 32 MiB')
-        target = destination / path.relative_to(source.parent)
-        mkdir(target.parent, parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
-    return {'view_directory': 'view', 'view': source.name,
-            'view_format': 'module' if source.suffix in {'.js', '.mjs'} else 'html'}
-
-
 class Run(SingleJob):
     manager = 'run'
 
@@ -145,7 +124,6 @@ class Run(SingleJob):
         self.overlay = None
         self.overlay_target = None
         self.builtin_file = None
-        self.viewer = None
         self.progress = None
         self.parameters = None
         self.control_after = 0
@@ -153,20 +131,18 @@ class Run(SingleJob):
 
     def setup(self):
         environment = self.args.environment.expanduser().resolve(strict=True)
-        self.original = Environment(environment, external=self.args.external)
+        self.original = Environment(environment)
         self.worker_definition, builtin = selected_definition(environment, self.args.worker, self.original.types)
         if self.worker_definition is None and self.args.worker not in self.original.types:
-            raise ValueError(f'Unknown worker {self.args.worker!r}; use asys-workers ENVIRONMENT list')
+            raise ValueError(f'Unknown worker {self.args.worker!r}; use asys-workers list ENVIRONMENT')
         executable = Path(self.original.types.get(self.args.worker, {}).get('command', [''])[0]).name
-        legacy_kind = {'asys-agent': 'agent', 'asys-goal': 'goal', 'asys-senate': 'senate',
+        command_kind = {'asys-agent': 'agent', 'asys-goal': 'goal', 'asys-senate': 'senate',
                        'asys-swarm': 'swarm'}.get(executable, 'program')
-        kind = self.worker_definition['kind'] if self.worker_definition else legacy_kind
+        kind = self.worker_definition['kind'] if self.worker_definition else command_kind
         if self.worker_definition is None and kind in {'senate', 'swarm'}:
-            raise ValueError(f'{kind} requires a named worker definition; use asys-workers ENVIRONMENT add {kind} NAME')
+            raise ValueError(f'{kind} requires a named worker definition; use asys-workers add ENVIRONMENT {kind} NAME')
         if self.args.model and kind == 'program':
             raise ValueError('--model requires an agent, goal, senate, or swarm definition')
-        if self.args.view and kind != 'swarm':
-            raise ValueError('--view currently requires a worker that publishes a swarm world')
         if self.args.parameters:
             with self.args.parameters.expanduser().open(encoding='utf-8') as source:
                 self.parameters = json.load(source)
@@ -185,7 +161,7 @@ class Run(SingleJob):
             prefix = 'env-' + prefix[:33]
         self.names = {'workers': f'{prefix}-workers-{self.id[:16]}'}
         self.record = {'id': self.id, 'manager': self.manager,
-            'name': f'{self.original.name}.{self.args.worker}', 'environment': self.original.name,
+            'name': self.args.name or f'{self.original.name}.{self.args.worker}', 'environment': self.original.name,
             'worker_name': self.args.worker, 'worker_kind': kind, 'request': self.args.request,
             'workspace': str(workspace), 'created_at': timestamp(), 'status': 'starting',
             'system': self.args.system, 'components': self.names, 'dcomp': self.dcomp,
@@ -204,19 +180,15 @@ class Run(SingleJob):
         mkdir(overlay_directory)
         self.overlay = overlay_directory / 'workers.json'
         write_json(self.overlay, effective)
+        # Only replace the dispatch file. Existing relative commands and named
+        # agent assets retain the locations selected by the environment.
         self.overlay_target = ('/opt/asys/environment/external/workers.json' if self.original.external
                                else '/opt/asys/environment/workers.json')
-        self.prepare_environment(environment, self.args.link, external=overlay_directory)
-        # Only replace the dispatch file. Existing relative commands and named
-        # agent assets must retain their original environment/bundle location.
-        self.record['external_directory'] = str(self.original.external) if self.original.external else None
+        self.prepare_environment(environment, self.args.link, configuration_directory=overlay_directory)
         if kind == 'swarm':
             self.record.update(swarm_state=f'jobs/{self.job_id}/swarm',
                                control_channel=f'swarm-{self.job_id}', world_channel=f'world-{self.job_id}',
                                channel=f'runtime/channels/swarm-{self.job_id}')
-            world = self.worker_definition['config'].get('world', {}) if self.worker_definition else {}
-            if world.get('view'):
-                self.record.update(retain_view(environment, world['view'], self.directory))
             self.outbound = Reader(direction_root(self.directory / 'runtime', self.record['control_channel'], 'out'))
         self.snapshot()
         self.start_workers()
@@ -225,10 +197,6 @@ class Run(SingleJob):
         if descriptor['definition'] != self.definition:
             raise LaunchError('The running environment does not match the selected worker bindings')
         self.queue = Queue(environment_root(self.directory / 'runtime', self.original.name))
-        if self.args.view:
-            from .swarm_view import Viewer
-            self.viewer = Viewer(self.directory, port=self.args.port).start()
-            self.say(f'Viewer: {self.viewer.url}')
 
     def worker_models(self):
         return self.models
@@ -296,15 +264,16 @@ class Run(SingleJob):
                 self.poll()
                 success = state['status'] == 'done'
                 result = state.get('result')
-                status = 'completed' if success else 'failed'
-                if isinstance(result, dict) and result.get('status') == 'cancelled':
+                status = {'done': 'completed', 'cancelled': 'cancelled'}.get(state['status'], 'failed')
+                if success and isinstance(result, dict) and result.get('status') == 'cancelled':
                     status = 'cancelled'
-                self.event('job.completed' if success else 'job.failed', jobId=self.job_id,
+                event = {'completed': 'job.completed', 'cancelled': 'job.cancelled', 'failed': 'job.failed'}[status]
+                self.event(event, jobId=self.job_id,
                            reason=state.get('error', ''))
                 self.record.update(status=status, error=state.get('error', ''))
                 write_json(self.directory / 'result.json', result)
                 self.snapshot()
-                if not success:
+                if status == 'failed':
                     raise LaunchError(state.get('error') or f"Job {state['status']}")
                 print(json.dumps(result, indent=2, ensure_ascii=False), flush=True)
                 return
@@ -315,18 +284,20 @@ class Run(SingleJob):
 
 
 def main(argv=None):
-    launcher = Run(arguments(sys.argv[1:] if argv is None else argv))
-    try:
-        code = run_job(launcher)
-        if code == 0 and launcher.record.get('status') == 'cancelled':
-            code = 130
-        if code == 0 and launcher.viewer is not None:
-            launcher.say('Run complete. The saved view remains available; press Ctrl-C to close it.')
-            try:
-                launcher.viewer.thread.join()
-            except KeyboardInterrupt:
-                pass
-        return code
-    finally:
-        if launcher.viewer is not None:
-            launcher.viewer.close()
+    args = arguments(sys.argv[1:] if argv is None else argv)
+    if args.workflow is not None or args.resume:
+        from .workflow import run as run_workflow
+        return run_workflow(args)
+    if args.input is not None:
+        try:
+            args.request = sys.stdin.read() if args.input == '-' else Path(args.input).expanduser().read_text(encoding='utf-8')
+            if not args.request.strip():
+                raise ValueError('Request input must be nonempty')
+        except (OSError, ValueError) as error:
+            print(f'error: {error}', file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            return 130
+    launcher = Run(args)
+    code = run_job(launcher)
+    return 130 if code == 0 and launcher.record.get('status') == 'cancelled' else code

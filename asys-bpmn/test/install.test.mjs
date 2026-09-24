@@ -17,8 +17,6 @@ test('make install is self-contained and preserves saved run records', async t =
   await mkdir(join(project, 'bin'), { recursive: true });
   await cp(join(source, 'Makefile'), join(project, 'Makefile'));
   await cp(join(source, 'tools'), join(project, 'tools'), { recursive: true });
-  await cp(join(source, 'python'), join(project, 'python'), { recursive: true });
-  await cp(join(source, 'tools/asys-bpmn'), join(project, 'bin/asys-bpmn'));
   await cp(join(source, '../asys-runtime/asys_runtime'), join(root, 'checkout/asys-runtime/asys_runtime'), { recursive: true });
   await cp(join(source, '../asys-runtime/LICENSE.multiagent'), join(root, 'checkout/asys-runtime/LICENSE.multiagent'));
   await cp(join(source, '../LICENSE'), join(root, 'checkout/LICENSE'));
@@ -26,6 +24,7 @@ test('make install is self-contained and preserves saved run records', async t =
   await cp(join(source, '../tools'), join(root, 'checkout/tools'), { recursive: true });
   await cp(join(source, '../python'), join(root, 'checkout/python'), { recursive: true });
   await cp(join(source, '../skills'), join(root, 'checkout/skills'), { recursive: true });
+  await cp(join(source, '../designs'), join(root, 'checkout/designs'), { recursive: true });
   const destination = join(root, 'staged');
   const prefix = join(destination, 'opt/asys');
   const stateHome = join(root, 'state');
@@ -38,9 +37,9 @@ test('make install is self-contained and preserves saved run records', async t =
   await exec('make', ['--no-print-directory', '-C', project, '-o', 'build', 'install',
     'PREFIX=/opt/asys', `DESTDIR=${destination}`]);
   await rm(join(root, 'checkout'), { recursive: true, force: true });
-  const binary = join(prefix, 'bin/asys-bpmn');
+  const binary = join(prefix, 'bin/asys-run');
   const { stdout } = await exec('python3', ['-I', '-S', binary, '--help'], { cwd: root });
-  assert.match(stdout, /Usage: asys-bpmn /);
+  assert.match(stdout, /usage: asys-run /);
   assert.match(stdout, /WORKFLOW\.bpmn/);
   const host = join(prefix, 'bin/asys');
   const help = (await exec('python3', ['-I', '-S', host, '--help'], { cwd: root })).stdout;
@@ -54,7 +53,7 @@ test('make install is self-contained and preserves saved run records', async t =
   assert.deepEqual(runs[0].components, JSON.parse(saved).components);
   assert.equal(await readFile(join(run, 'run.json'), 'utf8'), saved);
   // Observation continues to work independently of the BPMN installation.
-  await rm(join(prefix, 'share/asys-bpmn'), { recursive: true });
+  await assert.rejects(readFile(join(prefix, 'bin/asys-bpmn')), {code:'ENOENT'});
   const logs = (await exec('python3', ['-I', '-S', host, 'logs', 'previous-run'], { cwd: root, env })).stdout;
   assert.equal(logs, 'RUN COMPLETED Previous workflow\n');
 });

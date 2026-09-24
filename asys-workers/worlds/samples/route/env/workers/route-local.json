@@ -5,13 +5,6 @@
   "config": {
     "version": 1,
     "world": {
-      "command": [
-        "python3",
-        "/opt/asys/asys-workers/worlds/torus/serve.py",
-        "--evaluator",
-        "[\"python3\", \"/opt/asys/asys-workers/worlds/samples/route/evaluate.py\"]"
-      ],
-      "view": "worlds/torus/view.mjs",
       "settings": {
         "problem": {
           "name": "Delivery loop",
@@ -65,7 +58,8 @@
         "width": 4,
         "height": 4,
         "radius": 1
-      }
+      },
+      "package": "worlds/torus"
     },
     "agents": {
       "count": 4,

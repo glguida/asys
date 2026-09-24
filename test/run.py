@@ -7,13 +7,15 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'python'), str(ROOT / 'asys-runtime'), str(ROOT / 'asys-workers')]
-from asys.run import Run, arguments, execution_models, retain_view, selected_definition
-from asys.execution import human_workers
+from asys.run import Run, arguments, execution_models, main, selected_definition
+from asys.execution import human_workers, worker_kinds
 from asys.runs import Runs
 from asys.worker_definitions import bind_definition
 
@@ -34,7 +36,7 @@ class LocalRun(Run):
         if command[0] == 'docker':
             assert command[1:3] == ['image', 'inspect']
             return 'sha256:fixture'
-        operation = command[1]
+        operation = command[len(self.dcomp)] if command[:len(self.dcomp)] == self.dcomp else command[1]
         if operation == 'version':
             return json.dumps({'api_version': 2, 'version': '0.3.1'})
         if operation == 'add-component':
@@ -49,7 +51,7 @@ for spec in environment.types.values():
     # Only the container transport and model executable are substituted.
     if spec['command'][0] == '/opt/asys/asys-workers/tools/asys-worker':
         spec['command'] = [sys.executable, '-c', sys.argv[5]]
-    spec['env']['ASYS_WORKERS_DIR'] = sys.argv[2]
+    spec['env']['ASYS_WORKERS_DIR'] = Environment(sys.argv[2]).workers_directory.as_posix()
 with environment.register(sys.argv[4]) as root:
     runtime = Runtime(root, environment.types)
     signal.signal(signal.SIGTERM, lambda *_: runtime.stop())
@@ -113,13 +115,89 @@ class RunTests(unittest.TestCase):
         self.assertEqual((self.workspace / 'source.txt').read_text(), 'original:edited')
         self.assertEqual(sorted(p.name for p in self.workspace.iterdir()), ['source.txt'])
         self.assertEqual(launcher.queue.request(launcher.job_id)['type'], 'writer')
-        self.assertIsNone(launcher.record['external_directory'])
+        self.assertNotIn('external_directory', launcher.record)
         config = json.loads(launcher.overlay.read_text())
         self.assertEqual(config['types']['other']['command'], ['./tools/another'])
         self.assertIn(f'{launcher.overlay},/opt/asys/environment/workers.json,ro', launcher.launch_arguments)
         observed = Runs(self.root / 'state/runs').snapshot(launcher.directory)
         self.assertEqual(observed['status'], 'completed')
         self.assertEqual(observed['jobs'][0]['name'], 'writer')
+        self.assertEqual(observed['worker_kinds'], {'writer': 'program'})
+
+    def test_worker_kind_snapshot_resolves_authored_names_without_direct_run_extra_dependencies(self):
+        definition = {'version': 1, 'kind': 'goal', 'config': {}}
+        (self.environment / 'workers').mkdir()
+        (self.environment / 'workers/quality-check.json').write_text(json.dumps(definition))
+        bind_definition(self.environment, 'quality-check', definition)
+        config = json.loads((self.environment / 'workers.json').read_text())
+        self.assertEqual(worker_kinds(self.environment, config),
+                         {'writer': 'program', 'other': 'program', 'quality-check': 'goal'})
+        (self.environment / 'workers/quality-check.json').unlink()
+        self.assertEqual(worker_kinds(self.environment, config, selected_name='writer'), {'writer': 'program'})
+        self.assertEqual(worker_kinds(self.environment, config, definition, 'quality-check'), {'quality-check': 'goal'})
+
+    def test_host_rejects_a_separate_worker_directory(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            self.launcher('writer', '--external', str(self.root / 'other'))
+        self.assertEqual(error.exception.code, 2)
+        self.assertFalse((self.root / 'state').exists())
+
+    def test_environment_configuration_keeps_its_own_resource_directory(self):
+        directory = self.environment / 'external'
+        directory.mkdir()
+        (directory / 'workers.json').write_bytes((self.environment / 'workers.json').read_bytes())
+        launcher = self.launcher()
+        result = self.execute(launcher)
+        self.assertEqual(result['workers'], str(directory))
+        self.assertEqual(launcher.overlay_target, '/opt/asys/environment/external/workers.json')
+        self.assertIn(f'{launcher.overlay},{launcher.overlay_target},ro', launcher.launch_arguments)
+        self.assertNotIn(f'{directory},/opt/asys/environment/external,ro', launcher.launch_arguments)
+        self.assertNotIn('--arg=--external', launcher.launch_arguments)
+        self.assertNotIn('external_directory', launcher.record)
+
+    def test_running_program_cancelled_through_queue_exits_130_and_cleans_up(self):
+        config = json.loads((self.environment / 'workers.json').read_text())
+        config['types']['writer']['command'] = [sys.executable, '-c',
+            "from pathlib import Path; import time; Path('started').touch(); time.sleep(30)"]
+        (self.environment / 'workers.json').write_text(json.dumps(config))
+        launcher = self.launcher()
+        finished = threading.Event()
+        failures = []
+
+        def cancel_running_job():
+            try:
+                deadline = time.monotonic() + 10
+                while not (self.workspace / 'started').exists():
+                    if finished.wait(.02):
+                        raise AssertionError('Launcher exited before the program started')
+                    if time.monotonic() >= deadline:
+                        raise AssertionError('Program did not start')
+                self.assertEqual(launcher.queue.state(launcher.job_id)['status'], 'running')
+                launcher.queue.cancel(launcher.job_id)
+            except Exception as error:
+                failures.append(error)
+
+        control = threading.Thread(target=cancel_running_job)
+        control.start()
+        try:
+            with patch('asys.run.Run', return_value=launcher), contextlib.redirect_stdout(io.StringIO()) as output:
+                code = main([str(self.environment), 'writer', 'Wait for cancellation.'])
+        finally:
+            finished.set()
+            control.join(timeout=12)
+        self.assertFalse(control.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(code, 130)
+        self.assertEqual(launcher.queue.state(launcher.job_id)['status'], 'cancelled')
+        self.assertEqual(json.loads(output.getvalue()), None)
+        self.assertEqual(json.loads((launcher.directory / 'result.json').read_text()), None)
+        record = json.loads((launcher.directory / 'run.json').read_text())
+        self.assertEqual(record['status'], 'cancelled')
+        self.assertTrue(record['components_removed'])
+        events = [json.loads(line)['type'] for line in (launcher.directory / 'events.jsonl').read_text().splitlines()]
+        self.assertIn('job.cancelled', events)
+        self.assertNotIn('job.failed', events)
+        self.assertEqual(launcher.owned, [])
 
     def test_named_definition_is_snapshotted_and_preserves_other_bindings(self):
         definition = {'version': 1, 'kind': 'goal', 'config': {'maxAttempts': 2}}
@@ -182,25 +260,41 @@ class RunTests(unittest.TestCase):
         self.execute(launcher)
         self.assertEqual(launcher.worker_models(), {})
 
-    def test_renderer_assets_are_retained_without_world_executables(self):
-        view = self.environment / 'worlds/example'
-        view.mkdir(parents=True)
-        (view / 'view.mjs').write_text('export function mount() {}')
-        (view / 'style.css').write_text('body {}')
-        (view / 'serve.py').write_text('not a browser resource')
-        saved = self.root / 'saved'
-        saved.mkdir()
-        meta = retain_view(self.environment, 'worlds/example/view.mjs', saved)
-        self.assertEqual(meta['view_format'], 'module')
-        self.assertEqual(sorted(p.name for p in (saved / 'view').iterdir()), ['style.css', 'view.mjs'])
-        (view / 'escape.js').symlink_to(self.root / 'private.js')
-        second = self.root / 'second'
-        second.mkdir()
-        with self.assertRaisesRegex(ValueError, 'symlinks'):
-            retain_view(self.environment, 'worlds/example/view.mjs', second)
-        with self.assertRaisesRegex(ValueError, 'relative'):
-            retain_view(self.environment, '../private.js', second)
+    def test_selected_program_and_agent_do_not_provision_unrelated_invalid_world(self):
+        config = json.loads((self.environment / 'workers.json').read_text())
+        config['types']['unused'] = {'command': ['/opt/asys/asys-workers/tools/asys-worker',
+                                               '--definition', '/opt/asys/environment/workers/unused.json']}
+        (self.environment / 'workers.json').write_text(json.dumps(config))
+        (self.environment / 'workers').mkdir()
+        (self.environment / 'workers/unused.json').write_text(json.dumps({'version': 1, 'kind': 'swarm',
+            'config': {'world': {'package': 'worlds/missing'}}}))
+        for name, options in [('writer', []), ('simple', ['--model', 'fixture/model'])]:
+            with self.subTest(name=name), patch('asys.world_packages.resolve_package') as resolve:
+                launcher = self.launcher(name, *options)
+                self.execute(launcher)
+                self.assertEqual(launcher.record['world_components'], {})
+                self.assertEqual(launcher.owned, [launcher.names['workers']])
+                resolve.assert_not_called()
+                self.assertTrue(launcher.close())
 
+    def test_selected_program_and_agent_do_not_require_an_unrelated_human_dependency(self):
+        config = json.loads((self.environment / 'workers.json').read_text())
+        config['types']['unused'] = {'command': ['/opt/asys/asys-workers/tools/asys-worker',
+                                               '--definition', '/opt/asys/environment/workers/unused.json']}
+        (self.environment / 'workers.json').write_text(json.dumps(config))
+        (self.environment / 'workers').mkdir()
+        definition = self.environment / 'workers/unused.json'
+        definition.write_text(json.dumps({'version': 1, 'kind': 'goal', 'config': {}}))
+        for missing in (False, True):
+            if missing:
+                definition.unlink()
+            for name, options in [('writer', []), ('simple', ['--model', 'fixture/model'])]:
+                with self.subTest(name=name, missing=missing), patch('asys.execution.ensure_human') as ensure:
+                    launcher = self.launcher(name, *options)
+                    self.execute(launcher)
+                    ensure.assert_not_called()
+                    self.assertNotIn('human', launcher.record['links'])
+                    self.assertTrue(launcher.close())
 
 if __name__ == '__main__':
     unittest.main()

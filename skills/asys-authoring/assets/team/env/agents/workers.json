@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "name": "report-agents",
+  "description": "Report implementer and reviewer; configure models in the named definitions before running.",
+  "types": {
+    "implementer": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/implementer.json"
+      ]
+    },
+    "reviewer": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/reviewer.json"
+      ]
+    },
+    "program": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-program"
+      ]
+    },
+    "human": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-human"
+      ]
+    },
+    "goal": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/goal.json"
+      ]
+    }
+  }
+}

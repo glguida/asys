@@ -39,16 +39,12 @@ class ArgumentTests(unittest.TestCase):
                 self.assertEqual(arguments([command]).root, Path('/selected/state'))
 
     def test_all_job_launchers_select_the_same_system_root(self):
-        from asys.goal import arguments as goal_arguments
-        from asys.oneshot import arguments as oneshot_arguments
-        from asys.senate import arguments as senate_arguments
+        from asys.run import arguments as run_arguments
         from asys.human_service import SharedHumanService
-        bpmn_arguments = runpy.run_path(str(ROOT / 'asys-bpmn/tools/asys-bpmn'))['arguments']
+        bpmn_arguments = run_arguments
         with patch.dict(os.environ, {'ASYS_STATE_ROOT': '/ambient/state'}):
-            for parse, argv in [(goal_arguments, ['env', 'goal']),
-                                (oneshot_arguments, ['env', 'prompt']),
-                                (senate_arguments, ['env', 'topic', '--senate', 'senate.json']),
-                                (bpmn_arguments, ['run', 'workflow.bpmn', 'env'])]:
+            for parse, argv in [(run_arguments, ['env', 'simple', 'prompt']),
+                                (bpmn_arguments, ['env', 'workflow.bpmn'])]:
                 self.assertEqual(parse(argv).root, Path('/ambient/state'))
                 selected = parse([*argv, '--root', '/explicit/state'])
                 self.assertEqual(selected.root, Path('/explicit/state'))
@@ -61,6 +57,17 @@ class ArgumentTests(unittest.TestCase):
         self.assertIsNone(arguments(['logs', 'latest']).lines)
         self.assertEqual(arguments(['logs', '--source', 'components']).lines, 50)
         self.assertEqual(arguments(['logs', 'latest', 'worker']).lines, 50)
+
+    def test_resume_rejects_new_execution_configuration(self):
+        from asys.run import arguments as run_arguments
+        for extra in (['--workspace', '/new'], ['--system', 'new'], ['--model', 'account/model'],
+                      ['--dcomp-state-root', '/new'], ['--runtime-root', '/new'], ['-L', 'inference=@new'],
+                      ['env', 'worker', 'request'], ['--parameters', 'limits.json'], ['--input', 'new.md']):
+            with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                run_arguments(['--resume', 'saved', *extra])
+            self.assertEqual(error.exception.code, 2)
+        args = run_arguments(['--resume', 'saved', '--root', '/state', '--human'])
+        self.assertEqual((args.run, args.root, args.human), ('saved', Path('/state'), True))
 
     def test_init_accepts_intermixed_options_and_uses_its_directory_argument(self):
         args = arguments(['init', '--group', 'asys', '/state', '--dcomp', '/dcomp'])

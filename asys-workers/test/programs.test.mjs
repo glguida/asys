@@ -443,15 +443,20 @@ for (const content of ['{invalid', 'null', '{"exception":""}', '{"exception":fal
   });
 }
 
-test('human jobs call their dcomp input and publish the answer into their own result file', async t => {
+for (const input of [
+  { prompt: 'Review the board', request: 'Explicit prompt takes precedence', form: { type: 'boolean' } },
+  { request: 'Review the board', form: { type: 'boolean' } },
+]) {
+test(`human jobs accept ${input.prompt ? 'prompt' : 'request'} and publish the answer into their own result file`, async t => {
   const f = await fixture(t);
   const service = new HumanService(join(f.root, 'human-service'));
   t.after(() => service.close());
   const target = await listen(t, humanServer(service), join(f.root, 'human.sock'));
   f.start({ DCOMP_IN_HUMAN: target, DCOMP_COMPONENT_NAME: 'workers' });
-  await f.queue.submit('human', 'approval', { input: { prompt: 'Review the board', form: { type: 'boolean' } }, metadata: { purpose: 'PCB review' } });
+  await f.queue.submit('human', 'approval', { input, metadata: { purpose: 'PCB review' } });
   const task = await until(() => service.listTasks().tasks[0]);
   assert.equal(task.id, 'workers.approval');
+  assert.deepEqual(JSON.parse(task.inputJson), { ...input, prompt: 'Review the board' });
   const metadata = JSON.parse(task.metadataJson);
   assert.equal(metadata.component, 'workers');
   assert.equal(metadata.purpose, 'PCB review');
@@ -463,6 +468,7 @@ test('human jobs call their dcomp input and publish the answer into their own re
   assert.equal(outcome.result, false);
   assert.equal(JSON.parse(await readFile(join(f.queue.executionDirectory('approval'), 'result.json'), 'utf8')), false);
 });
+}
 
 for (const phase of ['implement', 'verify']) {
   for (const action of ['retry', 'stop', 'cancel']) {

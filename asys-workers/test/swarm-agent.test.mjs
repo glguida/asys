@@ -97,6 +97,29 @@ test('models without function tools receive a schema and return strict JSON', as
   assert.equal(JSON.parse(f.requests[0].frame.context.messages[0].content[0].text).objective, null);
 });
 
+test('effective reasoning options are saved before inference and explicit settings win', async t => {
+  for (const [name, capable, options, reasoning] of [
+    ['default', true, {}, 'medium'],
+    ['override', true, { reasoning: 'high', maxTokens: 900 }, 'high'],
+    ['off', true, { reasoning: 'off' }, 'off'],
+    ['nonreasoning', false, {}, undefined],
+  ]) await t.test(name, async t => {
+    const f = await fixture(t, { input: { options },
+      models: [{ ...model, capabilities: { ...model.capabilities, reasoning: capable } }] });
+    const expected = { ...options, maxTokens: options.maxTokens ?? 4096 };
+    if (reasoning !== undefined) expected.reasoning = reasoning;
+    f.provider.infer = async function* (request) {
+      assert.deepEqual(JSON.parse(request.payload).options, expected);
+      const saved = (await f.saved()).agent;
+      assert.deepEqual(saved.inferenceOptions, expected);
+      assert.equal(saved.session.entries.length, 1, 'settings are durable before the response');
+      yield finish(toolResponse(plan));
+    };
+    await f.run();
+    assert.deepEqual((await f.saved()).agent.inferenceOptions, expected);
+  });
+});
+
 test('shared and selected-agent skill instructions reach Provider without resources or unrelated agents', async t => {
   const f = await fixture(t);
   for (const [root, name, text] of [
@@ -228,6 +251,9 @@ test('schema and local control options are rejected before inference', async t =
     [{ actionSchema: { $ref: 'https://example.invalid/schema.json' } }, /Invalid actionSchema/],
     [{ options: { tools: [{ name: 'bash' }] } }, /options.tools/],
     [{ options: { env: { TOKEN: 'untrusted' } } }, /options.env/],
+    [{ options: { apiKey: 'untrusted' } }, /options.apiKey/],
+    [{ options: { headers: { authorization: 'untrusted' } } }, /options.headers/],
+    [{ options: { signal: {} } }, /options.signal/],
     [{ options: { samplingParams: { model: 'unselected-model' } } }, /options.samplingParams/],
     [{ timeoutSeconds: 0 }, /timeoutSeconds/],
     [{ objective: 'A text claim is not a machine-checkable objective' }, /objective must be a JSON object/],
@@ -297,6 +323,56 @@ test('streaming emits actual text before the terminal transcript entry', async t
   } finally { release.resolve(); }
   await running;
   assert.equal((await f.saved()).agent.session.entries.length, 2);
+});
+
+test('readable thinking streams and the entire response survives valid or invalid plans', async t => {
+  for (const valid of [true, false]) await t.test(valid ? 'valid' : 'invalid', async t => {
+    const thinking = { type: 'thinking', thinking: 'Compare the observed alternatives.', thinkingSignature: 'test-signature' };
+    const response = toolResponse(valid ? plan : { ...plan, actions: [{ type: 'invalid' }] });
+    response.content.unshift(thinking);
+    const f = await fixture(t);
+    const visible = Promise.withResolvers(), release = Promise.withResolvers();
+    f.provider.infer = async function* () {
+      yield { payload: JSON.stringify({ type: 'thinking_delta', contentIndex: 0,
+        delta: thinking.thinking, partial: assistant([thinking], 'pending') }) };
+      visible.resolve();
+      await release.promise;
+      yield finish(response);
+    };
+    const running = f.run();
+    try {
+      await visible.promise;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(f.events.some(event => event.type === 'agent.message_delta'
+        && event.kind === 'thinking' && event.delta === thinking.thinking));
+      assert.equal((await f.saved()).agent.session.entries.length, 1);
+    } finally { release.resolve(); }
+    if (valid) await running;
+    else await assert.rejects(running, /violates actionSchema/);
+    const saved = (await f.saved()).agent;
+    assert.equal(saved.status, valid ? 'done' : 'failed');
+    assert.deepEqual(saved.session.entries.at(-1).message, response);
+  });
+});
+
+test('an interrupted proposal preserves thinking but produces no plan result', async t => {
+  for (const aborted of [false, true]) await t.test(aborted ? 'abort' : 'transport', async t => {
+    const partial = toolResponse(plan);
+    partial.content.unshift({ type: 'thinking', thinking: 'Unfinished comparison.', thinkingSignature: 'test-signature' });
+    const f = await fixture(t);
+    f.provider.infer = async function* () {
+      yield { payload: JSON.stringify({ type: 'thinking_delta', contentIndex: 0,
+        delta: partial.content[0].thinking, partial }) };
+      if (aborted) f.controller.abort(new Error('Operator stopped the run'));
+      throw new Error('Fixture transport failure');
+    };
+    await assert.rejects(f.run(), aborted ? /Operator stopped/ : /Fixture transport failure/);
+    const saved = (await f.saved()).agent;
+    assert.equal(saved.status, aborted ? 'cancelled' : 'failed');
+    assert.equal(saved.result, undefined);
+    assert.equal(saved.session.entries.at(-1).message.stopReason, aborted ? 'aborted' : 'error');
+    assert.deepEqual(saved.session.entries.at(-1).message.content, partial.content);
+  });
 });
 
 test('the executable writes a runtime result through the real Provider socket protocol', async t => {

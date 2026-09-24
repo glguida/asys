@@ -1,5 +1,10 @@
 # asys-runtime
 
+This is the component-level execution and channel contract. Its internal
+`--root` selects a runtime queue or channel directory. Public asys host tools
+instead use `--root` for the parent state directory containing runs, inference
+and Human records; use `asys-run` for normal worker and workflow execution.
+
 A filesystem job queue whose job types select programs and arguments. Producers
 publish work, runtimes claim jobs for their configured types, and programs return
 results. Multiple runtimes can share a queue.
@@ -91,7 +96,7 @@ The [worker environments](../asys-workers/env) provide concrete examples.
 
 `workers.json` uses the job-type format below, with environment fields:
 `name` is required, `description` is optional text, and `egress` is an optional
-boolean, defaulting to false. `asys-bpmn` and `asys-oneshot` use `egress` to configure the
+boolean, defaulting to false. `asys-bpmn` and `asys-run` use `egress` to configure the
 worker container's outbound network access. The runtime itself inherits the
 network of the process or container in which it runs. Names use the same syntax
 as job types. Executable paths containing `/` resolve against the definition

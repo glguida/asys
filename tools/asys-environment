@@ -5,7 +5,7 @@ import sys
 
 root = Path(__file__).resolve().parents[1]
 for directory in (root / 'asys-runtime', root / 'asys-workers', root / 'python',
-                  root / 'share/asys/python', root / 'share/asys-swarm/python'):
+                  root / 'share/asys/python'):
     if directory.is_dir():
         sys.path.insert(0, str(directory))
 from asys.environment import main

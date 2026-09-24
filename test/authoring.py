@@ -31,8 +31,9 @@ class AuthoringTests(unittest.TestCase):
         self.env['EDITOR'] = f'{shlex.quote(sys.executable)} {shlex.quote(str(self.editor))}'
 
     def invoke(self, utility, *args, success=True):
+        arguments = [args[0], str(self.environment), *args[1:]]
         result = subprocess.run([sys.executable, str(ROOT / f'tools/asys-{utility}'),
-            str(self.environment), *map(str, args)], env=self.env, text=True,
+            *map(str, arguments)], env=self.env, text=True,
             capture_output=True, timeout=15)
         if success:
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -68,14 +69,14 @@ class AuthoringTests(unittest.TestCase):
             self.assertEqual(final['types'][name]['command'], definition_command(name))
             self.assertNotIn(str(self.environment), ' '.join(final['types'][name]['command']))
         self.assertEqual((self.environment / 'agents/designer/prompt.md').read_text(), '')
-        self.assertEqual(len(list(self.environment.rglob('Dockerfile'))), 1)
+        self.assertEqual(len(list(self.environment.rglob('Dockerfile'))), 2)
         self.assertNotIn('mission', load_definition(self.environment, 'search')['config'])
         self.assertIn('search-step', final['types'])
         self.assertEqual(final['types']['search-step']['command'],
             ['/opt/asys/asys-workers/tools/asys-swarm-agent', '--agent', 'search-member'])
         self.assertTrue((self.environment / 'agents/search-member/prompt.md').is_file())
         self.assertTrue((self.environment / 'worlds/search/view.mjs').is_file())
-        completed = subprocess.run([sys.executable, str(self.environment / 'programs/search-evaluate.py')],
+        completed = subprocess.run([sys.executable, str(self.environment / 'worlds/search/component/evaluate.py')],
             input='{"candidate":{},"problem":{}}', capture_output=True, text=True, check=True)
         self.assertFalse(json.loads(completed.stdout)['accepted'])
 
@@ -96,7 +97,7 @@ class AuthoringTests(unittest.TestCase):
         from worlds.common import ArtifactWorld, Evaluator
         self.invoke('workers', 'add', 'swarm', 'search')
         definition = load_definition(self.environment, 'search')
-        evaluator = Evaluator([sys.executable, str(self.environment / 'programs/search-evaluate.py')])
+        evaluator = Evaluator([sys.executable, str(self.environment / 'worlds/search/component/evaluate.py')])
         world = ArtifactWorld('leaderboard', evaluator)
         with self.assertRaisesRegex(ValueError, 'Configure this evaluator'):
             world.initialize(definition['config']['world']['settings'], ['a-1', 'a-2'], 0)
@@ -221,7 +222,7 @@ class AuthoringTests(unittest.TestCase):
     def test_file_valued_parent_paths_fail_before_creating_assets_or_committing_edits(self):
         self.invoke('workers', 'add', 'goal', 'build')
         bindings = (self.environment / 'workers.json').read_bytes()
-        (self.environment / 'programs').write_text('Keep this existing file.')
+        (self.environment / 'worlds').write_text('Keep this existing file.')
         self.invoke('workers', 'add', 'swarm', 'search', success=False)
         self.assertEqual((self.environment / 'workers.json').read_bytes(), bindings)
         self.assertFalse((self.environment / 'agents').exists())
@@ -250,7 +251,7 @@ class AuthoringTests(unittest.TestCase):
                             raise OSError('Injected binding failure')
                     return real_json(path, value, **kwargs)
                 def write_text(path, text, **kwargs):
-                    if stage == 'asset' and Path(path).name == 'search-evaluate.py':
+                    if stage == 'asset' and Path(path).name == 'evaluate.py':
                         raise OSError('Injected asset failure')
                     return real_text(path, text, **kwargs)
                 with mock.patch.object(authoring, 'write_json', write_json), \

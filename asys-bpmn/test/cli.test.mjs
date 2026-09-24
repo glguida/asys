@@ -9,20 +9,15 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const exec = promisify(execFile);
-const cli = fileURLToPath(new URL('../tools/asys-bpmn', import.meta.url));
+const cli = fileURLToPath(new URL('../../tools/asys-run', import.meta.url));
 const workflow = fileURLToPath(new URL('../examples/hello/workflow.bpmn', import.meta.url));
 const environment = fileURLToPath(new URL('../examples/hello/env/dummy', import.meta.url));
 
-test('the worker override is internal and does not appear in public help', async () => {
-  const { stdout } = await exec('python3', [cli, 'run', '--help']);
+test('the host accepts one environment and rejects a separate worker directory', async () => {
+  const { stdout } = await exec('python3', [cli, '--help']);
   assert.doesNotMatch(stdout, /--external/);
-  const { stdout: selected } = await exec('python3', ['-c', `
-import runpy, sys
-module = runpy.run_path(sys.argv[1])
-args = module['arguments'](['run', 'workflow.bpmn', 'env', '--external', 'internal-workers'])
-print(args.external)
-`, cli]);
-  assert.equal(selected.trim(), 'internal-workers');
+  await assert.rejects(exec('python3', [cli, 'env', 'workflow.bpmn', '--external', 'another-directory']),
+    error => error.code === 2 && /unrecognized arguments: --external/.test(error.stderr));
 });
 
 test('resume preserves saved configuration, enforces launcher ownership and skips the previous failure', async () => {
@@ -36,7 +31,7 @@ test('resume preserves saved configuration, enforces launcher ownership and skip
 async function preparedVariables(t, text, stdin = false) {
   const root = await mkdtemp(join(tmpdir(), 'workflow-cli-request-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const args = ['run', workflow, environment, '--root', root];
+  const args = [environment, workflow, '--root', root];
   if (text !== undefined) {
     const path = join(root, 'design brief.md');
     if (!stdin) await writeFile(path, text);
@@ -48,7 +43,9 @@ async function preparedVariables(t, text, stdin = false) {
 import json, runpy, sys
 from unittest.mock import patch
 module = runpy.run_path(sys.argv[1])
-launcher = module['Launcher'](module['arguments'](sys.argv[2:]))
+from asys.run import arguments
+from asys.workflow import Launcher
+launcher = Launcher(arguments(sys.argv[2:]))
 try:
     with patch.object(launcher, 'command', side_effect=StopIteration):
         launcher.setup()
@@ -85,7 +82,7 @@ test('workflows without an input file need no request variables', async t => {
 test('Ctrl-C while waiting for stdin exits without creating components or run state', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'workflow-cli-input-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const child = spawn('python3', [cli, 'run', '--input', '-', workflow, '--root', root, environment]);
+  const child = spawn('python3', [cli, environment, workflow, '--input', '-', '--root', root]);
   t.after(() => { child.kill('SIGTERM'); child.stdin.destroy(); });
   let output = '';
   const closed = once(child, 'close');
@@ -105,7 +102,7 @@ test('dcomp without container user support is rejected before starting component
   t.after(() => rm(root, { recursive: true, force: true }));
   const dcomp = join(root, 'dcomp');
   await writeFile(dcomp, '#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:] == ["version", "--json"]\nprint(\'{"version":"0.3.0","api_version":2}\')\n', { mode: 0o755 });
-  const child = spawn('python3', [cli, 'run', workflow, environment, '--root', root], {
+  const child = spawn('python3', [cli, environment, workflow, '--root', root], {
     env: { ...process.env, DCOMP_BINARY: dcomp },
   });
   let error = '';
@@ -119,10 +116,12 @@ test('the launcher gives both components fixed queue, job and workspace mounts t
   const { stdout } = await exec('python3', ['-c', `
 import json, os, runpy, tempfile
 from pathlib import Path
-module = runpy.run_path(${JSON.stringify(fileURLToPath(new URL('../tools/asys-bpmn', import.meta.url)))})
+module = runpy.run_path(${JSON.stringify(fileURLToPath(new URL('../../tools/asys-run', import.meta.url)))})
+from asys.run import arguments
+from asys.workflow import Launcher
 temporary = tempfile.TemporaryDirectory()
 os.environ['ASYS_STATE_ROOT'] = str(Path(temporary.name) / 'other-system')
-launcher = module['Launcher'](module['arguments'](['run', 'workflow.bpmn', 'env', '--root', temporary.name]))
+launcher = Launcher(arguments(['env', 'workflow.bpmn', '--root', temporary.name]))
 launcher.directory = Path(temporary.name)
 (launcher.directory / 'config.json').write_text(json.dumps({'system_models': {'simple': 'account/goal'}, 'private': 'not mounted'}))
 launcher.record = {'links': {}, 'egress': False, 'workspace': str(Path.cwd())}

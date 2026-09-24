@@ -13,6 +13,7 @@ import uuid
 
 from asys.lifecycle import ComponentHost, LaunchError, Interrupted
 from asys.state import state_root
+from asys.options import ROOT_HELP, dcomp_options
 from asys.human_service import SharedHumanService, ensure_human
 from asys_runtime.files import write_json
 from asys_runtime.permissions import mkdir, shared, open_file
@@ -36,12 +37,10 @@ def arguments(argv):
     parser = argparse.ArgumentParser(prog="asys-human-prompt", description="Answer worker human requests, one at a time.", allow_abbrev=False)
     parser.add_argument("--private", action="store_true", help="export only COMPONENT.human, without binding @human_endpoint")
     parser.add_argument("--name", help="dcomp component name (default: generated)")
-    parser.add_argument("--system", default="asys", help="dcomp system (default: asys)")
     parser.add_argument("--claimant", default=getpass.getuser(), help="human identity for candidate checks (default: login name)")
     parser.add_argument("--root", type=Path, default=state_root(),
-                        metavar="DIRECTORY", help="asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)")
-    parser.add_argument("--dcomp-state-root", type=Path, metavar="DIRECTORY")
-    parser.add_argument("--runtime-root", type=Path, metavar="DIRECTORY", help="dcomp proxy root, if nondefault")
+                        metavar="DIRECTORY", help=ROOT_HELP)
+    dcomp_options(parser)
     parser.add_argument("--once", action="store_true", help="exit after completing one answer")
     display = parser.add_mutually_exclusive_group()
     display.add_argument("--plain", action="store_true", help="use line prompts (automatic when input or output is redirected)")

@@ -1,0 +1,98 @@
+/* Slate: serif typography, rounded marks and a cool, dark palette. */
+@font-face {
+  font-family: "Yrsa";
+  src: url("fonts/Yrsa-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Yrsa";
+  src: url("fonts/Yrsa-Bold.ttf") format("truetype");
+  font-weight: 600 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Yrsa";
+  src: url("fonts/Yrsa-Italic.ttf") format("truetype");
+  font-style: italic;
+  font-display: swap;
+}
+:root {
+  color-scheme: dark;
+  --carta: #101923;
+  --inchiostro: #eef4fa;
+  --campo: #1e2e40;
+  --rail: #546b82;
+  --quiet: #b0c0d1;
+  --verde: #78e0b5;
+  --goal: #67d8ef;
+  --senate: #c7a3ff;
+  --swarm: #ffb36a;
+  --blu: #8caaff;
+  --rosso: #ff8da6;
+  --giallo: #f1d36b;
+  --font: "Yrsa", Georgia, serif;
+  --mono: "Courier New", "Liberation Mono", monospace;
+  --task-shape: "M.25 0H.75Q1 0 1 .25V.75Q1 1 .75 1H.25Q0 1 0 .75V.25Q0 0 .25 0Z";
+  --gateway-shape: "M.5 0A.5 .5 0 1 1 .5 1A.5 .5 0 1 1 .5 0Z";
+  --task-clip: inset(0 round 25%);
+  --gateway-clip: circle(50%);
+}
+
+body { font-size: 17px; }
+h1, h2, h3, h4 { letter-spacing: -.01em; }
+h1 { font-size: 48px; }
+.masthead { background: #152231; border-bottom: 1px solid var(--rail); padding-block: 24px; }
+.identity .wordmark { letter-spacing: -.035em; font-weight: 700; font-size: 48px; }
+.identity .brand-logo { width: 44px; height: 44px; }
+.eyebrow, .section-number { color: var(--quiet); letter-spacing: .12em; font-size: 12px; }
+button, input, select { border-radius: 10px; }
+button:hover { background: var(--campo); }
+button:focus-visible, select:focus-visible, input:focus-visible,
+[role="button"]:focus-visible { outline-color: var(--goal); }
+input::placeholder { color: var(--quiet); opacity: 1; }
+.filters { background: #142131; border: 1px solid var(--rail); border-radius: 14px; padding: 18px 20px; }
+.filters label { font-size: 12px; }
+.filters select, .filters input { font-size: 16px; }
+.run-select { font-size: 19px; }
+.run-caption, .quiet { font-size: 14px; }
+.run-detail { border-top: 1px solid var(--rail); }
+.sequence { border-radius: 16px; background: #142131; padding-inline: 16px; }
+.workflow-node-hit { rx: 12px; }
+.symbol-legend { row-gap: 12px; }
+.symbol-legend button { font-size: 14px; }
+.selection-inspector { background: #142131; padding: 22px; border: 1px solid var(--rail); border-radius: 16px; }
+.selection-inspector h4 { font-size: 24px; }
+.selection-inspector p { font-size: 15px; }
+.console { background: #142131; border: 1px solid var(--rail); border-radius: 16px; padding: 22px; }
+.console h3 { letter-spacing: -.02em; }
+.console-heading h4 { font-size: 26px; }
+.console-heading p, .console-tabs button, .console-heading select { font-size: 15px; }
+.console-heading select { border-radius: 8px; }
+.message-markdown, .message-text, .message-value, .json-tree { font-family: var(--font); font-size: 16px; }
+.message-heading { color: var(--inchiostro); }
+.message-field, .message-group-label { color: var(--goal); }
+.message-markdown code, .message-code { color: var(--verde); }
+.message-markdown a, .message-text a { color: var(--blu); }
+.senate-viewport { background: #142131; border: 1px solid var(--rail); border-radius: 16px; padding: 16px; }
+.senate-arc { stroke-dasharray: 3 4; }
+.senate-dais { stroke: var(--senate); }
+.senate-name { fill: var(--inchiostro); }
+.senate-role { fill: var(--quiet); }
+.world-mount { background: #142131; padding: 22px; border: 1px solid var(--rail); border-radius: 16px; }
+.world-mount svg { font-family: var(--font); }
+.torus svg, .leader svg, .habitat-map { border-radius: 12px; }
+.torus svg rect[data-cell] { rx: 5px; }
+.habitat-map [data-cell] > rect:first-child { rx: 4px; }
+.world-mount h2, .world-mount h3, .world-mount h4 { font-size: 21px; }
+.world-mount p, .world-mount li, .leader td, .leader th { font-size: 15px; }
+.torus .torus-legend button, .habitat-legend button, .leader .leader-legend { font-size: 13px; }
+.habitat-selector { font-size: 14px; }
+.habitat-selector select { border-radius: 8px; }
+@media(max-width:640px) {
+  .filters, .world-mount, .console, .selection-inspector { padding: 16px; }
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--carta); }
+::-webkit-scrollbar-thumb { background: var(--rail); border: 2px solid var(--carta); border-radius: 8px; }
+::selection { background: #36526e; color: #ffffff; }

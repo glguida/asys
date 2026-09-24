@@ -67,7 +67,7 @@ def package_file(package, value, label):
 def validate_config(value, package=None, *, name='swarm'):
     value = deepcopy(json_value(value, limit=128 * 1024))
     object_fields(value, 'configuration', {'version', 'name', 'mission', 'world', 'objective',
-                                         'agents', 'limits', 'seed', 'view'})
+                                         'agents', 'limits', 'seed'})
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Swarm configuration version must be 1')
     value.setdefault('name', name)
@@ -77,23 +77,10 @@ def validate_config(value, package=None, *, name='swarm'):
         if len(value[field]) > (256 if field == 'name' else 32000):
             raise ValueError(f'{field} is too long')
     world = value.get('world')
-    object_fields(world, 'world', {'channel', 'settings', 'timeoutSeconds', 'command', 'view'})
-    if 'command' in world:
-        command = world['command']
-        if (not isinstance(command, list) or not 1 <= len(command) <= 64
-                or any(not isinstance(item, str) or not item or '\0' in item for item in command)
-                or sum(len(item.encode('utf-8')) for item in command) > 16384):
-            raise ValueError('world.command must be a nonempty argv array of at most 64 strings and 16384 bytes')
-        executable = Path(command[0])
-        if not executable.is_absolute() and '..' in executable.parts:
-            raise ValueError('world.command executable must remain inside the environment')
-    if 'view' in world:
-        view = world['view']
-        if (not isinstance(view, str) or not view or '\0' in view
-                or Path(view).is_absolute() or '..' in Path(view).parts):
-            raise ValueError('world.view must be an environment-relative file path')
-        if package is not None:
-            package_file(package, view, 'world.view')
+    object_fields(world, 'world', {'channel', 'settings', 'timeoutSeconds', 'package'})
+    if 'package' in world:
+        from asys.world_packages import package_reference
+        package_reference(world['package'])
     world.setdefault('channel', 'world')
     validate_name('world channel', world['channel'])
     if world['channel'] == 'swarm':
@@ -126,14 +113,6 @@ def validate_config(value, package=None, *, name='swarm'):
     value.setdefault('seed', 0)
     if type(value['seed']) is not int or not 0 <= value['seed'] <= 2**32 - 1:
         raise ValueError('seed must be an integer between 0 and 4294967295')
-    if value.get('view') is not None:
-        if package is None:
-            view = value['view']
-            if (not isinstance(view, str) or not view or '\0' in view
-                    or Path(view).is_absolute() or '..' in Path(view).parts):
-                raise ValueError('view must be a relative package file path')
-        else:
-            package_file(package, value['view'], 'view')
     return value
 
 

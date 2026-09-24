@@ -149,11 +149,13 @@ class MeasuredSampleTests(unittest.TestCase):
         self.assertEqual(best['score'], 16)
         self.assertEqual(self.evaluator()(best['candidate'], problem)['score'], 16)
 
-    def test_world_program_requires_explicit_domain_evaluator(self):
-        result = subprocess.run([sys.executable, str(ROOT / 'asys-workers/worlds/leaderboard/serve.py')],
-                                capture_output=True, text=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('--evaluator', result.stderr)
+    def test_bundled_component_requires_task_specific_evaluator_setup(self):
+        from asys.world_packages import resolve_package
+        package = resolve_package(ROOT, 'builtin:leaderboard')
+        evaluator = Evaluator([sys.executable, str(package['component'].parent / 'evaluate.py')])
+        report = evaluator({}, {})
+        self.assertFalse(report['accepted'])
+        self.assertIn('Configure this evaluator', report['reason'])
 
 
 if __name__ == '__main__':

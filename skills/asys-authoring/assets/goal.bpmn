@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:asys="urn:asys:workflow:1" id="GoalWorkflow" name="Implement and verify"
+  targetNamespace="urn:asys:skill:goal" expressionLanguage="feel">
+  <bpmn:process id="goal_workflow" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:task id="deliver" name="Implement and verify the goal">
+      <bpmn:extensionElements>
+        <asys:job type="goal" input="= {request: request}"/>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:endEvent id="end" name="Goal verified"/>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="deliver"/>
+    <bpmn:sequenceFlow id="finish" sourceRef="deliver" targetRef="end"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="GoalDiagram">
+    <bpmndi:BPMNPlane id="GoalPlane" bpmnElement="goal_workflow">
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start"><dc:Bounds x="152" y="30" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="deliver_di" bpmnElement="deliver"><dc:Bounds x="100" y="110" width="140" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_di" bpmnElement="end"><dc:Bounds x="152" y="240" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="begin_di" bpmnElement="begin"><di:waypoint x="170" y="66"/><di:waypoint x="170" y="110"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="finish_di" bpmnElement="finish"><di:waypoint x="170" y="190"/><di:waypoint x="170" y="240"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

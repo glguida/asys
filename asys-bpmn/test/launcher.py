@@ -20,11 +20,12 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
     (environment / 'workers.json').write_text(json.dumps(configuration))
     workflow_file = project / 'workflow.bpmn'
     portable = (root / 'examples/agent-task.bpmn').read_text()
+    # Program and model implementations share the example's request contract.
     workflow_file.write_text(portable)
     inputs = project / 'design brief.md'
     request = '# Design brief\n\nKeep spaces, --flags, `code`, and $literal text.\nUse a 30×20 mm board.\n'
     inputs.write_text(request, encoding='utf-8')
-    launcher = [sys.executable, str(root / 'tools/asys-bpmn')]
+    launcher = [sys.executable, str(root.parent / 'tools/asys-run')]
     observer = [sys.executable, str(root.parent / 'tools/asys')]
     cli_root = temp / 'launcher state'
     common = ['--root', str(cli_root), '--system', system, '--dcomp-state-root', str(temp / 'dcomp'),
@@ -32,7 +33,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
     previous_binary = os.environ.get('DCOMP_BINARY')
     os.environ['DCOMP_BINARY'] = dcomp[0]
     try:
-        example = json.loads(run(launcher, 'run', 'workflow.bpmn', 'env/dummy', *common,
+        example = json.loads(run(launcher, 'env/dummy', 'workflow.bpmn', *common,
                                  cwd=root / 'examples/hello'))
         assert example['greet']['message'] == 'Hello from asys.', example
         hello_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime)
@@ -44,29 +45,29 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         assert (hello_run.parent / 'run.log').is_file()
         assert 'RUN COMPLETED' in workflow_log and '[stdout]' not in workflow_log, workflow_log
         print('PASS: hello/workflow.bpmn with its own hello/env/dummy -> Hello from asys.', flush=True)
-        output = json.loads(run(launcher, 'run', 'workflow.bpmn', 'env/dummy', '--input', 'request.md', *common,
+        output = json.loads(run(launcher, 'env/dummy', 'workflow.bpmn', '--input', 'request.md', *common,
                                    cwd=root / 'examples/shared-workspace'))
         assert output['assemble'] == {'report': 'First section\nSecond section\n', 'sections': 2}, output
         assert (project / 'project/report.txt').read_text() == 'First section\nSecond section\n'
         assert (project / 'project/request.md').read_text() == (root / 'examples/shared-workspace/request.md').read_text()
         print('PASS: parallel writers and their join work in the supplied project directory', flush=True)
-        output = json.loads(run(launcher, 'run', '--input', str(inputs), str(workflow_file), *common, str(environment)))
+        output = json.loads(run(launcher, str(environment), str(workflow_file), '--input', str(inputs), *common))
         assert output['work'] == {'final': request, 'exception': None}, output
         hello = (root / 'examples/hello/workflow.bpmn').read_text()
         workflow_file.write_text(hello)
-        output = json.loads(run(launcher, 'run', str(workflow_file), str(environment), *common))
+        output = json.loads(run(launcher, str(environment), str(workflow_file), *common))
         assert output['greet']['message'] == 'Hello from asys.', output
         # Production inference still goes through the worker's dcomp input.
         workflow_file.write_text(portable)
-        output = json.loads(run(launcher, 'run', str(workflow_file), str(agent_environment),
+        output = json.loads(run(launcher, str(agent_environment), str(workflow_file),
                                 '--input', str(inputs), *common))
         assert output['work']['final'] == 'The draft is ready.', output
         workflow_file.write_text(hello.replace('type="program"', 'type="absent"'))
-        rejected = subprocess.run(launcher + ['run', str(workflow_file), str(environment), *common],
+        rejected = subprocess.run(launcher + [str(environment), str(workflow_file), *common],
                                   capture_output=True, text=True, timeout=180)
         assert rejected.returncode == 1 and 'does not define job types: absent' in rejected.stderr, rejected.stderr
         workflow_file.write_text(hello.replace('import json', 'import sys\nprint("The design input is invalid", file=sys.stderr)\nraise SystemExit(7)\nimport json'))
-        failed = subprocess.run(launcher + ['run', str(workflow_file), str(environment), *common],
+        failed = subprocess.run(launcher + [str(environment), str(workflow_file), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1 and 'Program exited with status 7' in failed.stderr, failed.stderr
         assert 'The design input is invalid' in failed.stderr and 'asys logs ' in failed.stderr, failed.stderr
@@ -88,7 +89,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         (image_environment / 'component.dcomp').write_text('\n'.join(manifest) + '\n')
         run(['docker'], 'build', '-t', tag, str(environment))
         workflow_file.write_text(hello.replace('import json', 'from pathlib import Path\np = Path("partial.txt")\nif not p.exists():\n    p.write_text("partial work")\n    raise SystemExit(17)\nassert p.read_text() == "partial work"\nassert Path("/opt/asys/environment/tag-fix-installed").exists()\nimport json'))
-        failed = subprocess.run(launcher + ['run', str(workflow_file), str(image_environment), *common],
+        failed = subprocess.run(launcher + [str(image_environment), str(workflow_file), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1 and 'status 17' in failed.stderr, failed.stderr
         retry_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime).parent
@@ -98,7 +99,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         (environment / 'tag-fix-installed').touch()
         run(['docker'], 'build', '-t', tag, str(environment))
         try:
-            output = json.loads(run(launcher, 'resume', retry_run.name[:8], '--root', str(cli_root)))
+            output = json.loads(run(launcher, '--resume', retry_run.name[:8], '--root', str(cli_root)))
             assert output['greet']['message'] == 'Hello from asys.', output
             observed = json.loads(run(observer, 'status', str(retry_run), '--json'))
             assert observed['status'] == 'completed' and len(observed['jobs']) == 2, observed
@@ -123,7 +124,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         run(['docker'], 'build', '-t', base_tag, str(base))
         dockerfile.write_text('\n'.join([f'FROM {base_tag}', *original[1:]]) + '\n')
         workflow_file.write_text(hello.replace('import json', 'from pathlib import Path\nif not Path("/opt/asys/environment/fix-installed").exists():\n    Path("partial.txt").write_text("partial work")\n    raise SystemExit(17)\nassert Path("partial.txt").read_text() == "partial work"\nimport json'))
-        failed = subprocess.run(launcher + ['run', str(workflow_file), str(environment), *common],
+        failed = subprocess.run(launcher + [str(environment), str(workflow_file), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1 and 'status 17' in failed.stderr, failed.stderr
         retry_run = max(cli_root.glob('runs/*/run.json'), key=lambda path: path.stat().st_mtime).parent
@@ -133,7 +134,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         (base / 'fix-installed').touch()
         (base / 'Dockerfile').write_text(original[0] + '\nUSER root\nCOPY fix-installed /opt/asys/environment/fix-installed\nUSER node\n')
         run(['docker'], 'build', '-t', base_tag, str(base))
-        output = json.loads(run(launcher, 'resume', retry_run.name, '--root', str(cli_root)))
+        output = json.loads(run(launcher, '--resume', retry_run.name, '--root', str(cli_root)))
         assert output['greet']['message'] == 'Hello from asys.', output
         observed = json.loads(run(observer, 'status', str(retry_run), '--json'))
         assert observed['status'] == 'completed' and len(observed['jobs']) == 2, observed
@@ -152,7 +153,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
             configuration['egress'] = egress
             (environment / 'workers.json').write_text(json.dumps(configuration))
             with log.open('a') as output_log:
-                process = subprocess.Popen(launcher + ['run', str(workflow_file), str(environment), *common],
+                process = subprocess.Popen(launcher + [str(environment), str(workflow_file), *common],
                                            stdout=output_log, stderr=output_log)
                 try:
                     def running_cli():
@@ -224,7 +225,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
                         assert stopped['status'] == 'failed' and stopped['components_removed'], stopped
                         assert all(json.loads(path.read_text())['type'] != 'cancel' for path in channel.glob('in/0*.json'))
                         release.touch()
-                        resumed = json.loads(run(launcher, 'resume', directory.name, '--root', str(cli_root)))
+                        resumed = json.loads(run(launcher, '--resume', directory.name, '--root', str(cli_root)))
                         assert resumed['greet']['message'] == 'Hello from asys.', resumed
                         jobs = list((directory / 'runtime/environments/simulation/jobs').iterdir())
                         assert len(jobs) == 2 and previous_job in jobs
@@ -240,7 +241,7 @@ def check_launcher(root, dcomp, system, temp, run, until, log, agent_environment
         configuration['types']['program']['command'] = []
         (environment / 'workers.json').write_text(json.dumps(configuration))
         existing_runs = set((cli_root / 'runs').iterdir())
-        failed = subprocess.run(launcher + ['run', str(workflow_file), str(environment), *common],
+        failed = subprocess.run(launcher + [str(environment), str(workflow_file), *common],
                                 capture_output=True, text=True, timeout=180)
         assert failed.returncode == 1, failed.stderr
         directory, = set((cli_root / 'runs').iterdir()) - existing_runs

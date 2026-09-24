@@ -9,11 +9,19 @@ import test from 'node:test';
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL('../tools/asys', import.meta.url));
-const launcher = fileURLToPath(new URL('../asys-bpmn/tools/asys-bpmn', import.meta.url));
+const launcher = fileURLToPath(new URL('../tools/asys-run', import.meta.url));
 const json = (path, value) => writeFile(path, JSON.stringify(value));
+
+test('dashboard observes nested worlds, replays durable frames, and scopes controls', async () => {
+  await exec('python3', [fileURLToPath(new URL('./dashboard.py', import.meta.url))]);
+});
 
 test('named workers share the ordinary queue, workspace, and host status', async () => {
   await exec('python3', [fileURLToPath(new URL('./run.py', import.meta.url))]);
+});
+
+test('host launchers provision isolated world components before workers and preserve saved views', async () => {
+  await exec('python3', [fileURLToPath(new URL('./world_host.py', import.meta.url))]);
 });
 
 test('environment and worker authoring preserve validated configuration', async () => {
@@ -99,20 +107,22 @@ test('asys ignores a previous terminal result when a run has been resumed', asyn
   assert.equal((await status()).status, 'completed');
 });
 
-test('asys-bpmn exposes execution commands and keeps its readable output as ordinary run logs', async t => {
+test('asys-run executes workflows and keeps readable output as ordinary run logs', async t => {
   const { run } = await fixture(t);
   const help = (await exec('python3', [launcher, '--help'])).stdout;
   assert.match(help, /run/);
   assert.match(help, /resume/);
   assert.doesNotMatch(help, /^\s+(?:top|logs|status)\s/m);
   for (const command of ['top', 'logs', 'status']) {
-    await assert.rejects(exec('python3', [launcher, command]), error => /unknown command/.test(error.stderr));
+    await assert.rejects(exec('python3', [launcher, command]), error => error.code===2 && /ENVIRONMENT and WORKER/.test(error.stderr));
   }
   await exec('python3', ['-c', `
 import runpy, sys
 from pathlib import Path
 module = runpy.run_path(sys.argv[1])
-launcher = module['Launcher'](module['arguments'](['run', 'workflow.bpmn', 'env']))
+from asys.run import arguments
+from asys.workflow import Launcher
+launcher = Launcher(arguments(['env', 'workflow.bpmn']))
 launcher.directory = Path(sys.argv[2])
 launcher.say('FINISHED  Generate reports')
 `, launcher, run]);

@@ -19,10 +19,11 @@ import (
 
 const Usage = `asys-inference manages a provider network exporting @inference_endpoint.
 
-Usage: asys-inference [--root DIR] COMMAND [ARGUMENTS] [OPTIONS]
+Usage: asys-inference COMMAND [ARGUMENTS] [OPTIONS]
 
---root selects the asys system root; inference state is stored in DIR/inference.
-The default is ASYS_STATE_ROOT, or the local state directory/asys.
+--root DIRECTORY selects the asys state directory; inference uses DIRECTORY/inference.
+Default: ASYS_STATE_ROOT, then XDG_STATE_HOME/asys, then ~/.local/state/asys.
+--root may appear before or after COMMAND. Use COMMAND --help for details.
 
   init [--system NAME] [--dcomp-state-root DIR] [--runtime-root DIR]
        [--prefix NAME] [--components-root DIR] [--empty]
@@ -37,13 +38,56 @@ The default is ASYS_STATE_ROOT, or the local state directory/asys.
   gateway [--name NAME] COMMAND      providers, models, usage, login, logout, rename
   version
 
-add extracts -L/--link INPUT=TARGET anywhere in its arguments. The first two
-remaining tokens are NAME and SOURCE; the rest are literal component arguments.
+add extracts -L/--link INPUT=TARGET from its arguments. The first two remaining
+tokens are NAME and SOURCE; the rest are component arguments. Use -- before
+literal component arguments that conflict with host options such as --root.
 
 init creates configuration only. Every other mutation saves its desired change
 and applies it. show and status never apply changes. Globals and external
 consumers live in the selected shared dcomp system, not in a host-wide registry.
 `
+
+// Only the common state option is lifted out of subcommands. The delimiter
+// protects component arguments so they cannot accidentally select host state.
+func extractRoot(args []string) (string, []string, error) {
+	var root string
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		if arg == "--root" || strings.HasPrefix(arg, "--root=") {
+			if arg == "--root" {
+				if i+1 == len(args) || strings.HasPrefix(args[i+1], "--") {
+					return "", nil, usage("--root requires DIRECTORY")
+				}
+				i++
+				root = args[i]
+			} else {
+				root = strings.TrimPrefix(arg, "--root=")
+			}
+			if root == "" {
+				return "", nil, usage("--root requires a nonempty DIRECTORY")
+			}
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	return root, rest, nil
+}
+
+func hostPath(value string) (string, error) {
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		value = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(value, "~"), "/"))
+	}
+	return filepath.Abs(value)
+}
 
 type CLI struct {
 	Out, Err   io.Writer
@@ -94,7 +138,7 @@ func parseOptions(flags *flag.FlagSet, args []string) error {
 
 func DefaultRoot() (string, error) {
 	if value := os.Getenv("ASYS_STATE_ROOT"); value != "" {
-		return filepath.Abs(value)
+		return hostPath(value)
 	}
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
@@ -104,7 +148,7 @@ func DefaultRoot() (string, error) {
 		}
 		base = filepath.Join(home, ".local/state")
 	}
-	return filepath.Abs(filepath.Join(base, "asys"))
+	return hostPath(filepath.Join(base, "asys"))
 }
 
 func (cli CLI) Run(ctx context.Context, args []string) int {
@@ -135,8 +179,13 @@ func (e *usageError) Error() string { return e.message }
 func usage(message string) error    { return &usageError{message} }
 
 func (cli CLI) run(ctx context.Context, args []string) error {
+	selectedRoot, remaining, err := extractRoot(args)
+	if err != nil {
+		return err
+	}
+	args = remaining
 	flags := cli.flags("asys-inference")
-	root := flags.String("root", "", "asys system root (inference state is stored in ROOT/inference)")
+	root := &selectedRoot
 	flags.Usage = func() { fmt.Fprint(cli.Err, Usage) }
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -163,11 +212,19 @@ func (cli CLI) run(ctx context.Context, args []string) error {
 	default:
 		return usage("unknown command " + command)
 	}
-	var err error
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--help" || arg == "-h" {
+			fmt.Fprint(cli.Out, commandHelp(command))
+			return nil
+		}
+	}
 	if *root == "" {
 		*root, err = DefaultRoot()
 	} else {
-		*root, err = filepath.Abs(*root)
+		*root, err = hostPath(*root)
 	}
 	if err != nil {
 		return err
@@ -240,10 +297,10 @@ func (cli CLI) run(ctx context.Context, args []string) error {
 
 func (cli CLI) init(ctx context.Context, store Store, args []string) error {
 	flags := cli.flags("init")
-	system := flags.String("system", "asys", "shared dcomp system")
+	system := flags.String("system", "asys", "dcomp namespace containing components and shared endpoints (default: asys)")
 	prefix := flags.String("prefix", "asys-inference", "physical component prefix")
-	droot := flags.String("dcomp-state-root", "", "shared dcomp state root")
-	rroot := flags.String("runtime-root", "", "shared dcomp proxy root")
+	droot := flags.String("dcomp-state-root", "", "dcomp state directory (default: DCOMP_STATE_ROOT or dcomp default)")
+	rroot := flags.String("runtime-root", "", "dcomp proxy/socket directory (default: dcomp default for its state directory)")
 	components := flags.String("components-root", "", "default component directory")
 	empty := flags.Bool("empty", false, "start with no gateway")
 	if err := flags.Parse(args); err != nil {
@@ -268,7 +325,7 @@ func (cli CLI) init(ctx context.Context, store Store, args []string) error {
 			return err
 		}
 	}
-	*droot, err = filepath.Abs(*droot)
+	*droot, err = hostPath(*droot)
 	if err != nil {
 		return err
 	}
@@ -278,7 +335,7 @@ func (cli CLI) init(ctx context.Context, store Store, args []string) error {
 			return err
 		}
 	}
-	*rroot, err = filepath.Abs(*rroot)
+	*rroot, err = hostPath(*rroot)
 	if err != nil {
 		return err
 	}
@@ -356,6 +413,10 @@ func (cli CLI) add(config *Config, args []string) error {
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
 		var binding string
 		switch {
 		case arg == "-L" || arg == "--link":

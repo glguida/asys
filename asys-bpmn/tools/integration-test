@@ -93,10 +93,10 @@ def main():
             shutil.copytree(WORKSPACE / "asys-workers/env/default", agent_environment)
             dockerfile = agent_environment / "Dockerfile"
             dockerfile.write_text(dockerfile.read_text().replace("asys-workers:dev", WORKERS_IMAGE))
-            configuration = json.loads((agent_environment / "workers.json").read_text())
-            command = configuration["types"]["agent"]["command"]
-            command[command.index("--model") + 1] = "fixture/worker"
-            (agent_environment / "workers.json").write_text(json.dumps(configuration))
+            definition_path = agent_environment / "workers/agent.json"
+            definition = json.loads(definition_path.read_text())
+            definition['config']['model'] = 'fixture/worker'
+            definition_path.write_text(json.dumps(definition))
             environment_tag = f"asys-bpmn-environment-test:{temp.name}"
             tags.append(environment_tag)
             manifest = agent_environment / "component.dcomp"

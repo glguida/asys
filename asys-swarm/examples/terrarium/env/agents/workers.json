@@ -2,5 +2,20 @@
   "version": 1,
   "name": "terrarium-agents",
   "description": "Identical habitat inhabitants using the existing inference Provider.",
-  "types": {"swarm-step": {"command": ["/opt/asys/asys-workers/tools/asys-swarm-agent", "--agent", "inhabitant"]}}
+  "types": {
+    "swarm-step": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-swarm-agent",
+        "--agent",
+        "inhabitant"
+      ]
+    },
+    "rainkeepers": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/rainkeepers.json"
+      ]
+    }
+  }
 }

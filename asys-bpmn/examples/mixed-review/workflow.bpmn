@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:asys="urn:asys:workflow:1" id="MixedReview" targetNamespace="urn:asys:examples" expressionLanguage="feel">
+  <bpmn:process id="mixed_review" name="Parallel search, verification, Senate and human review" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <bpmn:serviceTask id="brief" name="Clarify acceptance criteria">
+      <bpmn:extensionElements><asys:job type="single" input='= {request: "Read proposal.md, problem.json and test_route.py. Write requirements.md with concrete acceptance criteria, the two swarm comparison and the separate human decision. Do not modify implementation or tests. Keep your final response concise."}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:parallelGateway id="fork" name="Search and verify in parallel"/>
+    <bpmn:serviceTask id="global_search" name="Global model swarm">
+      <bpmn:extensionElements><asys:job type="route-global" input='= {request: "Find a closed route visiting each city once with Manhattan length at most 16. Use the observed problem, baseline and measured artifacts."}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="local_search" name="Local model swarm">
+      <bpmn:extensionElements><asys:job type="route-local" input='= {request: "Find a closed route visiting each city once with Manhattan length at most 16. Use the observed problem, baseline and measured artifacts."}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="implement" name="Implement and independently verify">
+      <bpmn:extensionElements><asys:job type="goal" input='= {request: "Implement route_length in route.py according to proposal.md. Run python3 -m unittest -v and obtain independent verification. Do not change test_route.py. Limit edits to route.py and checker-notes.md; swarm results may arrive concurrently in their own directories."}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:parallelGateway id="join" name="Wait for both searches and verification"/>
+    <bpmn:serviceTask id="evidence" name="Program: check shared evidence">
+      <bpmn:extensionElements><asys:job type="program" args='= ["python3", "/opt/asys/environment/programs/compare.py"]' input='= {request: "Compare both saved swarm artifacts using the goal-produced route checker and run all tests."}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="review" name="Senate review">
+      <bpmn:extensionElements><asys:job type="senate" input='= {request: "Review proposal.md, requirements.md, route.py, comparison.json and evidence.md. Independently check the saved swarm results and run python3 -m unittest -v. Reach an evidence-based decision with approved as a boolean. Do not modify files. The person decides the next step after this review."}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:userTask id="human_help" name="Human: accept, revise or stop">
+      <bpmn:extensionElements><asys:job type="human" input='= {title: "Delivery-route decision", prompt: "Both swarm searches and the verified route checker have been reviewed by the Senate. Accept writes a local handover report. Revise sends your comments to a goal, rebuilds the evidence and repeats Senate review. Stop ends this example without acceptance. Which next step do you want?", summary: review.final, files: [{path: "evidence.md", label: "Measured evidence"}, {path: "comparison.json", label: "Both search results"}, {path: "route.py", label: "Verified route checker"}, {path: "requirements.md", label: "Acceptance criteria"}], context: "This decision only controls this local example. Nothing is deployed or published. A revision must preserve the written contract and tests; describe any requested improvement in the comments.", form: {type: "object", properties: {action: {type: "string", title: "Next step", oneOf: [{const: "accept", title: "Accept the evidence"}, {const: "revise", title: "Request a revision"}, {const: "stop", title: "Stop without acceptance"}]}, comments: {type: "string", title: "Revision request or decision comments"}}, required: ["action"], additionalProperties: false}, uischema: {type: "Group", label: "Human decision", elements: [{type: "Control", scope: "#/properties/action", options: {format: "radio"}}, {type: "Control", scope: "#/properties/comments", options: {multi: true}}]}}'/></bpmn:extensionElements>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="decision" name="Follow the human decision" default="stop_work"/>
+    <bpmn:serviceTask id="revise" name="Goal: resolve human feedback">
+      <bpmn:extensionElements><asys:job type="goal" input='= {request: "Read proposal.md and preserve its contract and tests. Address the human feedback in route.py or documentation, then run independent verification. Record what changed in revision.md. Human comments: " + (if human_help.comments = null then "Recheck and improve the evidence." else human_help.comments)}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="handover" name="Write accepted handover">
+      <bpmn:extensionElements><asys:job type="single" input='= {request: "The person accepted the reviewed evidence. Write handover.md summarizing both search scores, verification results, Senate decision and remaining limitations. Read the actual workspace evidence. Human comments: " + (if human_help.comments = null then "None." else human_help.comments)}'/></bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="accepted" name="Accepted"/>
+    <bpmn:endEvent id="stopped" name="Stopped by human"/>
+    <bpmn:sequenceFlow id="begin" sourceRef="start" targetRef="brief"/>
+    <bpmn:sequenceFlow id="begin_parallel" sourceRef="brief" targetRef="fork"/>
+    <bpmn:sequenceFlow id="search_global" sourceRef="fork" targetRef="global_search"/>
+    <bpmn:sequenceFlow id="search_local" sourceRef="fork" targetRef="local_search"/>
+    <bpmn:sequenceFlow id="check_code" sourceRef="fork" targetRef="implement"/>
+    <bpmn:sequenceFlow id="global_done" sourceRef="global_search" targetRef="join"/>
+    <bpmn:sequenceFlow id="local_done" sourceRef="local_search" targetRef="join"/>
+    <bpmn:sequenceFlow id="code_done" sourceRef="implement" targetRef="join"/>
+    <bpmn:sequenceFlow id="compare" sourceRef="join" targetRef="evidence"/>
+    <bpmn:sequenceFlow id="review_evidence" sourceRef="evidence" targetRef="review"/>
+    <bpmn:sequenceFlow id="request_help" sourceRef="review" targetRef="human_help"/>
+    <bpmn:sequenceFlow id="human_answered" sourceRef="human_help" targetRef="decision"/>
+    <bpmn:sequenceFlow id="accept_work" sourceRef="decision" targetRef="handover"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="feel">human_help.action = "accept"</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="revise_work" sourceRef="decision" targetRef="revise"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="feel">human_help.action = "revise"</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="stop_work" sourceRef="decision" targetRef="stopped"/>
+    <bpmn:sequenceFlow id="recheck_evidence" sourceRef="revise" targetRef="evidence"/>
+    <bpmn:sequenceFlow id="finish" sourceRef="handover" targetRef="accepted"/>
+  </bpmn:process>
+</bpmn:definitions>

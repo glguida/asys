@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "kind": "swarm",
+  "description": "Build gardens that survive an agent-free drought.",
+  "config": {
+    "version": 1,
+    "world": {
+      "settings": {
+        "width": 16,
+        "height": 10,
+        "discoveryTurns": 24,
+        "droughtTurns": 12,
+        "observationRadius": 3
+      },
+      "package": "builtin:terrarium"
+    },
+    "objective": {
+      "healthyGardens": 6
+    },
+    "agents": {
+      "count": 8,
+      "type": "swarm-step"
+    },
+    "limits": {
+      "turns": 36,
+      "concurrency": 4,
+      "decisions": 320,
+      "seconds": 600,
+      "jobSeconds": 60,
+      "actions": 1,
+      "memoryBytes": 4096,
+      "tickSeconds": 0.5
+    },
+    "seed": 7
+  }
+}

@@ -16,7 +16,6 @@ COPY asys-workers/extensions /opt/asys/asys-workers/extensions
 COPY asys-workers/tools ./tools
 COPY asys-workers/asys_swarm ./asys_swarm
 COPY asys-workers/asys_worker.py ./asys_worker.py
-COPY asys-workers/worlds ./worlds
 COPY python/asys /opt/asys/python/asys
 ENV NODE_ENV=production
 ENV PYTHONPATH=/opt/asys/python:/opt/asys/asys-workers:/opt/asys/asys-runtime

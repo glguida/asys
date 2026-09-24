@@ -1,377 +1,108 @@
-# asys-workers
+# Worker execution
 
-An execution component that runs named agents, goals, Senates, swarms and ordinary
-programs. Worker definitions are separate from the environment's installed
-programs, dependencies and shared skills. A caller submits a request with a
-prepared job directory and workspace. Workers own each algorithm's internal
-execution and return its result; a workflow can coordinate several such jobs.
+This component executes the environment's named agents, goals, Senates, swarms,
+programs and Human requests. Every assignment uses the ordinary runtime queue
+and supplied workspace. The workflow engine decides which assignments to submit;
+each worker owns the execution of its assigned algorithm.
 
-The component runs the [asys-runtime](../asys-runtime) process executor. Agent
-jobs use the installed Pi coding-agent SDK. Inference uses the unchanged dcomp
-Provider interface, connected to `@inference_endpoint`. Human interaction uses
-the typed [Human interface](proto/asys/human/v1/human.proto).
+## Create and run
 
-Use `asys-workers ENVIRONMENT add KIND NAME` to create a named definition,
-`asys-environment ENVIRONMENT add-skill DIRECTORY` to import shared skills, and
-`asys-run ENVIRONMENT NAME REQUEST` to run it. See
-[workers and environments](../docs/workers-and-environments.md) for the complete
-command interface, definition format and BPMN binding. Runtime continues to use
-ordinary `workers.json` command mappings beneath these authoring tools.
-
-## Environment definition
-
-An environment is a directory copied into its image at `/opt/asys/environment`:
-
-```text
-env/kicad/
-  Dockerfile
-  component.dcomp
-  workers.json
-  workers/             # named agent, goal, Senate and swarm definitions
-  tools.md             # optional installed tool list included in agent prompts
-  agents/
-    schematic/
-      prompt.md        # optional stable agent instructions
-      memory.md
-      skills/          # optional skills specific to this agent
-      extensions/      # optional additional Pi tools
-    simulation/
-      memory.md
-    pcb/
-      memory.md
-  skills/              # shared skills, each with a SKILL.md
-  extensions/          # shared Pi extension files
-  programs/            # environment-specific commands
+```sh
+asys-workers add ./env/development agent editor
+asys-workers add ./env/development goal repair
+asys-workers add ./env/development senate review
+asys-workers list ./env/development
+asys system-model set simple account/model
+asys-run ./env/development repair "Implement and verify the supplied specification" --workspace ./project
 ```
 
-An optional `tools.md` beside the environment's `workers.json` lists installed
-software and libraries, their versions, and essential availability constraints.
-Asys includes its contents in every agent's system prompt, including the built-in
-`simple` agent used by one-shot and goal. Missing or blank files add nothing.
-Keep this inventory short and current with the image; usage instructions belong
-in tool documentation or skills. This file describes installed software; it does
-not install software or register callable agent tools. See the
-[environment authoring guide](../skills/asys/references/environments-and-teams.md#environment-tool-list).
+`asys-workers add --help` explains each kind, generated files and required
+configuration. Swarms additionally need a configured world and evaluator.
+`asys-environment add-skill ENVIRONMENT DIRECTORY` imports a complete skill.
+`asys-environment dockerfile ENVIRONMENT FILE` installs a replacement Dockerfile.
 
-The global behavioral prompt is [src/system.md](src/system.md), supplied by asys.
-It emphasizes inquiry, independent judgment, and responsibility for the requested
-outcome. The system prompt links the [Reporting to humans guide](src/reporting-to-humans.md)
-for assignments that call for structured human decisions or review briefings;
-ordinary assignments receive concise reporting guidance in the core prompt.
-Agent memory contains retained lessons and principles. Agents read their
-definitions during jobs; reports and proposed lessons go into job storage.
-Several workers components can use the same environment concurrently. A later
-review process can evaluate their evidence and propose a new environment
-version. Ordinary execution does not perform that promotion.
+The portable [authoring skill](../skills/asys-authoring/SKILL.md) contains the
+canonical guides for [environments and programs](../skills/asys-authoring/references/environments.md),
+[named definitions](../skills/asys-authoring/references/workers.md),
+[workflow bindings](../skills/asys-authoring/references/workflows.md), and
+[Human requests](../skills/asys-authoring/references/human.md). These references
+are installed with asys and exported by `asys skill DEST`.
 
-`workers.json` maps job types to command vectors. The command selects the named
-agent and model; task data supplies the assignment:
+## Environment and storage contract
 
-```json
-{
-  "version": 1,
-  "name": "kicad",
-  "description": "Circuit design and verification tools.",
-  "egress": true,
-  "types": {
-    "pcb": {
-      "command": ["/opt/asys/asys-workers/tools/asys-agent",
-                  "--agent", "pcb", "--model", "account/model",
-                  "--extension", "/opt/asys/asys-workers/extensions/bpmn.mjs"]
-    },
-    "program": {"command": ["/opt/asys/asys-workers/tools/asys-program"]},
-    "human": {"command": ["/opt/asys/asys-workers/tools/asys-human"]}
-  }
-}
-```
+The image supplies `/opt/asys/environment`, including `workers.json`, named
+`workers/*.json`, agent prompts, skills, extensions and programs. Optional
+`tools.md` inventories installed tools for agent prompts. It does not install
+software or register a tool. A running component retains its image; new runs
+and workflow resumes rebuild the environment when it has a Dockerfile.
 
-Use a model name exported by `asys-inference models`. Job types and agent names
-are chosen by the environment author. More than one job type can select the
-same agent. `prompt.md` and `memory.md` are optional; the named agent directory
-must exist. `prompt.md` supplies stable agent instructions in addition to the
-global prompt. Each job still supplies its own assignment in `input.prompt`.
-Shared skills and the selected agent's skills are both discovered. Skills of
-other agents are not loaded. Pi includes the skill catalogue and reads full
-skills with its ordinary tools. Shared and agent-specific `extensions/` folders
-contain `.js`, `.mjs`, `.cjs`, or `.ts` Pi extension files. A broken extension
-fails initialization rather than silently dropping tools. Installed programs
-are available through the shell tool.
+| Location | Responsibility |
+| --- | --- |
+| Environment image | Reusable commands, definitions and agent knowledge |
+| Runtime queue | Assignment, ownership, cancellation and exit status |
+| Job directory | Input, result, transcript, logs, reports and scratch files |
+| Workspace | Project files and shared deliverables |
 
-`--extension PATH` explicitly loads an additional Pi extension; relative paths
-are resolved beside the selected `workers.json`. For an ad-hoc BPMN
-assignment, the supplied `extensions/bpmn.mjs` registers `list_actions`, `start_action`, and `wait_action`.
-The generic agent runner does not inspect BPMN metadata or choose workflow
-activities. Environments for other callers can provide their own extensions.
+The host mounts the queue, jobs and workspace for the invoking UID/GID.
+Processes execute in the workspace. The [runtime contract](../asys-runtime/README.md#execution-contract)
+defines stdin, `ASYS_INPUT`, `ASYS_RESULT` and execution variables. The container's
+internal `--root` selects its mounted runtime queue; public host `--root` selects
+asys state containing runs, inference and Human records.
 
-`egress: true` lets host launchers enable outbound access through dcomp when creating
-the workers component. Omitted or false means no outbound network access.
-Inference over the dcomp interface works without egress. Network access alone
-does not provide a search tool; install the appropriate program or Pi extension.
+## Agent execution
 
-The [default environment](env/default) is a starting point: copy it into your
-project and replace `account/model` in its command with an exported model name.
-The [authoring guide](../asys-bpmn/AUTHORING.md) covers complete BPMN projects.
+The Pi session combines the global [system prompt](src/system.md), environment
+`tools.md`, selected agent's optional prompt and memory, shared and agent-specific
+skills, and installed extensions. Unrelated agent resources are not loaded.
+Workspace files do not silently install extensions or replace the system prompt.
+The effective prompt and definition hashes are recorded with the job.
 
-## Execution storage
+Named assignments supply `request` and optional kind-specific `parameters`.
+The dispatcher translates them to the internal algorithm input. Agent completion
+is an object with nonempty `final` and `exception: null` or a nonempty blocker;
+extra task-defined fields are preserved. A non-null exception fails execution.
+Malformed completion gets one correction in the same session, then fails if
+still invalid. Verification must assess the actual artifact, not merely this
+completion envelope.
 
-A run creates its own workers component through dcomp. Its queue, job-storage
-root and actual workspace are mounted at creation. New job directories live
-beneath the job root; every job receives the chosen workspace.
+Inference uses the existing `cyclo.provider.v1.Provider` interface. The adapter
+owns retries, preserving partial messages and completed tools while refusing to
+execute unfinished tool calls. Its default inactivity timeout is 600000 ms,
+configurable with `ASYS_INFERENCE_IDLE_TIMEOUT_MS`. Progress refreshes the timer;
+it is not a total job deadline. Retry backoff is capped at 30 seconds and waits
+respect capacity reset information. Cancellation interrupts calls and waits.
+Pi's separate transport retry loop is disabled. `maxSteps` counts logical
+inference calls, including compaction, rather than transport retries.
 
-| Location | Contents | Owner |
-| --- | --- | --- |
-| Environment image | Named agents, memory, skills, tools | Environment author |
-| Queue entry | Assignment, ownership, cancellation, execution status | Runtime |
-| Supplied job directory | Reports, scratch work, lessons, logs, transcript, result | This job's execution |
-| Supplied workspace | The project or other material being worked on | Caller chooses and prepares it |
+`agent.json` retains the conversation; stdout records streaming activity,
+retries, compaction and diagnostics. `asys top RUN` and the dashboard
+read this saved evidence. Programs' stdout and structured results remain output,
+separate from agent conversations.
 
-The queue stores the two directory references relative to the queue root. The
-host and containers mount the same relative layout, so saved records are also
-readable by `asys top` and `asys logs` on the host. See the
-[runtime contract](../asys-runtime/README.md#execution-contract).
+## Algorithms and interfaces
 
-Each execution gets a fresh job ID and directory containing `stdout.log`,
-`stderr.log`, `agent.json`, and `result.json`. Pi support files and the effective
-system prompt live under `.pi/`. Agents write `report.md`, proposed `lessons.md`,
-and temporary files under `scratch/` in that directory. The actual code and
-project deliverables stay in the workspace.
+The agent, goal and Senate controllers live in this image. A goal independently
+verifies its workspace; a Senate deliberates through separate participant
+sessions. Their public contract is the named definition, used identically by
+standalone runs and BPMN jobs.
 
-The component accepts `--environment DIRECTORY` and `--root DIRECTORY`, defaulting
-to `/opt/asys/environment` and `/var/lib/asys/runtime`. Its job types are published
-under `runtime/environments/NAME/`. Processes start as jobs arrive, without a
-fixed concurrency limit. Runtime supervises them, captures output, and records
-exit status. It does not prepare artifact dependencies or decide the next job.
+A swarm owns identities, private memory, member decisions, scheduling and
+checkpoints. Its world runs in a separate component. Bounded model members
+receive their mission, observation, private memory and action schema; they have
+no shell or general coding extensions. Trusted program members can implement
+another decision policy using the same execution contract. Member logs and
+sessions stay under the parent job's `swarm/decisions/` directories.
 
-## Agent execution and completion
-
-`asys-agent --agent NAME --model MODEL` constructs the session using the global
-system prompt, the environment's optional `tools.md`, the selected agent's
-`prompt.md` and memory, its actual skills and tools, and
-the supplied task and execution locations. Project files in the workspace do
-not configure the agent's system prompt or automatically install extensions.
-
-The assignment's JSON data is:
-
-```json
-{
-  "prompt": "Create a PCB for the supplied schematic and board constraints.",
-  "options": {}
-}
-```
-
-`prompt` is required. Positional command arguments can supply it instead.
-`--max-steps` overrides the corresponding input field.
-There is no step limit unless `--max-steps` or `maxSteps` is explicitly supplied.
-The agent's Provider client owns inference recovery, with or without a pooler.
-`ASYS_INFERENCE_IDLE_TIMEOUT_MS` sets the first-response and stream inactivity
-limit (default `600000`, positive integer milliseconds). Each response refreshes
-the timer; there is no absolute deadline for a progressing inference call.
-A timeout cancels that RPC attempt and retries the same input. The assignment
-remains pending until success, cancellation, or a nonretryable failure.
-The environment command selects the model. Provider options pass through the
-existing inference payload.
-
-The agent finishes with a JSON object in its final assistant response:
-
-```json
-{"final": "Created and checked pcb/board.kicad_pcb.", "exception": null}
-```
-
-It can include task-defined fields such as `approved`, measurements, or file
-names. `final` must be nonempty text, and `exception` must be null or a nonempty
-reason the task cannot continue. The worker parses this object, writes the
-runtime result file, and exits with status 1 when it declares an exception.
-Malformed completion gets one format correction in the same session, with the
-parser error and previous work still available. An uncorrected response fails
-the job. This correction counts toward any inference step limit; execution errors
-and cancellation retain their normal handling. Execution metadata and conversation
-remain in the transcript, outside the returned task result.
-
-For example, `{"final":"Routing is incomplete","exception":"15 nets remain
-unconnected"}` returns that report and a failing exit status. BPMN can catch it
-with a boundary error event; other callers choose their own response.
-
-Pi owns the agent loop, local tools, and compaction. Its separate retry loop is
-disabled: the Provider client handles transient RPC failures, incomplete streams,
-and native errors classified as retryable by the pinned Pi SDK. It retries with
-exponential backoff and jitter, capped at 30 seconds, until success or cancellation.
-After partial output, replacement attempts complete the existing pending assistant
-message; completed tools are retained and incomplete tool calls are not executed.
-Provider exhaustion propagates through optional poolers and waits at the client
-until the reported reset, outside the ended RPC. Unknown reset times use bounded
-backoff. Cancellation interrupts active attempts and waits. Retry and capacity
-wait events include the reason, attempt, next retry time, delay, and idle threshold.
-`maxSteps` counts logical inference calls, including compaction, but not transport
-retries. Whole-program timeouts remain separate.
-Provider identities and native message signatures are preserved through the
-existing adapter.
-
-A caller retries work by submitting a new job, with a fresh directory and Pi
-session. Previous jobs remain unchanged. The same workspace can retain partial
-work; the caller decides what the next assignment should do with it. A running
-component keeps its environment image for its lifetime.
-
-The host launchers pass their UID/GID through dcomp when creating workers and
-the workflow component. Images may retain a default user for independent use;
-asys execution uses the caller's identity for shared files.
-
-`JOB/.pi/system-prompt.txt` contains the exact last effective prompt.
-`JOB/agent.json` stores Pi session entries, the selected agent directory, and
-hashes of its `prompt.md` and memory.
-Streaming text, thinking, tool activity, inference retries, exhaustion, and
-compaction are emitted on stdout with timestamps. The host monitor combines
-these events with the saved transcript without changing execution state.
-
-## Swarm decisions
-
-`asys-swarm-agent --agent NAME [--model MODEL]` makes one bounded decision from
-a mission, optional objective, local observation and private memory. It uses the existing Provider
-input, selecting the configured `simple` model when `--model` is omitted. An
-environment exposes it as an ordinary job type:
-
-```json
-{
-  "version": 1,
-  "name": "habitat",
-  "types": {
-    "swarm-step": {
-      "command": ["/opt/asys/asys-workers/tools/asys-swarm-agent", "--agent", "inhabitant"]
-    }
-  }
-}
-```
-
-The named directory `agents/inhabitant` supplies an optional `prompt.md`.
-The worker also reads the environment's optional `tools.md` instruction text.
-The decision has no shell, file editing, skill discovery or extension loading;
-it proposes actions through a `submit_plan` function tool, or a JSON response
-when the selected model does not advertise function tools.
-
-Its JSON input contains `mission`, `agent`, `turn`, `observation`, `memory`,
-`actionSchema`, `maxActions` and `memoryBytes`, with optional `objective`,
-`timeoutSeconds` and inference `options`. `actionSchema` is a Draft-07 schema for one action.
-The result is `{ "actions": [...], "memory": ..., "usage": ... }`; memory
-replaces the previous value. The worker validates the plan and its bounds,
-records the actual Provider conversation in `agent.json`, and fails on invalid
-output or a failed inference call. It makes no automatic retry or correction.
-
-The complete [swarm worker](../asys-swarm/README.md),
-`/opt/asys/asys-workers/tools/asys-swarm`, schedules these member executions,
-retains private memories and checkpoints committed world snapshots. Like goal
-and senate, the whole algorithm is one ordinary runtime job. It communicates
-with an independent world program through runtime channels; the world determines
-per-agent observations, action consequences and goal completion. The world can
-run on the host or in a separate component, and its source is never imported
-into the swarm worker. The runtime and Provider primitives are unchanged. An ordinary
-program can return the same member plan format, as the
-[terrarium's scripted environment](../asys-swarm/examples/terrarium/env/scripted)
-does without inference.
-
-The swarm job input contains `id`, `config` and an optional control `channel`.
-The selected member command comes from the environment's `workers.json`.
-Member processes stay in the parent runtime job's process group and keep their
-own logs and transcripts. They are internal executions rather than additional
-runtime jobs; parent cancellation stops their work. See the
-[authoring guide](../asys-swarm/AUTHORING.md) for configuration and the world
-protocol.
-
-## Programs and humans
-
-The [Senate worker](../asys-senate/README.md) is an ordinary program at
-`/opt/asys/asys-workers/tools/asys-senate`. Its input contains `topic` and a
-parsed `senate` configuration describing the Princeps and senators. The Princeps
-introduces the topic, senators intervene in order, and the Princeps assesses
-consensus after each round. A consensus returns the answer immediately. After
-three rounds without consensus, the Princeps makes a final decision.
-
-The terminal Princeps report supplies the ordinary `final`/`exception` result
-and any requested structured fields, such as `approved`, `reason`, or `findings`.
-BPMN receives those fields directly, like an ordinary agent result. An explicit
-participant exception preserves that participant's report in the failed result.
-The controller adds or overwrites its reserved `consensus`, `rounds`, and
-`decision` metadata; intermediate reports are not merged into the result.
-
-Participants run through the same agent execution library and Provider input.
-They can select named environment agents or use the built-in `simple` agent,
-with optional participant prompts and models. Separate participant conversations
-and the shared discussion transcript persist in the job directory. Models fall
-back to the worker's `--model` and then the `simple` system-model default.
-No default is needed when every participant specifies a model.
-
-Each senator inherits `asys-agent`'s existing web-search capabilities and the
-selected agent's ordinary tools, skills and extensions. The environment's normal
-egress and tool configuration applies. There is no Quaestor or additional Senate
-search setup. The host Senate launcher and BPMN submit the same `senate` job;
-the controller and three-round limit live in the worker.
-
-The [goal worker](../asys-goal/README.md) is another ordinary program:
-`/opt/asys/asys-workers/tools/asys-goal`. It runs the built-in `simple` agent
-against the original request, retaining one implementation conversation across
-automatic work turns. Successful implementation reports require `goal_status`:
-`continue` starts another work turn; `review` launches a fresh independent
-verifier. There is no preliminary generated contract or mandatory planning or
-commit stage. Verification sees the request,
-governing sources, current workspace, open findings and human guidance, without
-the implementer's completion narrative. Its findings return to the continuing
-implementer; partial implementation progress is allowed, but only verification
-can complete the whole goal.
-
-The implementation conversation and controller state persist in the job
-storage, so re-executing that same job can restore progress. Pi provides normal
-compaction. Human retries retain the implementer's conversation and start fresh
-verifiers. A new job or standalone one-shot still starts fresh.
-
-There is no default attempt limit. An optional limit counts successfully
-reported implementation turns, including `continue` turns. Human retries and
-protocol corrections remain within the same attempt; a review requested on the
-last permitted turn still runs. Either role can ask for help through the Human
-input. Its job input contains `goal` and optional `maxAttempts`; its model
-defaults to the `simple` system-model setting supplied by the launcher, with an
-optional `--model MODEL` command override. BPMN can bind a task to a `goal` job
-type without implementing the loop itself. The default environment declares
-this job type alongside agent, program, and human jobs.
-
-`asys-program` executes the assignment's complete argument vector directly.
-Use an explicit shell when shell syntax is needed. Ordinary programs use
-`ASYS_WORKSPACE`, `ASYS_JOB_DIR`, `ASYS_INPUT`, and `ASYS_RESULT` from the
-runtime contract. Their exit code determines success; a result JSON file is
-optional. They do not need Pi or the agent completion format.
-
-`asys-human` accepts an object with required `prompt` and optional `title`,
-`summary`, `files`, `context`, `details`, `candidates`, `form` (JSON Schema draft-07),
-and `uischema` (JSON Forms). The completed human answer becomes its job result.
-The producing workflow or environment writes the question and work summary,
-selects the evidence, and defines what the answer means. The shared
-[Reporting to humans guide](src/reporting-to-humans.md) explains how to compose
-these fields. Follow the
-[decision-authoring guide](../asys-bpmn/AUTHORING.md#write-a-decision-the-human-can-understand):
-put the question and requested action in `prompt`, completed work in `summary`,
-review artifacts in `files`, and machine state in `details`.
-
-For a command that directly runs `asys-human`, host launchers supply
-`input asys.human.v1.Human human` in the run's workers definition, correcting
-an omitted input or an output declaration without editing the environment's
-source files. Custom programs that call Human must declare that input in
-`component.dcomp`. Launchers connect
-it to `@human_endpoint` by default; `-L human=COMPONENT.OUTPUT` selects a specific
-service. `asys-human` calls `Ask` through this dcomp input and waits for the answer.
-It does not run a server or share job files with the Human service. Cancellation
-withdraws the request; a service or transport failure fails the job.
-
-The request metadata preserves caller metadata and includes the originating
-`component`, `job_id`, and `files.workspace` (the worker's actual workspace path).
-The terminal resolves that path through dcomp bind metadata to show the host
-project directory. Job records and scratch files are not review locations.
-
-[`asys-human-prompt`](../asys-human-interface/README.md) provides the service and
-terminal. Start it to bind `@human_endpoint`, or use `asys-bpmn run --human` to
-create a handler dedicated to that run. The service validates the answer against
-the task's JSON Schema before returning it to the worker.
+Programs use ordinary command mappings. The internal `asys-program` wrapper
+runs its appended command arguments. Human jobs call the typed
+[Human interface](proto/asys/human/v1/human.proto), normally linked to
+`@human_endpoint`. A shared `asys-human-prompt` terminal or workflow `--human`
+handler collects answers. Questions and submission semantics are documented in
+the [Human component guide](../asys-human-interface/README.md).
 
 ## Development
 
-From this directory, install dependencies with `npm ci`, then run `npm test`.
-Tests cover actual Pi tools, selected memory and skills, strict completion,
-compaction, retries, Human attention and restart, cancellation, and execution
-through the filesystem runtime. Repository build and installation instructions
-are in [INSTALL.md](../INSTALL.md).
+From this directory, `make build` builds runtime, world and worker base images.
+`npm test` checks the JavaScript adapters; the root `make test` also covers
+Python algorithms, authoring, installation and host execution. Internal
+executables under `tools/` are container commands, not extra public launchers.

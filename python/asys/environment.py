@@ -153,15 +153,33 @@ def edit_environment(environment, relative='Dockerfile'):
 
 
 def arguments(argv):
-    parser = argparse.ArgumentParser(prog='asys-environment', description=__doc__)
-    parser.add_argument('environment', type=Path, metavar='ENV')
-    commands = parser.add_subparsers(dest='command', required=True)
-    skill = commands.add_parser('add-skill', help='Copy a complete validated skill directory')
-    skill.add_argument('source', type=Path, metavar='SKILLDIR')
-    dockerfile = commands.add_parser('dockerfile', help='Replace the canonical environment Dockerfile')
-    dockerfile.add_argument('source', type=Path, metavar='FILE')
-    edit = commands.add_parser('edit', help='Edit a file inside the environment')
-    edit.add_argument('file', nargs='?', default='Dockerfile', metavar='FILE')
+    parser = argparse.ArgumentParser(prog='asys-environment', allow_abbrev=False,
+        description='Manage the files, dependencies and shared skills of a worker environment.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Examples:\n  asys-environment add-skill ./env/development ./skills/checking\n'
+               '  asys-environment dockerfile ./env/development ./Dockerfile\n'
+               '  asys-environment edit ./env/development agents/editor/prompt.md\n\n'
+               'ENVIRONMENT contains Dockerfile, component.dcomp and workers.json.\n'
+               'Use asys-workers add ENVIRONMENT KIND NAME to create named workers.\n'
+               'These commands edit source files; they do not start a run.')
+    commands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND', title='commands')
+    def command(name, summary, detail):
+        result = commands.add_parser(name, help=summary, description=detail, allow_abbrev=False)
+        result.add_argument('environment', type=Path, metavar='ENVIRONMENT', help='worker environment directory')
+        return result
+    skill = command('add-skill', 'Import a complete skill directory',
+        'Validate SKILL.md and copy the entire skill, including references and assets, into '
+        'ENVIRONMENT/skills/NAME. Existing skills are not overwritten. Missing environment files are created.')
+    skill.add_argument('source', type=Path, metavar='SKILLDIR', help='directory containing SKILL.md')
+    dockerfile = command('dockerfile', 'Replace the environment Dockerfile',
+        'Copy FILE to ENVIRONMENT/Dockerfile. Other environment files are preserved. '
+        'The Dockerfile must package the programs and tools needed by this environment.')
+    dockerfile.add_argument('source', type=Path, metavar='FILE', help='nonempty Dockerfile to import')
+    edit = command('edit', 'Edit an existing environment file',
+        'Use $VISUAL or $EDITOR to edit a file within ENVIRONMENT. JSON definitions, '
+        'workers.json and SKILL.md are validated before replacement; invalid edits keep the original.')
+    edit.add_argument('file', nargs='?', default='Dockerfile', metavar='FILE',
+        help='path relative to ENVIRONMENT (default: Dockerfile)')
     return parser.parse_args(argv)
 
 

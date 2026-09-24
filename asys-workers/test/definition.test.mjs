@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { agentDefinition, agentResult, systemAgentDefinition } from '../src/agent-definition.mjs';
 import { runAgent } from '../src/agent-session.mjs';
 import { agent } from '../src/agent.mjs';
@@ -142,20 +140,6 @@ test('the shared simple agent uses the shared system prompt without extra role i
   await writeFile(join(environment, 'tools.md'), '- shared-tool 5.0');
   await writeFile(join(environment, 'agents/simple/prompt.md'), 'UNSELECTED_ENVIRONMENT_AGENT');
   await writeFile(join(environment, 'agents/simple/memory.md'), 'UNSELECTED_ENVIRONMENT_MEMORY');
-  await writeFile(join(environment, 'workers.json'), JSON.stringify({ version: 1, name: 'test',
-    types: { program: { command: ['false'] } } }));
-  await promisify(execFile)('python3', ['-c', `
-import sys
-from pathlib import Path
-sys.path[:0] = sys.argv[4:]
-from asys.system_agents import prepare_agent
-from asys_runtime.environment import Environment
-prepare_agent('simple', Path(sys.argv[1]), Environment(sys.argv[2]), sys.argv[3])
-assert 'asys.oneshot' not in sys.modules
-`, run, environment, model.id, fileURLToPath(new URL('../../python', import.meta.url)),
-  fileURLToPath(new URL('../../asys-runtime', import.meta.url))]);
-  const external = join(run, 'external');
-  const { types } = JSON.parse(await readFile(join(external, 'workers.json'), 'utf8'));
   const requests = [];
   const provider = {
     async listModels() { return { models: [model] }; },
@@ -168,7 +152,8 @@ assert 'asys.oneshot' not in sys.modules
   };
   await agent({ job: { id: 'one', input: { prompt: 'Complete the assignment.' }, workspace,
     directory: jobDirectory, result: join(jobDirectory, 'result.json') },
-    argv: types.agent.command.slice(1), env: { ASYS_ENVIRONMENT_DIR: environment, ASYS_WORKERS_DIR: external },
+    argv: ['--agent', 'simple', '--system-agent', '--model', model.id],
+    env: { ASYS_ENVIRONMENT_DIR: environment, ASYS_WORKERS_DIR: environment },
     signal: new AbortController().signal,
   }, { provider });
   const packaged = await readFile(new URL('../../python/asys/system_agents/simple/prompt.md', import.meta.url), 'utf8');

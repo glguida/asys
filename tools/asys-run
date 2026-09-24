@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a named agent, goal, senate, swarm, or program in an environment."""
+"""Run a named worker or BPMN workflow in an environment."""
 from pathlib import Path
 import sys
 

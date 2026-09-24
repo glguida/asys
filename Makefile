@@ -9,18 +9,33 @@ export PREFIX DESTDIR
 
 JS_PACKAGES := $(patsubst %/package.json,%,$(wildcard asys-inference/components/protocol/*/package.json asys-inference/components/*/package.json)) asys-workers asys-bpmn asys-human-interface
 HOST_TOOLS := asys asys-run asys-workers asys-environment
+REMOVED_HOST_TOOLS := asys-oneshot asys-goal asys-senate asys-swarm asys-bpmn
+REMOVED_HOST_MODULES := oneshot goal senate swarm swarm_view
 
-.PHONY: all host install-host install-skills build install test test-deps help
+.PHONY: all host install-host install-skills install-designs build install test test-deps help
 
 all: build
 
 host:
 	@set -e; for name in $(HOST_TOOLS); do install -D -m 0755 "tools/$$name" "bin/$$name"; done
+	@set -e; for name in $(REMOVED_HOST_TOOLS); do rm -f "bin/$$name" "$$name/bin/$$name"; done
 
-install-host: host install-skills
+install-host: host install-skills install-designs
+	@set -e; for name in $(REMOVED_HOST_TOOLS); do rm -f "$(DESTDIR)$(PREFIX)/bin/$$name"; done
+	@set -e; for name in $(REMOVED_HOST_MODULES); do \
+		rm -f "$(DESTDIR)$(PREFIX)/share/asys/python/asys/$$name.py" \
+		      "$(DESTDIR)$(PREFIX)/share/asys/python/asys/$$name.pyc" \
+		      "$(DESTDIR)$(PREFIX)/share/asys/python/asys/__pycache__/$$name."*.pyc; \
+	done
+	rm -f "$(DESTDIR)$(PREFIX)/share/asys/python/asys_swarm/world_process.py" \
+	      "$(DESTDIR)$(PREFIX)/share/asys/python/asys_swarm/world_process.pyc" \
+	      "$(DESTDIR)$(PREFIX)/share/asys/python/asys_swarm/__pycache__/world_process."*.pyc
+	rm -rf -- "$(DESTDIR)$(PREFIX)/share/asys-swarm" "$(DESTDIR)$(PREFIX)/share/asys-bpmn"
 	@set -e; for name in $(HOST_TOOLS); do install -D -m 0755 "bin/$$name" "$(DESTDIR)$(PREFIX)/bin/$$name"; done
 	install -d "$(DESTDIR)$(PREFIX)/share/asys/python/asys"
 	install -m 0644 python/asys/*.py "$(DESTDIR)$(PREFIX)/share/asys/python/asys/"
+	install -d "$(DESTDIR)$(PREFIX)/share/asys/python/asys/dashboard_assets"
+	install -m 0644 python/asys/dashboard_assets/* "$(DESTDIR)$(PREFIX)/share/asys/python/asys/dashboard_assets/"
 	@set -e; for source in python/asys/system_agents/*.py python/asys/system_agents/*/prompt.md; do \
 		install -D -m 0644 "$$source" "$(DESTDIR)$(PREFIX)/share/asys/$$source"; \
 	done
@@ -38,7 +53,14 @@ install-host: host install-skills
 		_ "$(DESTDIR)$(PREFIX)/share/asys/workers" {} +; fi
 
 install-skills:
-	@find skills/asys -type f -exec sh -ec '\
+	rm -rf -- "$(DESTDIR)$(PREFIX)/share/asys/skills/asys" "$(DESTDIR)$(PREFIX)/share/asys/skills/asys-authoring"
+	@find skills/asys skills/asys-authoring -type f -exec sh -ec '\
+		destination=$$1; shift; \
+		for source do install -D -m 0644 "$$source" "$$destination/$$source"; done' \
+		_ "$(DESTDIR)$(PREFIX)/share/asys" {} +
+
+install-designs:
+	@find designs -type f -exec sh -ec '\
 		destination=$$1; shift; \
 		for source do install -D -m 0644 "$$source" "$$destination/$$source"; done' \
 		_ "$(DESTDIR)$(PREFIX)/share/asys" {} +
@@ -46,19 +68,11 @@ install-skills:
 build: host
 	$(MAKE) -C asys-inference build
 	$(MAKE) -C asys-bpmn build
-	$(MAKE) -C asys-swarm build
-	$(MAKE) -C asys-oneshot host
-	$(MAKE) -C asys-goal host
-	$(MAKE) -C asys-senate host
 	$(MAKE) -C asys-human-interface build
 
 install:
 	$(MAKE) -C asys-inference install
 	$(MAKE) -C asys-bpmn install
-	$(MAKE) -C asys-swarm install
-	$(MAKE) -C asys-oneshot install-host
-	$(MAKE) -C asys-goal install-host
-	$(MAKE) -C asys-senate install-host
 	$(MAKE) -C asys-human-interface install
 
 test-deps:
@@ -70,9 +84,6 @@ test:
 	$(MAKE) -C asys-inference test
 	cd asys-runtime && $(PYTHON) -m unittest discover -s test
 	$(NODE) --test --test-concurrency=1 'asys-runtime/test/*.test.mjs'
-	$(MAKE) -C asys-oneshot test
-	$(MAKE) -C asys-goal test
-	$(MAKE) -C asys-senate test
 	$(MAKE) -C asys-swarm test
 	@set -e; for directory in $(JS_PACKAGES); do (cd "$$directory" && $(NODE) --test --test-concurrency=1 'test/*.test.mjs'); done
 
@@ -80,7 +91,7 @@ help:
 	@printf '%s\n' \
 	  'make build         Build host commands and container images' \
 	  'make install       Build and install under PREFIX (default: $$HOME/.local)' \
-	  'make install-host  Install the core command, system agents, and portable skill (no Docker needed)' \
+	  'make install-host  Install core commands, agents, designs and both skills (no Docker needed)' \
 	  'make test-deps     Install Node and TUI dependencies for development tests' \
 	  'make test          Run Go, Python and Node tests (after test-deps)' \
 	  'PREFIX and DESTDIR apply to all host tools; dcomp is installed separately.'

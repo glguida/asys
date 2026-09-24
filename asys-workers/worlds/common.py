@@ -1,5 +1,4 @@
 """Shared checked-artifact mechanics for the supplied world programs."""
-import argparse
 from copy import deepcopy
 import hashlib
 import json
@@ -9,7 +8,7 @@ from pathlib import Path
 import signal
 import subprocess
 
-from asys_swarm.world_service import Service
+from asys_swarm.world_service import Component
 
 
 MOVES = {'stay': (0, 0), 'north': (0, -1), 'south': (0, 1), 'east': (1, 0), 'west': (-1, 0)}
@@ -245,17 +244,11 @@ class ArtifactWorld:
             'ranking': [{key: item[key] for key in ('id', 'agent', 'parent', 'score', 'round')} for item in ranked]}
 
 
-def main(kind):
-    parser = argparse.ArgumentParser(description=f'Run the {kind} world over a Runtime channel')
-    parser.add_argument('--root', default=os.environ.get('ASYS_RUNTIME_ROOT', '/var/lib/asys/runtime'))
-    parser.add_argument('--channel', default=os.environ.get('ASYS_WORLD_CHANNEL', 'world'))
-    parser.add_argument('--evaluator', type=json.loads, required=True, help='Trusted evaluator command as a JSON argument array')
-    parser.add_argument('--evaluator-id', help='Stable evaluator implementation identity')
-    parser.add_argument('--evaluator-timeout', type=float, default=3)
-    args = parser.parse_args()
-    if not math.isfinite(args.evaluator_timeout) or not 0 < args.evaluator_timeout <= 60:
-        parser.error('evaluator-timeout must be between 0 and 60 seconds')
-    evaluator = Evaluator(args.evaluator, identity=args.evaluator_id, timeout=args.evaluator_timeout)
+def serve(kind, command, *, evaluator_id=None, evaluator_timeout=3):
+    """Start a component whose implementation chooses its trusted evaluator."""
+    if not math.isfinite(evaluator_timeout) or not 0 < evaluator_timeout <= 60:
+        raise ValueError('evaluator_timeout must be between 0 and 60 seconds')
+    evaluator = Evaluator(command, identity=evaluator_id, timeout=evaluator_timeout)
     rules = ArtifactWorld(kind, evaluator)
     implementation = hashlib.sha256(Path(__file__).read_bytes() + encoded([kind, evaluator.identity])).hexdigest()
     stopping = False
@@ -264,4 +257,5 @@ def main(kind):
         stopping = True
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, stop)
-    Service(args.root, rules, identity=f'{kind}-{implementation}', channel=args.channel).serve(stop=lambda: stopping)
+    Component(os.environ.get('ASYS_WORLD_ROOT', '/var/lib/asys-world'), rules,
+              identity=f'{kind}-{implementation}').serve(stop=lambda: stopping)

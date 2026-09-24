@@ -2,5 +2,19 @@
   "version": 1,
   "name": "terrarium-scripted",
   "description": "Deterministic swarm member policy. No model calls.",
-  "types": {"swarm-step": {"command": ["python3", "/opt/asys/environment/programs/inhabitant.py"]}}
+  "types": {
+    "swarm-step": {
+      "command": [
+        "python3",
+        "/opt/asys/environment/programs/inhabitant.py"
+      ]
+    },
+    "rainkeepers": {
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/rainkeepers.json"
+      ]
+    }
+  }
 }

@@ -70,6 +70,14 @@ export async function swarmAgent({ job, argv = [], env = process.env, signal }, 
       observation: input.observation, memory: input.memory,
     }) }], timestamp: Date.now() };
     state.agent.systemPrompt = systemPrompt;
+    const inferenceOptions = {
+      ...(route.model.reasoning ? { reasoning: 'medium' } : {}),
+      ...input.options,
+      maxTokens: input.options.maxTokens ?? Math.min(4096, route.model.maxTokens),
+    };
+    // Input validation excludes credentials and process controls. Persist the
+    // effective request settings before inference, without its AbortSignal.
+    state.agent.inferenceOptions = inferenceOptions;
     append(message);
     state.agent.steps = 1;
     save();
@@ -79,7 +87,7 @@ export async function swarmAgent({ job, argv = [], env = process.env, signal }, 
     }] : [] };
     const piModel = { ...route.model, provider: modelId.slice(0, modelId.indexOf('/')), api: 'cyclo-pi' };
     const stream = streamProvider(client, route.publicId, piModel, context,
-      { ...input.options, maxTokens: input.options.maxTokens ?? Math.min(4096, route.model.maxTokens), signal: requestSignal }, {
+      { ...inferenceOptions, signal: requestSignal }, {
         // Ordinary agents may wait and retry on exhaustion. A swarm decision is
         // deliberately one request; the controller owns retries and budgets.
         onExhaustion() { throw new Error('Provider exhausted; swarm decision was not retried'); },

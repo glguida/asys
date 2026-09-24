@@ -1,75 +1,79 @@
-# Supplied worlds
+# Built-in world packages
 
-Each directory contains an ordinary executable world program and an optional
-renderer module. The swarm worker starts the configured program in its job and
-exchanges JSON through a private Runtime channel. It does not import world code.
+Each package contains a world component and an observational dashboard viewer.
+Named swarms reference `world.package`; the shared host preparation deploys the
+component and snapshots its view assets. Member private memory remains in the
+worker. Requests and replies use isolated `world-JOB_ID` runtime sessions.
 
-- `leaderboard/serve.py`: shared checked-artifact archive; `top_k: 0` shows all
-  retained submissions, while positive `top_k` shows that many best submissions.
-- `torus/serve.py`: a wrapping grid with Manhattan local visibility. Artifacts
-  persist where they were submitted. The global viewer ranking is not sent to members.
+The portable [world authoring guide](../../skills/asys-authoring/references/worlds.md)
+covers package creation, evaluators, the version-1 protocol and viewer hooks.
+The [full protocol](../../asys-swarm/WORLD.md) gives implementation limits and
+recovery details. `asys-workers add ENVIRONMENT swarm NAME` copies a complete
+leaderboard starter; configure its evaluator before running.
 
-Both programs require an explicitly configured evaluator. They have no default
-domain, task, or score. The optional `problem` setting supplies domain data;
-without an initial candidate the archive starts empty.
+| Package | Observation policy | Evaluation |
+| --- | --- | --- |
+| `builtin:leaderboard` | Shared accepted artifacts, optionally best-k | Configured trusted evaluator |
+| `builtin:torus` | Artifacts within wrapped Manhattan distance | Configured trusted evaluator |
+| `builtin:terrarium` | Local Rainkeepers habitat | Garden survival after inhabitants leave |
 
-The explicit `samples/route/env` environment configures a small delivery-route
-problem. A candidate is
-`{"tour":[0,1,2,3,4,5,6,7]}`. The separate `samples/route/evaluate.py` command checks
-that every city is visited exactly once, including return to the start, then
-measures Manhattan distance. `samples/route/participant.py` is a deterministic
-member that searches route reversals and uses a nearest-neighbor branch when
-progress stops; it uses no model. The initial route has
-length 44 and the perimeter route has length 16. Objective `{"scoreAtMost":16}`
-defines a measurable stopping condition. This sample checks execution and
-evaluation; it is not evidence that a model population improves search quality.
+## Checked-artifact settings
 
-From a checkout after building the worker image:
+The evaluator consumes `candidate` and `problem` on stdin and returns either
+`{accepted:true,score,details}` or `{accepted:false,reason}`. Invalid reports,
+failures and timeouts reject the candidate. Members cannot select the evaluator.
+A configured `problem.initial` candidate is checked before member decisions.
+
+Scores minimize by default; set `direction: "maximize"` for maximization.
+Objectives `scoreAtMost` and `scoreAtLeast` establish measured success. A null
+objective requests exploration. Leaderboard `top_k: 0` exposes all retained
+artifacts; positive values expose that many best submissions.
+
+Common capacities are `max_artifacts: 256`, `archive_bytes: 131072` and
+`candidate_bytes: 4096`. New submissions are rejected when capacity is exhausted,
+preserving existing work. An unrestricted leaderboard requires an archive of
+at most 128 KiB. Torus defaults are an 8 by 8 grid, radius 1 and 8 visible artifacts.
+
+Torus actions may move north, south, east, west or stay. Publication happens
+before movement; valid movement still applies to a rejected candidate. A member
+can name an observed parent, but simultaneous submissions cannot name one
+another. Source selection combines best and recent distinct candidates so
+intermediate work remains visible. Parent links record declared reuse.
+
+## Route example
+
+The deterministic environment in `samples/route/env` supplies a route policy
+and task-specific evaluators for both artifact worlds. Every city must be visited
+once, including the return edge. Manhattan distance starts at 44; the perimeter
+route measures 16. No model is needed.
+
+From the repository root after building the images:
 
 ```sh
 tools/asys-run asys-workers/worlds/samples/route/env route-global \
-  "Shorten the complete delivery loop while visiting every city once." --view
+  "Shorten the complete delivery loop while visiting every city once."
 tools/asys-run asys-workers/worlds/samples/route/env route-local \
-  "Share useful route variants with nearby members and shorten the loop." --view
+  "Share useful route variants with nearby members and shorten the loop."
+tools/asys dashboard
 ```
 
-After installation, replace `tools/asys-run` with `asys-run`; copy the supplied
-sample environment from the installed `share/asys-workers/worlds/samples/route/env`
-directory if you want to edit it. Both named definitions expose ordinary Runtime
-job types, so a workflow can submit the same `{request: "..."}` assignment.
+Installed copies live under `share/asys/workers/worlds/samples/route/env`.
+Copy them before adapting the evaluator. A workflow binds either named type
+with `{request: request}`. These programs verify execution and evaluation;
+they do not demonstrate superior model reasoning.
 
-Configure a custom evaluator with `--evaluator '["/path/to/checker","argument"]'`.
-It receives `{"candidate":...,"problem":...}` on stdin and returns JSON:
-`{"accepted":true,"score":12,"details":{...}}`, or
-`{"accepted":false,"reason":"..."}`. Exit failures, malformed reports and timeouts
-reject the submission. Set `--evaluator-id` when the command depends on resources
-whose version is not captured by its executable files. Commands are trusted
-configuration, never proposed by members.
+## View and service integration
 
-The `problem` setting can supply an `initial` candidate, which must pass the same
-independent evaluator. Scores default to minimization; set
-`direction: "maximize"` and objective `scoreAtLeast` for maximization. The stored
-best artifact includes the candidate, measurement and declared parent. Parent
-links record declared reuse, not proof that the candidate's content derives from it.
+Views export `mount(element, context)` and return `update(frame)` and `dispose()`.
+`context.theme` supplies the shared palette, fonts and task path.
+`context.inspect` opens the common sidebar; `context.selectMember` selects a
+saved member conversation without scrolling the page. Keep selections stable
+across updates and provide pointer and keyboard access. Rendering never submits
+world actions. The shared [design package](../../designs/default/design.json)
+contains the built-in views' CSS.
 
-An action supplies `candidate` and optional `parent`. A torus action may also
-choose `move` from north, south, east, west or stay. Parents must appear in that
-member's starting observation. Publication precedes movement; valid movement
-also applies when evaluation rejects the candidate. Simultaneous submissions
-cannot use each other's new artifacts as parents.
-
-Common limits are `max_artifacts` (256), `archive_bytes` (131072) and
-`candidate_bytes` (4096). Capacity exhaustion rejects new artifacts and keeps
-existing work. Leaderboard `top_k: 0` requires an archive no larger than 128 KiB
-so the complete archive fits its observation. Other observation sizes remain
-subject to the worker's ordinary payload limit.
-
-Torus settings default to `width: 8`, `height: 8`, `radius: 1` and
-`visible_artifacts: 8`. Local source slots retain the best half and fill the rest
-with recent distinct submissions, including worse intermediate work. The initial
-candidate is available separately to every member. Valid artifacts are never
-removed because their score is worse.
-
-Renderers export `mount(element, context)` returning `update(frame)` and
-`dispose()`. They own only the supplied element. The host supplies controls,
-recorded frames, the journal and replay selection.
+The Python `Component` SDK supplies the handshake, readiness, bounded concurrent
+sessions and correlated reply caching. Callbacks receive explicit JSON state
+and must be safe for concurrent invocation. A crash before durable reply storage
+can repeat a callback. Implementation identity includes rules and evaluator
+dependencies; change it when their behavior changes.

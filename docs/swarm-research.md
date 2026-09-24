@@ -85,8 +85,8 @@ semantics, matched-budget ablations and held-out evaluation protocols.
 
 This follows the existing [Senate pattern](../asys-senate/README.md): the
 coordination algorithm lives inside workers. A host or BPMN task submits the
-whole swarm as one job. The world can run as a host process or separate component;
-both use the same runtime channel. No world source is imported into the swarm.
+whole swarm as one job. The world runs as a separate dcomp component, with synchronous requests
+and file references carried through asys-runtime. No world source is imported into the swarm.
 Population size and concurrent decisions are separate settings.
 
 One turn works as follows:
@@ -148,13 +148,13 @@ do not reproduce the full MIT simulator.
 ## Demo and useful outcomes
 
 The [Rainkeepers terrarium](../asys-swarm/examples/terrarium/README.md) is an
-ordinary package of configuration, world code, HTML and worker environments.
+ordinary world component and DOM viewer package, with named worker definitions.
 The launcher has no demo registry or compiled-in scenario:
 
 ```sh
-asys-swarm run ./asys-swarm/examples/terrarium/swarm.json \
-  ./asys-swarm/examples/terrarium/env/scripted \
-  --world ./asys-swarm/examples/terrarium/world --view
+asys-run ./asys-swarm/examples/terrarium/env/scripted rainkeepers \
+  "Build a habitat whose gardens survive after every agent leaves"
+asys dashboard --port 8765
 ```
 
 Eight identical inhabitants have 24 turns to build rain collectors, gardens and

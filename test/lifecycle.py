@@ -1,5 +1,6 @@
 """Host launchers must finish ownership changes and clean up only their own work."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -66,8 +67,9 @@ class LifecycleTest(unittest.TestCase):
             return "saved logs\n"
         with patch.object(self.host, "document", return_value=document), patch.object(self.host, "command", side_effect=command):
             self.assertTrue(self.host.cleanup_components())
-        self.assertEqual(commands, [["dcomp", "logs", "test", "workers", "workflow"],
-                                    ["dcomp", "rm-component", "test", "workflow"], ["dcomp", "rm-component", "test", "workers"]])
+        self.assertEqual(commands, [self.host.dcomp + ["logs", "test", "workers", "workflow"],
+                                    self.host.dcomp + ["rm-component", "test", "workflow"],
+                                    self.host.dcomp + ["rm-component", "test", "workers"]])
         self.assertEqual(self.host.owned, [])
         self.assertEqual((self.host.directory / "components.log").read_text(), "saved logs\n")
 
@@ -75,7 +77,7 @@ class LifecycleTest(unittest.TestCase):
         self.host.owned = ["workers", "workflow"]
         document = {"components": [{"name": name} for name in self.host.owned]}
         def command(args, **options):
-            if args[1] == "rm-component" and args[-1] == "workers":
+            if args[len(self.host.dcomp)] == "rm-component" and args[-1] == "workers":
                 raise LaunchError("removal failed")
             return ""
         with patch.object(self.host, "document", return_value=document), patch.object(self.host, "command", side_effect=command):
@@ -96,6 +98,23 @@ class LifecycleTest(unittest.TestCase):
             with self.subTest(status=status), self.assertRaises(LaunchError):
                 self.host.check_components({"workers": {"status": status}})
         self.host.check_components({"workers": {"status": {"status": "running", "health": "healthy"}}})
+
+    def test_effective_connection_paths_are_frozen_with_explicit_options_first(self):
+        root = self.host.directory
+        with patch.dict(os.environ, {'DCOMP_STATE_ROOT': str(root / 'environment-state'),
+                                     'DCOMP_RUNTIME_ROOT': str(root / 'environment-runtime')}):
+            selected = ComponentHost(SimpleNamespace(system='test'))
+            self.assertEqual(selected.dcomp[1:], ['--state-root', str(root / 'environment-state'),
+                                                 '--runtime-root', str(root / 'environment-runtime')])
+            explicit = ComponentHost(SimpleNamespace(system='test', dcomp_state_root=root / 'explicit-state',
+                                                      runtime_root=root / 'explicit-runtime'))
+            self.assertEqual(explicit.dcomp[1:], ['--state-root', str(root / 'explicit-state'),
+                                                 '--runtime-root', str(root / 'explicit-runtime')])
+        with patch.dict(os.environ, {'DCOMP_STATE_ROOT': '', 'DCOMP_RUNTIME_ROOT': '',
+                                     'XDG_STATE_HOME': str(root / 'xdg')}):
+            selected = ComponentHost(SimpleNamespace(system='test'))
+            self.assertEqual(selected.dcomp[1:], ['--state-root', str(root / 'xdg/dcomp'),
+                                                 '--runtime-root', str(root / 'xdg/dcomp/run')])
 
 
 if __name__ == "__main__":

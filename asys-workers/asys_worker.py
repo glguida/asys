@@ -56,9 +56,8 @@ def prepare(definition, payload, environment, *, model=None, definition_path=Non
     command = [str(TOOLS / f'asys-{kind}')]
     metadata = {'version': 1, 'kind': kind, 'definition': str(definition_path) if definition_path else None}
     if kind == 'agent':
-        # Named definitions belong to the primary environment. An attached
-        # legacy workers bundle may supply commands, but never replace this
-        # definition's explicitly selected agent assets.
+        # Named definitions select agent assets from the primary environment,
+        # independently of the runtime's command configuration directory.
         env['ASYS_WORKERS_DIR'] = env['ASYS_ENVIRONMENT_DIR']
         adapted = {'prompt': payload['request']}
         if 'maxSteps' in config:
@@ -74,8 +73,6 @@ def prepare(definition, payload, environment, *, model=None, definition_path=Non
         adapted = {'topic': payload['request'], 'senate': config}
     else:
         identity = validate_name('job ID', environment['ASYS_JOB_ID'])
-        if not config['world'].get('command'):
-            raise ValueError('A named swarm definition requires world.command')
         config['mission'] = payload['request']
         control, world = job_channels(identity)
         validate_name('control channel', control)
@@ -83,7 +80,16 @@ def prepare(definition, payload, environment, *, model=None, definition_path=Non
         config['world']['channel'] = world
         adapted = {'id': identity, 'channel': control, 'config': config}
         metadata.update(control_channel=control, world_channel=world,
-                        swarm_state=f'jobs/{identity}/swarm', view=config['world'].get('view'))
+                        swarm_state=f'jobs/{identity}/swarm', world_package=config['world']['package'])
+        from asys_swarm.world_binding import world_binding
+        binding = world_binding(config, env)
+        previous = directory / 'worker.json'
+        # A recovered job keeps the renderer that matches its recorded frames.
+        # Jobs created after an environment refresh select the new generation.
+        generation = (read_json(previous).get('world_view') if previous.exists()
+                      else binding.get('view'))
+        if generation is not None:
+            metadata['world_view'] = generation
     selected_model = model if model is not None else config.get('model')
     if selected_model is not None:
         if kind == 'swarm':

@@ -5,20 +5,24 @@
   "types": {
     "agent": {
       "command": [
-        "/opt/asys/asys-workers/tools/asys-agent",
-        "--agent",
-        "general",
-        "--model",
-        "account/model",
-        "--extension",
-        "/opt/asys/asys-workers/extensions/bpmn.mjs"
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/agent.json"
       ]
     },
     "goal": {
-      "command": ["/opt/asys/asys-workers/tools/asys-goal"]
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/goal.json"
+      ]
     },
     "senate": {
-      "command": ["/opt/asys/asys-workers/tools/asys-senate"]
+      "command": [
+        "/opt/asys/asys-workers/tools/asys-worker",
+        "--definition",
+        "/opt/asys/environment/workers/senate.json"
+      ]
     },
     "program": {
       "command": [

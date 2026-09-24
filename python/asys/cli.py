@@ -11,6 +11,17 @@ from .runs import logs, status
 from .skill import skill
 from .state import initialize, state_root
 from .update import update
+from .options import ROOT_HELP
+
+
+def dashboard(args):
+    from .dashboard import dashboard as serve
+    return serve(args)
+
+
+def validate_dashboard(parser, args):
+    if not 0 <= args.port <= 65535:
+        parser.error('--port must be between 0 and 65535')
 
 
 def root_options(description, default):
@@ -37,6 +48,11 @@ def validate_init(parser, args):
         parser.error('init takes its state directory as DIR, without --root')
 
 
+def validate_skill(parser, args):
+    if args.root is not None:
+        parser.error('skill reads the installed bundle and does not use --root')
+
+
 def validate_logs(parser, args):
     args.source = args.source or ('jobs' if args.job or args.stream else 'run')
     if args.lines is not None and args.lines < 0:
@@ -52,11 +68,11 @@ def arguments(argv):
     parser = argparse.ArgumentParser(prog='asys', allow_abbrev=False,
         description='Configure asys, update shared services, and inspect runs and jobs.')
     parser.add_argument('--root', type=Path, metavar='DIRECTORY', default=argparse.SUPPRESS,
-        help='asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)')
+        help=ROOT_HELP)
     parser.set_defaults(argument_parser=None, root_default=None)
     commands = parser.add_subparsers(dest='command', title='commands', metavar='COMMAND')
 
-    state = root_options('asys system root (default: ASYS_STATE_ROOT or the local state directory/asys)', state_root)
+    state = root_options(ROOT_HELP, state_root)
 
     init = add_command(commands, 'init', initialize, 'Initialize asys state', validate=validate_init)
     init.add_argument('directory', type=Path, metavar='DIR')
@@ -67,9 +83,11 @@ def arguments(argv):
                 'Refresh running shared services from the installed images', parents=[state])
 
     guide = add_command(commands, 'skill', skill,
-                        'Print the bundled skill path, or copy it into DEST/asys')
+                        'Locate or export the operating and authoring skills', validate=validate_skill)
     guide.add_argument('destination', nargs='?', type=Path, metavar='DEST',
-                       help='skills directory to receive the portable asys skill (must not already contain asys)')
+                       help='parent skills directory; existing skill copies are preserved')
+    guide.add_argument('--name', choices=['asys', 'asys-authoring'],
+                       help='select one skill (default: both, with references and templates)')
 
     models = commands.add_parser('system-model', parents=[state], allow_abbrev=False,
         help='Set and list model defaults for system agents',
@@ -105,6 +123,14 @@ def arguments(argv):
 
     monitor = add_command(commands, 'top', top, 'Monitor runs, jobs, and transcripts', parents=[state])
     monitor.add_argument('run', nargs='?', metavar='RUN', help=run_help)
+
+    board = add_command(commands, 'dashboard', dashboard,
+                        'Open the local dashboard for all systems in this state root',
+                        parents=[state], validate=validate_dashboard)
+    board.add_argument('--port', type=int, default=0,
+                       help='local HTTP port (default: select an available port)')
+    board.add_argument('--design', type=Path, metavar='DIRECTORY',
+                       help='dashboard design package containing design.json, CSS and optional logo/fonts')
 
     selected, remaining = parser.parse_known_args(argv)
     command_parser = selected.argument_parser

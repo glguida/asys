@@ -13,11 +13,11 @@ import { WorkflowRuntime } from '../src/runtime.mjs';
 import { until } from './helpers.mjs';
 
 const project = fileURLToPath(new URL('../..', import.meta.url));
-const assets = join(project, 'skills/asys/assets');
+const assets = join(project, 'skills/asys-authoring/assets');
 
 test('the bundled goal template is executable and leaves the goal attempt limit unset', async () => {
   const definition = validateExecutable(await parseWorkflow(await readFile(join(assets, 'goal.bpmn'), 'utf8')));
-  assert.deepEqual(definition.bindings.deliver, { type: 'goal', input: '= {goal: request}', args: '= []', result: 'deliver' });
+  assert.deepEqual(definition.bindings.deliver, { type: 'goal', input: '= {request: request}', args: '= []', result: 'deliver' });
   assert.equal(definition.document.diagrams.length, 1);
 });
 
@@ -77,5 +77,7 @@ test('the skill team starter runs real programs through a rejected review, revis
   const implementations = states.filter(state => state.type === 'implementer');
   const inputs = await Promise.all(implementations.map(async state => JSON.parse(await readFile(
     join((await queue.paths(state.id)).directory, 'input.json'), 'utf8'))));
-  assert.deepEqual(inputs.map(input => input.feedback).sort(), ['', 'Add the missing Evidence section.']);
+  assert.equal(inputs.length, 2);
+  assert.ok(inputs.some(input => input.request.includes('First pass; no earlier review.')));
+  assert.ok(inputs.some(input => input.request.includes('Add the missing Evidence section.')));
 });

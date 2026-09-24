@@ -30,7 +30,12 @@ const server = createServer(connectNodeAdapter({ routes(router) { router.service
     else if (!results.has('approval')) content = [tool('approval', 'start_action', { action: 'approval' })];
     else if (!results.has('await_approval')) content = [tool('await_approval', 'wait_action', { id: details('approval') })];
     else content = [{ type: 'text', text: 'Approved.' }];
-    if (!content.some(part => part.type === 'toolCall')) content = [{ type: 'text', text: JSON.stringify({ final: content.map(part => part.text).join(''), exception: null }) }];
+    if (!content.some(part => part.type === 'toolCall')) {
+      const final=content.map(part => part.text).join('');
+      content = [{ type: 'text', text: JSON.stringify({final, exception: null,
+        ...(final==='The draft is ready.'?{review_summary:'Created proof.txt and checked the saved draft.',
+          review_files:[{path:'proof.txt',label:'Prepared draft'}]}:{})}) }];
+    }
     const message = answer(content);
     yield { payload: JSON.stringify({ type: 'done', reason: message.stopReason, message }) };
   },

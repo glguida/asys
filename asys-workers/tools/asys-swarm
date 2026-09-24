@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 root = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(root / 'asys-workers'), str(root / 'asys-runtime')]
+sys.path[:0] = [str(root / 'python'), str(root / 'asys-workers'), str(root / 'asys-runtime')]
 from asys_swarm.__main__ import main
 
 raise SystemExit(main())

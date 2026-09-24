@@ -1,5 +1,4 @@
 """Shared host support for running assignments in dcomp worker environments."""
-import argparse
 import json
 import os
 from pathlib import Path
@@ -14,17 +13,25 @@ from asys_runtime.permissions import mkdir, shared
 from .lifecycle import ComponentHost, LaunchError
 from .human_service import ensure_human
 from .config import system_models
+from .options import dcomp_options
 
 PROVIDER = 'cyclo.provider.v1.Provider'
 HUMAN = 'asys.human.v1.Human'
 
 
-def human_workers(environment, config, selected=None):
+def human_workers(environment, config, selected=None, selected_name=None):
     """Resolve authoring metadata here; the runtime remains a command executor."""
-    if selected and selected.get('kind') == 'goal':
-        return True
+    if selected:
+        if selected.get('kind') == 'goal':
+            return True
+        if selected.get('kind') != 'swarm':
+            return False
+    # A direct program uses only its own binding. Workflows and swarms can
+    # dispatch further environment jobs, so retain their dependency scan.
+    workers = ([(selected_name, config['types'][selected_name])]
+               if selected_name is not None and selected is None else config['types'].items())
     from .worker_definitions import definition_command, definition_path, validate_definition
-    for name, worker in config['types'].items():
+    for name, worker in workers:
         if Path(worker['command'][0]).name in {'asys-human', 'asys-goal'}:
             return True
         if worker['command'] == definition_command(name):
@@ -35,15 +42,30 @@ def human_workers(environment, config, selected=None):
     return False
 
 
+def worker_kinds(environment, config, selected=None, selected_name=None):
+    """Snapshot authoring kinds before dispatch, without inspecting live sources later."""
+    from .worker_definitions import definition_command, load_definition
+    kinds = {}
+    for name, worker in config['types'].items():
+        if selected_name is not None and name != selected_name:
+            continue
+        if selected is not None and name == selected_name:
+            kinds[name] = selected['kind']
+        elif worker['command'] == definition_command(name):
+            kinds[name] = load_definition(environment, name)['kind']
+        else:
+            executable = Path(worker['command'][0]).name
+            kinds[name] = {'asys-agent': 'agent', 'asys-goal': 'goal', 'asys-senate': 'senate',
+                           'asys-swarm': 'swarm', 'asys-human': 'human'}.get(executable, 'program')
+    return kinds
+
+
 def execution_options(parser):
     parser.add_argument('--workspace', type=Path, default=Path.cwd(), metavar='DIRECTORY',
                         help='actual project directory to work in (default: current directory)')
-    parser.add_argument('--external', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('-L', '--link', action='append', default=[], metavar='INPUT=TARGET',
                         help='wire an environment input to COMPONENT.OUTPUT or @GLOBAL; - leaves it unconnected')
-    parser.add_argument('--system', default='asys', help='dcomp system (default: asys)')
-    parser.add_argument('--dcomp-state-root', type=Path, metavar='DIRECTORY')
-    parser.add_argument('--runtime-root', type=Path, metavar='DIRECTORY', help='dcomp proxy root')
+    dcomp_options(parser)
 
 
 def prepare_run(root, workspace):
@@ -69,15 +91,14 @@ def prepare_run(root, workspace):
 
 
 class EnvironmentHost(ComponentHost):
-    def prepare_environment(self, environment, links, *, external=None, human_target=None):
-        definition = Environment(environment, external=external)
+    def prepare_environment(self, environment, links, *, configuration_directory=None, human_target=None):
+        definition = Environment(environment, external=configuration_directory)
         descriptor, config = definition.descriptor, definition.config
-        if definition.external is not None and ',' in str(definition.external):
-            raise LaunchError('External bundle paths cannot contain commas (dcomp mount syntax)')
         self.definition = descriptor['definition']
         self.record.update(environment=descriptor['name'], environment_directory=str(environment),
-                           external_directory=str(definition.external) if definition.external is not None else None,
                            egress=config.get('egress', False))
+        self.record['worker_kinds'] = {**self.record.get('worker_kinds', {}), **worker_kinds(
+            environment, config, getattr(self, 'worker_definition', None), getattr(self.args, 'worker', None))}
         version = json.loads(self.command([self.dcomp[0], 'version', '--json']))
         release = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:[-+].*)?', version.get('version', ''))
         if version.get('api_version') != 2 or not release or tuple(map(int, release.groups())) < (0, 3, 1):
@@ -91,7 +112,8 @@ class EnvironmentHost(ComponentHost):
             system.write_text('system execution-preview\ncomponent environment environment\n')
             component = self.document('view', '--json', str(system))['components'][0]
         inputs = {entry['name']: entry['service'] for entry in component['inputs']}
-        human_worker = human_workers(environment, config, getattr(self, 'worker_definition', None))
+        human_worker = human_workers(environment, config, getattr(self, 'worker_definition', None),
+                                     getattr(self.args, 'worker', None))
         if human_target is not None or human_worker:
             for entry in component['inputs'] + component['outputs']:
                 if entry['name'] == 'human' and entry['service'] != HUMAN:
@@ -121,6 +143,8 @@ class EnvironmentHost(ComponentHost):
         for source, target in resolved.items():
             if target.startswith('@') and not any(item['name'] == target[1:] for item in existing.get('globals', [])):
                 raise LaunchError(f'Global {target} is not declared in dcomp system {self.args.system}; start its provider or supply -L {source}=TARGET')
+        from .world_host import prepare_worlds
+        prepare_worlds(self, environment, config)
         image = self.environment_image(environment, component['image_ref'])
         lines = [f'docker {image}']
         for direction in ('inputs', 'outputs'):
@@ -154,16 +178,15 @@ class EnvironmentHost(ComponentHost):
         return system_models(self.args.root)
 
     def start_workers(self):
+        from .world_host import start_worlds
+        start_worlds(self)
         options = self.execution_mounts()
         models = self.directory / 'system-models.json'
         write_json(models, self.worker_models())
         options += ['--bind', f'{models},/etc/asys/system-models.json,ro']
-        if self.record.get('external_directory'):
-            external = Path(self.record['external_directory'])
-            if not (external / 'workers.json').is_file():
-                raise LaunchError(f'External workers.json is unavailable: {external}')
-            options += ['--bind', f'{external},/opt/asys/environment/external,ro',
-                        '--arg=--external', '--arg=/opt/asys/environment/external']
+        bindings = self.directory / 'world-bindings.json'
+        if bindings.exists():
+            options += ['--bind', f'{bindings},/etc/asys/world-bindings.json,ro']
         if self.record.get('egress'):
             options.append('--egress')
         for source, target in self.record['links'].items():

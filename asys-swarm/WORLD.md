@@ -1,11 +1,11 @@
 # Runtime world protocol, version 1
 
-A world is a separately running program. It can be a host process or a component;
-its implementation language and deployment do not change this protocol.
+A world package supplies a separate dcomp component implementing this interface.
+Its implementation language does not change the runtime protocol.
 `asys-runtime` supplies the transport. No method carries code or an import path.
 
-Use one client and one service per channel. Concurrent swarms and replay sessions
-need separate runtime roots or channel names. Each channel has these streams:
+Each job uses one isolated session channel. The component SDK multiplexes these
+sessions; each has one client and one service consumer. Each channel has these streams:
 
 ```text
 ROOT/channels/NAME/out/   swarm writes requests; world reads
@@ -16,6 +16,19 @@ These are ordinary runtime events, with atomic publication, sequence numbers
 and acknowledgement cursors. Use the Python or JavaScript runtime channel
 library rather than writing event files directly. See the
 [runtime channel contract](../asys-runtime/README.md#channels).
+
+The host supplies a protected package binding to workers and mounts only that
+package's runtime subtree into its component at `/var/lib/asys-world`. Session
+channels are named from the ordinary runtime job ID. `Component` publishes
+`ready.json` with `protocolVersion: 1` and implementation `identity`, and maintains
+the image health marker. Components can serve independent sessions concurrently;
+operations within each swarm remain synchronous.
+
+Requests and results are JSON data. Larger files can live within the shared
+world runtime subtree and travel as explicitly validated relative references.
+The world implementation defines the artifact schema and must constrain paths
+to its shared storage; a reference is not permission to read an arbitrary host
+file. Private member memory and worker job directories are not mounted there.
 
 ## Requests and responses
 
@@ -110,10 +123,12 @@ is required to reconstruct a run.
 The Python SDK takes an explicitly supplied callbacks object:
 
 ```python
-Service(runtime_root, rules, identity="counter-v1", channel="world").serve()
+from asys_swarm.world_service import Component
+
+Component("/var/lib/asys-world", rules, identity="counter-v1").serve()
 ```
 
-It retains one bounded response cache for recovery around publication and
+Each session retains one bounded response cache for recovery around publication and
 acknowledgement. This is not a permanent exactly-once transaction log; keep
 operations pure or make external side effects idempotent. A service process
 releases its channel ownership lock when it exits.
@@ -131,8 +146,8 @@ On timeout or interruption the client may send `world.cancel` with data:
 ```
 
 The SDK can skip queued cancelled requests. It does not preempt an already
-running callback. The caller stops waiting; a later reply is ignored, and the
-launcher can terminate an owned service process. Implementations should keep
+running callback. The caller stops waiting; a later reply is ignored. The
+enclosing deployment owns the shared component's lifetime. Implementations should keep
 callbacks bounded and cancellation independent of successful evaluation.
 
 World state is bounded at 2 MiB, transitions/actions at 4 MiB, artifacts at

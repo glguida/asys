@@ -88,15 +88,20 @@ class EngineTests(unittest.TestCase):
         self.registration = Environment(self.env).register(self.root)
         self.registration.__enter__()
         self.config = {'version': 1, 'mission': 'Reach the target together',
-            'world': {'channel': 'world', 'timeoutSeconds': 2}, 'objective': {'target': 4},
+            'world': {'package': 'worlds/test', 'channel': 'world', 'timeoutSeconds': 2}, 'objective': {'target': 4},
             'agents': {'count': 2}, 'limits': {'tickSeconds': 0, 'concurrency': 1, 'turns': 4}}
         self.service_stop = None
+        self.extra_services = []
         self.reset_service()
         self.engine = self.make_engine()
         self.inbound = Writer(direction_root(self.root, 'swarm', 'in'))
 
     def tearDown(self):
         self.engine.close()
+        for stop, thread in self.extra_services:
+            stop.set()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
         self.service_stop.set()
         self.service_thread.join(timeout=3)
         self.assertFalse(self.service_thread.is_alive())
@@ -191,15 +196,16 @@ class EngineTests(unittest.TestCase):
         write_json(self.env / 'workers.json', definition)
         self.registration = Environment(self.env).register(self.root)
         self.registration.__enter__()
-        directory = self.base / 'parent-job'
-        directory.mkdir()
         config = {**self.config, 'objective': None,
                   'limits': {**self.config['limits'], 'turns': 1}}
+        environment = self.worker_environment(config)
+        directory = Path(environment['ASYS_JOB_DIR'])
         queue = RuntimeQueue(self.root / 'environments/test')
         queue.submit('swarm', 'outer-swarm', directory=directory, workspace=self.workspace,
                      input={'id': 'test-run', 'config': config, 'channel': 'swarm'})
         completed = subprocess.run([sys.executable, str(ROOT / 'asys-runtime/tools/asys-runtime'),
             'run', str(self.env), '--root', str(self.root), '--once'],
+            env={**os.environ, 'ASYS_WORLD_BINDINGS': environment['ASYS_WORLD_BINDINGS']},
             capture_output=True, text=True, timeout=15)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         state = queue.state('outer-swarm')
@@ -259,8 +265,20 @@ class EngineTests(unittest.TestCase):
     def worker_environment(self, config):
         directory = self.base / 'parent-job'
         directory.mkdir()
+        config = json.loads(json.dumps(config))
+        config['world']['package'] = 'worlds/test'
+        world_root = self.root / 'worlds/test'
+        world_root.mkdir(parents=True)
+        binding = directory / 'world-bindings.json'
+        write_json(binding, {'version': 1, 'packages': {'worlds/test': {'runtime': 'worlds/test'}}})
+        service = Service(world_root, self.callbacks, identity=self.service.implementation)
+        stop = threading.Event()
+        thread = threading.Thread(target=service.serve, args=(stop.is_set,), daemon=True)
+        thread.start()
+        self.extra_services.append((stop, thread))
         write_json(directory / 'input.json', {'id': 'test-run', 'config': config, 'channel': 'swarm'})
         return {**os.environ, 'ASYS_JOB_DIR': str(directory), 'ASYS_JOB_ID': 'outer',
+                'ASYS_WORLD_BINDINGS': str(binding),
                 'ASYS_INPUT': str(directory / 'input.json'), 'ASYS_RESULT': str(directory / 'result.json'),
                 'ASYS_ENVIRONMENT_DIR': str(self.env), 'ASYS_WORKERS_DIR': str(self.env),
                 'ASYS_WORKSPACE': str(self.workspace), 'ASYS_RUNTIME_ROOT': str(self.root)}

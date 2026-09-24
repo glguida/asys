@@ -23,12 +23,49 @@ const coordinator = fileURLToPath(new URL('./coordinator.py', import.meta.url));
 const binding = (type = 'program', attrs = '') => `<bpmn:extensionElements><asys:job type="${type}" ${attrs}/></bpmn:extensionElements>`;
 const programTask = (id, extra = '') => `<bpmn:task id="${id}">${binding('program', `input="= {step: &quot;${id}&quot;${extra}}"`)}</bpmn:task>`;
 
+test('bundled report team uses common requests and completes a checked revision', async t => {
+  const f = await fixture(t);
+  const dummy = fileURLToPath(new URL('../../skills/asys-authoring/assets/team/env/dummy/programs/dummy.py', import.meta.url));
+  const program = fileURLToPath(new URL('../../asys-workers/tools/asys-program', import.meta.url));
+  const queue = await f.addEnvironment('report-team', {
+    implementer: { command: ['python3', dummy, 'implementer'] },
+    reviewer: { command: ['python3', dummy, 'reviewer'] },
+    program: { command: ['python3', program] },
+  });
+  const xml = await readFile(new URL('../../skills/asys-authoring/assets/team/workflow.bpmn', import.meta.url), 'utf8');
+  const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: xml });
+  await f.runtime.startRun({ environment: 'report-team', id: 'run', workflowId,
+    variablesJson: JSON.stringify({ request: 'Write a report with evidence.', review: null }) });
+  await finished(f, 'run');
+  const jobs = Object.values(f.runtime.record('run').jobs);
+  assert.equal(jobs.length, 6, 'implementation, artifact check, and review run twice');
+  const reviews = [];
+  for (const job of jobs) {
+    if (job.type === 'program') continue;
+    const assignment = (await queue.request(job.id)).input;
+    assert.deepEqual(Object.keys(assignment), ['request']);
+    assert.equal(typeof assignment.request, 'string');
+    if (job.type === 'reviewer') reviews.push((await queue.state(job.id)).result.approved);
+  }
+  assert.deepEqual(reviews, [false, true]);
+  assert.match(await readFile(join(f.root, 'workspace/deliverables/report.md'), 'utf8'), /## Evidence/);
+});
+
 test('BPMN runs a named swarm as one job and branches on its independently measured result', { timeout: 30000 }, async t => {
   const f = await fixture(t);
   const workers = fileURLToPath(new URL('../../asys-workers/', import.meta.url));
   const definition = JSON.parse(await readFile(join(workers, 'worlds/samples/route/env/workers/route-global.json'), 'utf8'));
-  definition.config.world.command = ['python3', join(workers, 'worlds/leaderboard/serve.py'), '--evaluator',
-    JSON.stringify(['python3', join(workers, 'worlds/samples/route/evaluate.py')])];
+  const worldRoot = join(f.environments.root, 'worlds/routes');
+  await mkdir(worldRoot, { recursive: true });
+  const bindings = join(f.root, 'world-bindings.json');
+  await writeFile(bindings, JSON.stringify({ version: 1,
+    packages: { [definition.config.world.package]: { runtime: 'worlds/routes' } } }));
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  await f.addWorld(['-c', `from worlds.common import serve\nserve('leaderboard', ['python3', ${JSON.stringify(join(workers, 'worlds/samples/route/evaluate.py'))}])`], {
+    PYTHONPATH: [join(root, 'python'), join(root, 'asys-runtime'), workers].join(':'),
+    ASYS_WORLD_ROOT: worldRoot, ASYS_WORLD_HEALTH_FILE: join(f.root, 'world-health'),
+  });
+  await until(async () => readFile(join(worldRoot, 'ready.json')).then(() => true, () => false));
   const directory = join(f.root, 'env/routes');
   await mkdir(join(directory, 'workers'), { recursive: true });
   const path = join(directory, 'workers/route-global.json');
@@ -36,7 +73,7 @@ test('BPMN runs a named swarm as one job and branches on its independently measu
   const queue = await f.addEnvironment('routes', {
     'route-global': { command: ['python3', join(workers, 'tools/asys-worker'), '--definition', path] },
     'route-member': { command: ['python3', join(workers, 'worlds/samples/route/participant.py')] },
-  });
+  }, { ASYS_WORLD_BINDINGS: bindings });
   const { workflowId } = await f.runtime.loadWorkflow({ bpmnXml: await readFile(new URL('./fixtures/named-swarm.bpmn', import.meta.url), 'utf8') });
   const request = 'Find the shortest valid delivery loop.';
   await f.runtime.startRun({ environment: 'routes', id: 'run', workflowId,
@@ -61,9 +98,9 @@ test('BPMN runs a named swarm as one job and branches on its independently measu
   const metadata = JSON.parse(await readFile(join(directoryPath, 'worker.json'), 'utf8'));
   assert.equal(metadata.control_channel, `swarm-${job.id}`);
   assert.equal(metadata.world_channel, `world-${job.id}`);
-  const attempts = await readdir(join(directoryPath, 'swarm/world'));
-  assert.equal(attempts.length, 1);
-  assert.equal(JSON.parse(await readFile(join(directoryPath, 'swarm/world', attempts[0], 'state.json'), 'utf8')).status, 'stopped');
+  const cache = JSON.parse(await readFile(join(worldRoot, 'channels', metadata.world_channel, '.world-response.json'), 'utf8'));
+  assert.equal(cache.correlation.runId, job.id);
+  assert.ok(!(await readdir(join(directoryPath, 'swarm'))).includes('world'));
 });
 
 for (const verified of [true, false]) {
@@ -447,6 +484,12 @@ async function fixture(t) {
   const state = join(root, 'workflow');
   const children = [];
   const f = { root, queue, state, environments, runtime: new WorkflowRuntime({ store: new Store(state), environments }),
+    async addWorld(args, env) {
+      const child = spawn('python3', args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let errors = '';
+      child.stderr.on('data', chunk => { errors += chunk; });
+      children.push({ child, exited: once(child, 'exit'), errors: () => errors });
+    },
     async addEnvironment(name, types, env = {}) {
       const directory = join(root, 'env', name);
       await mkdir(join(directory, 'agents/test'), { recursive: true });

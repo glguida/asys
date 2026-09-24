@@ -24,13 +24,14 @@ def load(name, path):
     return module
 
 
-world = load("terrarium_test_world", EXAMPLE / "world/physics.py")
+WORLD_PACKAGE = EXAMPLE.parents[2] / "asys-workers/worlds/terrarium"
+world = load("terrarium_test_world", WORLD_PACKAGE / "component/physics.py")
 policy = load("terrarium_test_policy", EXAMPLE / "env/scripted/programs/inhabitant.py")
 
 
 class TerrariumTests(unittest.TestCase):
     def setUp(self):
-        self.config = json.loads((EXAMPLE / "swarm.json").read_text())
+        self.config = json.loads((EXAMPLE / "env/scripted/workers/rainkeepers.json").read_text())["config"]
 
     def simulate(self):
         ids = [f"agent-{i:03}" for i in range(8)]
@@ -147,12 +148,15 @@ class TerrariumTests(unittest.TestCase):
             root = Path(directory)
             scenario = root / "renamed-world"
             shutil.copytree(EXAMPLE, scenario)
-            config = json.loads((scenario / "swarm.json").read_text())
+            config = json.loads((scenario / "env/scripted/workers/rainkeepers.json").read_text())["config"]
+            config["world"]["channel"] = "world-relocated"
+            package = root / "world-package"
+            shutil.copytree(WORLD_PACKAGE, package)
             repository = EXAMPLE.parents[2]
             runtime = root / 'runtime'
             env = {**os.environ, 'PYTHONPATH': os.pathsep.join([
                 str(repository / 'asys-workers'), str(repository / 'asys-runtime')])}
-            service = subprocess.Popen([sys.executable, str(scenario / 'world/serve.py'),
+            service = subprocess.Popen([sys.executable, str(package / 'component/serve.py'),
                 '--root', str(runtime)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
                 remote = World(runtime, config, 'relocated-test')
@@ -176,7 +180,7 @@ class TerrariumTests(unittest.TestCase):
             result = json.loads(result_path.read_text())
             self.assertEqual(result["actions"][0]["type"], "build")
             self.assertEqual(result["usage"]["totalTokens"], 0)
-            self.assertTrue((scenario / config["view"]).is_file())
+            self.assertTrue((package / "view.mjs").is_file())
 
     def test_artifacts_are_independent_json_data(self):
         state, _, _ = self.simulate()

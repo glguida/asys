@@ -127,8 +127,8 @@ def main():
               </bpmn:userTask></bpmn:process></bpmn:definitions>''')
             early_log = temp / 'early.log'
             with early_log.open('w') as output:
-                early = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
-                    str(early_workflow), str(early_environment), '--root', str(temp / 'first'),
+                early = subprocess.Popen([sys.executable, str(ROOT.parent / 'tools/asys-run'),
+                    str(early_environment), str(early_workflow), '--root', str(temp / 'first'),
                     '--workspace', str(temp), '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
                     stdin=subprocess.DEVNULL, stdout=output, stderr=output, text=True,
                     env={**os.environ, 'ASYS_STATE_ROOT': str(temp / 'first'), 'ASYS_HUMAN_INTERFACE_IMAGE': human_image})
@@ -198,8 +198,8 @@ def main():
             (private_environment / 'component.dcomp').write_text('docker asys-human-private-example:dev\n')
             private_log = temp / 'private.log'
             with private_log.open('w') as output:
-                private = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
-                    str(private_workflow), str(private_environment), '--human',
+                private = subprocess.Popen([sys.executable, str(ROOT.parent / 'tools/asys-run'),
+                    str(private_environment), str(private_workflow), '--human',
                     '--root', str(temp), '--workspace', str(beta.workspace.resolve()),
                     '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
                     stdin=subprocess.PIPE, stdout=output, stderr=output, text=True)
@@ -232,8 +232,8 @@ def main():
             shared_root = temp / 'shared-state'
             shared_runs = shared_root / 'runs'
             with shared_log.open('w') as output:
-                shared = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), 'run',
-                    str(shared_workflow), str(terminal_environment), '--root', str(shared_root),
+                shared = subprocess.Popen([sys.executable, str(ROOT.parent / 'tools/asys-run'),
+                    str(terminal_environment), str(shared_workflow), '--root', str(shared_root),
                     '--workspace', str(beta.workspace.resolve()), '--system', system, '--dcomp-state-root', str(temp / 'dcomp')],
                     stdin=subprocess.DEVNULL, stdout=output, stderr=output, text=True)
             processes.append(shared)
@@ -273,7 +273,7 @@ def main():
                                          .replace('type: "boolean"', 'type: "string"'))
             terminal_root = temp / 'terminal-state'
             terminal_runs = terminal_root / 'runs'
-            arguments = ['run', str(terminal_workflow), str(terminal_environment), '--human',
+            arguments = [str(terminal_environment), str(terminal_workflow), '--human',
                 '--root', str(terminal_root), '--workspace', str(terminal_workspace),
                 '--system', system, '--dcomp-state-root', str(temp / 'dcomp')]
             for attempt, expected_exit in [(1, 0), (2, 1), (3, 0)]:
@@ -282,7 +282,7 @@ def main():
                 original_terminal = termios.tcgetattr(slave)
                 os.set_blocking(master, False)
                 transcript = bytearray()
-                process = subprocess.Popen([sys.executable, str(ROOT.parent / 'asys-bpmn/tools/asys-bpmn'), *arguments],
+                process = subprocess.Popen([sys.executable, str(ROOT.parent / 'tools/asys-run'), *arguments],
                     stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                     env={**os.environ, 'TERM': 'xterm-256color'})
                 processes.append(process)
@@ -347,7 +347,7 @@ def main():
                     if attempt == 1:
                         (terminal_workspace / 'reviewed-once').unlink()
                     else:
-                        arguments = ['resume', record['id'], '--human', '--root', str(terminal_root)]
+                        arguments = ['--resume', record['id'], '--human', '--root', str(terminal_root)]
                 finally:
                     if process.poll() is None:
                         process.terminate()

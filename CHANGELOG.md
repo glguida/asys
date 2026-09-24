@@ -2,34 +2,42 @@
 
 ## 0.2.0
 
-- Separate named worker definitions from installed environment programs and
-  skills. Add `asys-workers` for list/add/describe/edit, `asys-environment` for
-  Dockerfile and skill management, and `asys-run ENVIRONMENT WORKER REQUEST` for
-  a common launch path. Keep existing command types and specialized launchers.
-- Bind named agents, goals, Senates and swarms as ordinary runtime jobs, usable
-  from the host or BPMN. Snapshot run definitions and preserve the existing
-  workspace, model, state and monitoring conventions.
-- Supervise each named swarm's configured world executable within its worker
-  job, using private synchronous runtime channels. Add reusable global artifact
-  sharing and torus worlds, explicit evaluators, and a deterministic route sample.
-- Embed world renderer modules in a common host page with controls, journal and
-  saved-frame playback. Include shared and selected-agent skill instructions in
-  bounded swarm decisions.
-- Align `asys-swarm --root` with the other host utilities: it selects the system
-  directory, whose `runs/` subdirectory contains execution state. Full saved run
-  paths remain usable with viewer and control commands.
-
-- Add `asys-swarm` as one worker job, with population state and the turn algorithm
-  inside workers. Separately managed host and component worlds can also use the
-  versioned protocol over runtime channels. Swarm configuration carries data;
-  workers do not import world modules. Runs retain bounded execution, checkpoints,
-  member transcripts, events and deterministic replay data.
-- Add an action-only `asys-swarm-agent` worker and the editable Rainkeepers
-  terrarium example, with scripted and model environments and a live browser
-  view. The example measures whether constructions keep gardens alive through
-  a drought after every agent has been removed.
-- Document per-agent observations, world services, and local or shared
-  information policies through the runtime and world interfaces.
+- Unify execution under `asys-run ENVIRONMENT WORKER|WORKFLOW.bpmn` and
+  `asys-run --resume RUN`. Remove specialized host launchers and their obsolete
+  installed packages; algorithms remain ordinary worker jobs.
+- Separate named worker definitions from environment programs and shared skills.
+  Use `asys-workers COMMAND ENVIRONMENT` and `asys-environment COMMAND ENVIRONMENT`.
+  Expand command help with kinds, generated files, configuration and examples.
+- Make public `--root` consistently select asys state across execution, inference,
+  Human handling and observation. Distinguish state from environment, workspace
+  and dcomp system; preserve saved configuration during workflow resume.
+- Add a unified dashboard with persistent system selection, readable transcripts,
+  structured JSON, program results and a shared inspector. Workflow diagrams
+  distinguish all worker kinds, forks, revision paths and alternative endings.
+  Senate participants occupy multiple tiers around the princeps senatus.
+- Separate dashboard presentation into a shared CSS and asset package. Select
+  alternative colors, symbols, fonts, logo and identity with `--design DIRECTORY`.
+  Built-in world views use the same stylesheet and theme context.
+- Rewrite guides and ship two complete portable skills: `asys` for operation and
+  `asys-authoring` for environments, workers, workflows, Human review, worlds and
+  designs. `asys skill DEST` exports both with references and runnable templates.
+- Package worlds as separate dcomp components plus saved DOM viewers. Common host
+  preparation provisions them for standalone and workflow jobs. Workers never
+  import world code or start world subprocesses.
+- Retain swarm identities, private memory, synchronous turns, limits and checkpoints
+  in workers. Include checked-artifact leaderboard, local torus and Rainkeepers
+  worlds, with durable frames and member conversations after execution stops.
+- Include shared and selected-agent skill instructions in bounded swarm decisions.
+  Default capable models to medium reasoning and preserve partial responses on
+  interruption without executing unfinished tool calls.
+- Add a mixed workflow demonstrating parallel swarms, a verified goal, an
+  independent shared-workspace program, Senate review and real Human decisions.
+- Keep resumed runs attached to their saved dcomp state and runtime directories,
+  even after the invoking shell selects another installation. Preserve each
+  swarm job's world viewer when later jobs use an updated world package.
+- Include workflow events, boundary attachments and called activities in the
+  dashboard, match jobs by task identity, and color tasks before they start.
+  Accept direct Human requests through the shared runner input contract.
 
 ## 0.1.5
 
@@ -84,7 +92,7 @@
   One-shot now takes an environment and prompt, without an agent argument.
   `asys system-model set/list` configures defaults, and `--model` overrides
   the model for a one-shot or goal run. See the
-  [upgrade instructions](INSTALL.md#upgrade-from-011).
+  [upgrade instructions](INSTALL.md#upgrade-to-020).
 - Load stable `prompt.md` instructions for named environment agents alongside
   their memory and resources, and record the effective definition in job state.
 - Install a portable asys Agent Skill covering team and environment design,
@@ -116,7 +124,7 @@
 - Workers send human requests to `@human_endpoint` by default.
   `asys-human-prompt` exports and binds that service. Environment manifests now
   declare `input asys.human.v1.Human human`. Upgrading from 0.1.0 also requires a
-  one-time handler restart; see the [upgrade instructions](INSTALL.md#upgrade-from-010).
+  one-time handler restart; see the [upgrade instructions](INSTALL.md#upgrade-to-020).
 
 ## 0.1.0
 

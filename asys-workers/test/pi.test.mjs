@@ -26,6 +26,7 @@ test('the worker publishes actual text and thinking before the message finishes'
       partial.content.push({ type: 'thinking', thinking: '' });
       yield send({ type: 'thinking_start', contentIndex: 0, partial });
       partial.content[0].thinking = 'I need to check the board connections.';
+      partial.content[0].thinkingSignature = 'fixture-thinking-signature';
       yield send({ type: 'thinking_delta', contentIndex: 0, delta: partial.content[0].thinking, partial });
       partial.content.push({ type: 'text', text: '' });
       yield send({ type: 'text_start', contentIndex: 1, partial });
@@ -52,6 +53,95 @@ test('the worker publishes actual text and thinking before the message finishes'
     assert.ok(!saved.agent.session.entries.some(e => e.message?.role === 'assistant'), 'message is still streaming');
   } finally { clearTimeout(timer); release.resolve(); result = await running; }
   assert.equal(result.final, 'I am inspecting the board now.');
+  assert.deepEqual(saved.agent.session.entries.at(-1).message.content[0], {
+    type: 'thinking', thinking: 'I need to check the board connections.', thinkingSignature: 'fixture-thinking-signature',
+  });
+});
+
+test('interrupted ordinary agent responses retain evidence without executing partial tools', async t => {
+  for (const aborted of [false, true]) await t.test(aborted ? 'abort' : 'transport', async t => {
+    const workspace = await mkdtemp(join(tmpdir(), 'asys-interrupted-transcript-'));
+    t.after(() => rm(workspace, { recursive: true, force: true }));
+    const controller = new AbortController(), job = { id: 'interrupted' };
+    const content = [
+      { type: 'thinking', thinking: 'This response is still incomplete.', thinkingSignature: 'fixture-signature' },
+      { type: 'toolCall', id: 'partial-call', name: 'do_not_run', arguments: {} },
+    ];
+    let executions = 0;
+    const provider = {
+      async listModels() { return { models: [model] }; },
+      async *infer() {
+        const partial = assistant(content, 'pending');
+        yield { payload: JSON.stringify({ type: 'start', partial }) };
+        yield { payload: JSON.stringify({ type: 'thinking_delta', contentIndex: 0, delta: content[0].thinking, partial }) };
+        if (aborted) controller.abort(new Error('Fixture operator cancellation'));
+        throw new ConnectError('Fixture failed stream', Code.DataLoss);
+      },
+    };
+    await assert.rejects(runAgent({
+      config: { model: 'fixture/model', prompt: 'Observe the failure.', maxSteps: 1, options: {} },
+      job, workspace, provider, signal: controller.signal, save() {}, event() {},
+      customTools: [{ name: 'do_not_run', label: 'Do not run', description: 'Must never execute',
+        parameters: { type: 'object', properties: {} }, async execute() { executions++; return { content: [] }; } }],
+    }), aborted ? /Fixture operator cancellation/ : /Fixture failed stream/);
+    assert.equal(executions, 0);
+    const saved = job.agent.session.entries.at(-1).message;
+    assert.equal(saved.stopReason, aborted ? 'aborted' : 'error');
+    assert.deepEqual(saved.content, content);
+  });
+});
+
+test('terminal transport failures preserve the latest native partial, or remain empty before output', async t => {
+  for (const withOutput of [false, true]) for (const aborted of [false, true]) {
+    await t.test(`${withOutput ? 'partial' : 'no output'} ${aborted ? 'abort' : 'failure'}`, async () => {
+      const route = groupModels([model]).get('fixture')[0];
+      const controller = new AbortController();
+      const partial = { ...assistant([
+        { type: 'thinking', thinking: 'Received summary.', thinkingSignature: 'fixture-native-signature' },
+        { type: 'text', text: 'Received text.' },
+      ], 'pending'), api: 'openai-codex-responses', provider: 'openai-codex', model: 'backend' };
+      const provider = { async *infer() {
+        if (withOutput) yield { payload: JSON.stringify({ type: 'thinking_delta', contentIndex: 0,
+          delta: partial.content[0].thinking, partial }) };
+        if (aborted) controller.abort();
+        throw new ConnectError('Fixture failed stream', Code.DataLoss);
+      } };
+      const result = await streamProvider(provider, model.id, route.model, { messages: [] },
+        { signal: controller.signal }, { sleep: async () => assert.fail('terminal failure must not retry') }).result();
+      assert.equal(result.stopReason, aborted ? 'aborted' : 'error');
+      assert.deepEqual(result.content, withOutput ? partial.content : []);
+      if (withOutput) assert.deepEqual(result.asysNativeIdentity,
+        { api: partial.api, provider: partial.provider, model: partial.model });
+      assert.equal(partial.stopReason, 'pending');
+    });
+  }
+});
+
+test('retry interruption retains native error content or preceding content if the error is empty', async t => {
+  for (const errorHasContent of [false, true]) await t.test(errorHasContent ? 'error content' : 'earlier content', async () => {
+    const route = groupModels([model]).get('fixture')[0];
+    const content = [
+      { type: 'thinking', thinking: 'Received summary.', thinkingSignature: 'fixture-signature' },
+      { type: 'toolCall', id: 'incomplete', name: 'unused', arguments: { input: 'parsed so far' },
+        partialJson: '{"input":"parsed so far', customInput: { property: 'input', jsonBuffer: {} } },
+    ];
+    const expected = structuredClone(content);
+    delete expected[1].partialJson;
+    delete expected[1].customInput;
+    const provider = { async *infer() {
+      if (!errorHasContent) yield { payload: JSON.stringify({ type: 'start', partial: assistant(content, 'pending') }) };
+      yield { payload: JSON.stringify({ type: 'error', reason: 'error',
+        error: { ...assistant(errorHasContent ? content : [], 'error'), errorMessage: 'terminated' } }) };
+    } };
+    const result = await streamProvider(provider, model.id, route.model, { messages: [] }, {}, {
+      onRetry() { throw new Error('Fixture stopped recovery'); },
+      sleep: async () => assert.fail('recovery was interrupted'),
+    }).result();
+    assert.equal(result.stopReason, 'error');
+    assert.match(result.errorMessage, /Fixture stopped recovery/);
+    assert.deepEqual(result.content, expected);
+    assert.equal(content[1].partialJson, '{"input":"parsed so far', 'received evidence is not mutated');
+  });
 });
 
 test('Pi discovers and reads skills supplied by the selected environment', async t => {

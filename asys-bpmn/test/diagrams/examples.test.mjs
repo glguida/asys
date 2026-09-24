@@ -12,9 +12,9 @@ const examples = [
   { path: 'hello/workflow.bpmn', task: 'greet', elements: ['start', 'greet', 'end', 'begin', 'finish'] },
   { path: 'agent-task.bpmn', task: 'work', elements: ['start', 'work', 'end', 'begin', 'finish'] },
   { path: 'agent-review.bpmn', task: 'draft', elements: ['start', 'work', 'draft', 'approval', 'end', 'ready_for_review', 'begin', 'finish'] },
-  { path: 'skill/team.bpmn', url: new URL('../../../skills/asys/assets/team/workflow.bpmn', import.meta.url),
+  { path: 'skill/team.bpmn', url: new URL('../../../skills/asys-authoring/assets/team/workflow.bpmn', import.meta.url),
     task: 'check', elements: ['start', 'implement', 'check', 'review', 'decision', 'end', 'begin', 'check_report', 'review_report', 'choose', 'accept', 'revise'] },
-  { path: 'skill/goal.bpmn', url: new URL('../../../skills/asys/assets/goal.bpmn', import.meta.url),
+  { path: 'skill/goal.bpmn', url: new URL('../../../skills/asys-authoring/assets/goal.bpmn', import.meta.url),
     task: 'deliver', elements: ['start', 'deliver', 'end', 'begin', 'finish'] },
 ];
 

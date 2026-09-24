@@ -78,6 +78,7 @@ export function streamProvider(
 }
 
 async function pump(output, client, publicId, model, context, options, { now, sleep, random, idleTimeoutMs, onExhaustion, onRetry }) {
+  let latestAssistant;
   try {
     if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > MAX_TIMER_DELAY_MS) {
       throw new TypeError(`inference idle timeout must be an integer between 1 and ${MAX_TIMER_DELAY_MS} milliseconds`);
@@ -98,6 +99,11 @@ async function pump(output, client, publicId, model, context, options, { now, sl
       try {
         for await (const response of inferenceAttempt(client, request, options.signal, idleTimeoutMs)) {
           const event = decodePayload(response.payload);
+          const received = event.partial ?? event.message ?? event.error;
+          if (received?.role === "assistant"
+            && (event.type !== "error" || received.content?.length || !latestAssistant?.content?.length)) {
+            latestAssistant = toPiMessage(received, publicId);
+          }
           if (event.type === "error" && !isContextOverflow(event.error, model.contextWindow)
             && isRetryableAssistantError(event.error)) {
             // Reuse the pinned Pi classifier for native error events. RPC
@@ -137,7 +143,13 @@ async function pump(output, client, publicId, model, context, options, { now, sl
     }
   } catch (error) {
     const aborted = options.signal?.aborted;
-    const message = assistantMessage(model);
+    // Preserve received content as interrupted evidence. Both Pi and the swarm
+    // worker reject error/aborted responses before executing any tool calls.
+    const message = latestAssistant ? structuredClone(latestAssistant) : assistantMessage(model);
+    for (const block of Array.isArray(message.content) ? message.content : []) {
+      // These are native streaming parser buffers, not recorded tool arguments.
+      if (block && typeof block === "object") { delete block.partialJson; delete block.customInput; }
+    }
     message.stopReason = aborted ? "aborted" : "error";
     message.errorMessage = aborted
       ? "Provider request aborted"

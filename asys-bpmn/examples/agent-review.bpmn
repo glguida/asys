@@ -9,12 +9,12 @@
     <bpmn:startEvent id="start"/>
     <bpmn:adHocSubProcess id="work" name="Prepare and review" ordering="Sequential">
       <bpmn:extensionElements>
-        <asys:job type="agent" input='= {prompt: "Select draft, wait for its result, then select approval and wait for the human decision. Use list_actions, start_action and wait_action. Summarize the decision when finished."}'/>
+        <asys:job type="agent" input='= {request: "Select draft, wait for its result, then select approval and wait for the human decision. Use list_actions, start_action and wait_action. Summarize the decision when finished."}'/>
       </bpmn:extensionElements>
       <bpmn:serviceTask id="draft" name="Prepare a draft">
         <bpmn:documentation>Prepare the requested draft using the programs available in the workspace.</bpmn:documentation>
         <bpmn:extensionElements>
-          <asys:job type="agent" input='= {prompt: "Prepare the requested draft for human review. Include review_summary and review_files in your final JSON using the Reporting to humans guide. Request: " + request}'/>
+          <asys:job type="agent" input='= {request: "Prepare the requested draft for human review. Include review_summary and review_files in your final JSON using the Reporting to humans guide. Request: " + request}'/>
         </bpmn:extensionElements>
       </bpmn:serviceTask>
       <bpmn:userTask id="approval" name="Review the draft">

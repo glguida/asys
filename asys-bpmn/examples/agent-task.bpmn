@@ -8,7 +8,7 @@
     <bpmn:startEvent id="start"/>
     <bpmn:serviceTask id="work" name="Answer the request">
       <bpmn:extensionElements>
-        <asys:job type="agent" input="= {prompt: request}"/>
+        <asys:job type="agent" input="= {request: request}"/>
       </bpmn:extensionElements>
     </bpmn:serviceTask>
     <bpmn:endEvent id="end"/>

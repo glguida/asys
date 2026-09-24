@@ -3,6 +3,7 @@ import fcntl
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 import runpy
 import tempfile
@@ -10,7 +11,11 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-module = runpy.run_path(str(ROOT / "tools/asys-bpmn"))
+runpy.run_path(str(ROOT.parent / "tools/asys-run"))
+from asys.run import arguments
+from asys.workflow import Launcher
+from asys import workflow as workflow_module
+module = vars(workflow_module)
 
 
 class Resume(unittest.TestCase):
@@ -30,8 +35,8 @@ class Resume(unittest.TestCase):
                        "components": {"engine": "example-workflow-abc123", "workers": "example-workers-abc123"}}
         self.path = self.directory / "run.json"
         self.path.write_text(json.dumps(self.record))
-        args = module["arguments"](["--root", self.temp.name, "resume", "abc"])
-        self.launcher = module["Launcher"](args)
+        args = arguments(["--root", self.temp.name, "--resume", "abc"])
+        self.launcher = Launcher(args)
         self.addCleanup(self.launcher.close)
         self.source = self.source_environment()
         self.component = {"image_ref": "workers:current", "inputs": [
@@ -83,6 +88,88 @@ class Resume(unittest.TestCase):
         self.assertEqual((self.directory / "environment/component.dcomp").read_text(), "docker sha256:updated-workers\ninput cyclo.provider.v1.Provider inference\n")
         self.assertIn("sha256:new-engine", (self.directory / "engine/component.dcomp").read_text())
 
+    def test_resume_keeps_connections_selected_by_the_original_shell(self):
+        root = Path(self.temp.name)
+        workflow = root / 'connections.bpmn'
+        workflow.write_text('<definitions id="Connections"/>')
+        original_state, original_runtime = root / 'original-dcomp', root / 'original-proxy'
+        with patch.dict(os.environ, {'DCOMP_STATE_ROOT': str(original_state),
+                                     'DCOMP_RUNTIME_ROOT': str(original_runtime)}):
+            first = Launcher(arguments([str(self.source), str(workflow), '--root', str(root),
+                                        '--workspace', str(root)]))
+            def prepare(*args, **kwargs):
+                first.record.update(environment='test', links={})
+            with patch.object(first, 'prepare_environment', side_effect=prepare), \
+                    patch.object(first, 'engine_image', return_value='sha256:engine'), \
+                    patch.object(first, 'start_components'):
+                first.setup()
+            first.record['status'] = 'failed'
+            first.snapshot()
+            (first.directory / 'workflow/workflow.sqlite').touch()
+            (first.directory / 'environment/component.dcomp').write_text('docker sha256:workers\n')
+            first.close()
+        saved = json.loads((first.directory / 'run.json').read_text())
+        self.assertEqual(saved['dcomp'][1:], ['--state-root', str(original_state),
+                                             '--runtime-root', str(original_runtime)])
+        with patch.dict(os.environ, {'DCOMP_STATE_ROOT': str(root / 'other-dcomp'),
+                                     'DCOMP_RUNTIME_ROOT': str(root / 'other-proxy')}):
+            resumed = Launcher(arguments(['--resume', first.id, '--root', str(root)]))
+            try:
+                with patch.object(resumed, 'command', return_value=json.dumps({
+                        'api_version': 2, 'components': [], 'globals': []})) as command, \
+                        patch.object(resumed, 'engine_image', return_value='sha256:engine'), \
+                        patch.object(resumed, 'refresh_environment'), \
+                        patch.object(resumed, 'start_components'):
+                    resumed.setup()
+                self.assertEqual(resumed.dcomp, saved['dcomp'])
+                self.assertEqual(command.call_args.args[0], saved['dcomp'] + ['view', '--json', 'asys'])
+            finally:
+                resumed.close()
+
+    def test_resume_prepares_separate_world_and_preserves_binding_and_session_evidence(self):
+        from asys.worker_definitions import definition_command
+        package = self.source / 'worlds/search'
+        (package / 'component').mkdir(parents=True)
+        (package / 'component/component.dcomp').write_text('docker world:current\n')
+        (package / 'view.mjs').write_text('export function mount() {}')
+        (package / 'world.json').write_text(json.dumps({'version': 1,
+            'component': 'component/component.dcomp', 'view': 'view.mjs'}))
+        (self.source / 'workers').mkdir()
+        (self.source / 'workers/search.json').write_text(json.dumps({'version': 1, 'kind': 'swarm',
+            'config': {'version': 1, 'name': 'search', 'agents': {'count': 2, 'type': 'agent'},
+                       'world': {'package': 'worlds/search'}}}))
+        config = json.loads((self.source / 'workers.json').read_text())
+        config['types']['search'] = {'command': definition_command('search')}
+        (self.source / 'workers.json').write_text(json.dumps(config))
+        def document(*args):
+            if (Path(args[-1]).parent / 'world/component.dcomp').is_file():
+                return {'components': [{'image_ref': 'world:current', 'inputs': [], 'outputs': []}]}
+            return self.document(*args)
+        with patch.object(self.launcher, 'document', side_effect=document), \
+                patch.object(self.launcher, 'engine_image', return_value='sha256:new-engine'), \
+                patch.object(self.launcher, 'start_components'):
+            self.launcher.setup()
+            path = self.directory / 'world-bindings.json'
+            bindings = path.read_bytes()
+            value = json.loads(bindings)['packages']['worlds/search']
+            runtime = self.directory / 'runtime' / value['runtime']
+            (runtime / 'session.json').write_text('preserved request/response evidence')
+            (package / 'view.mjs').write_text('changed source view')
+            self.launcher.refresh_environment()
+        refreshed = json.loads(path.read_bytes())['packages']['worlds/search']
+        self.assertEqual(refreshed['runtime'], value['runtime'])
+        self.assertNotEqual(refreshed['view'], value['view'])
+        self.assertEqual((runtime / 'session.json').read_text(), 'preserved request/response evidence')
+        self.assertEqual(self.launcher.record['world_views']['search'],
+                         {'directory': f"world-view-versions/{value['view']}", 'entry': 'view.mjs'})
+        self.assertEqual((self.directory / f"world-view-versions/{value['view']}/view.mjs").read_text(),
+                         'export function mount() {}')
+        current = self.launcher.record['world_view_versions'][refreshed['view']]
+        self.assertEqual((self.directory / current['directory'] / current['entry']).read_text(),
+                         'changed source view')
+        world = self.launcher.record['world_components']['worlds/search']
+        self.assertEqual(self.launcher.names[world['role']], world['name'])
+
     def test_environment_rename_is_rejected_before_replacing_the_saved_image(self):
         config = json.loads((self.source / 'workers.json').read_text())
         config['name'] = 'other'
@@ -90,43 +177,6 @@ class Resume(unittest.TestCase):
         with self.assertRaisesRegex(module['LaunchError'], 'original environment name'):
             self.setup()
         self.assertEqual((self.directory / 'environment/component.dcomp').read_text(), 'docker sha256:saved-workers\n')
-
-    def test_resume_reuses_the_external_bundle_for_validation_and_worker_mounts(self):
-        external = Path(self.temp.name) / 'portable agents'
-        external.mkdir()
-        config = {'version': 1, 'name': 'portable', 'types': {'review': {'command': ['review']}}}
-        (external / 'workers.json').write_text(json.dumps(config))
-        self.record.update(environment='portable', external_directory=str(external))
-        self.path.write_text(json.dumps(self.record))
-        self.setup()
-        self.assertEqual(self.launcher.record['environment'], 'portable')
-        self.assertEqual(self.launcher.record['external_directory'], str(external))
-        self.assertEqual(self.launcher.definition, module['Environment'](external).descriptor['definition'])
-        with patch.object(self.launcher, 'add') as add:
-            self.launcher.start_workers()
-        self.assertIn(f'{external},/opt/asys/environment/external,ro', add.call_args.args[2])
-        self.assertNotIn(f'{external},/opt/asys/environment/external,ro', self.launcher.execution_mounts())
-
-    def test_resume_fails_when_its_external_bundle_is_unavailable(self):
-        self.record['external_directory'] = str(Path(self.temp.name) / 'missing bundle')
-        self.path.write_text(json.dumps(self.record))
-        with self.assertRaises(FileNotFoundError):
-            self.setup()
-        self.assertEqual((self.directory / 'environment/component.dcomp').read_text(), 'docker sha256:saved-workers\n')
-        self.assertFalse(any(command[:2] == ['docker', 'build'] for command in self.commands))
-
-    def test_external_human_worker_supplies_the_human_connection(self):
-        external = Path(self.temp.name) / 'portable agents'
-        external.mkdir()
-        config = {'version': 1, 'name': 'test', 'types': {
-            'approval': {'command': ['/opt/asys/asys-workers/tools/asys-human']}}}
-        (external / 'workers.json').write_text(json.dumps(config))
-        self.record['external_directory'] = str(external)
-        self.path.write_text(json.dumps(self.record))
-        self.setup()
-        self.assertEqual(self.launcher.record['links']['human'], '@human_endpoint')
-        self.assertIn('input asys.human.v1.Human human\n',
-                      (self.directory / 'environment/component.dcomp').read_text())
 
     def test_private_human_adds_the_worker_input_without_changing_the_environment_source(self):
         self.launcher.args.human = True

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>asys · dashboard</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <link rel="stylesheet" href="/design/default/styles.css">
+  <!-- custom-design -->
+</head>
+<body>
+  <header class="masthead">
+    <a class="identity" href="#" aria-label="asys overview">
+      <img class="brand-logo" src="/design/default/logo.svg" alt="" aria-hidden="true">
+      <span class="wordmark">asys</span>
+    </a>
+    <div class="scope"><span id="scope"></span></div>
+    <div class="display-controls"><span id="updated">Connecting</span><button id="toggle-inspector" type="button" hidden>Details</button><button id="freeze" type="button" aria-pressed="false">Freeze display</button></div>
+  </header>
+  <main>
+    <div class="page-content">
+    <p id="notice" class="notice" role="status" hidden></p>
+    <p id="error" class="error" role="alert" hidden></p>
+    <section id="overview" aria-labelledby="overview-title">
+      <div class="section-heading"><div><span class="eyebrow">01 · Overview</span><h1 id="overview-title">Runs</h1><p class="overview-description">Select a run to inspect its workflow, workers, transcripts, and results.</p></div><p id="totals" class="totals"></p><button id="overview-toggle" type="button" hidden aria-expanded="false">Browse runs</button></div>
+      <form class="filters" id="filters" role="search">
+        <label>System<select id="system-filter"><option value="">All systems</option></select></label>
+        <label>Activity<select id="activity-filter"><option value="all">Active and history</option><option value="active">Active</option><option value="attention">Needs attention</option><option value="history">History</option></select></label>
+        <label>Kind<select id="kind-filter"><option value="">Every kind</option><option value="agent">Agent</option><option value="goal">Goal</option><option value="senate">Senate</option><option value="swarm">Swarm</option><option value="program">Program</option><option value="human">Human</option><option value="workflow">Workflow</option></select></label>
+        <label class="search">Find a run<input id="search" type="search" placeholder="Name, worker, environment or request" autocomplete="off"></label>
+        <span id="visible-count" class="quiet"></span>
+      </form>
+      <div class="table-scroll"><table class="run-table"><thead><tr><th scope="col">Run / request</th><th scope="col">System / environment</th><th scope="col">Work</th><th scope="col">Status / activity</th><th scope="col">Elapsed</th></tr></thead><tbody id="runs"></tbody></table></div>
+      <p id="empty-runs" class="empty" hidden>No runs match this view.</p>
+    </section>
+    <section id="detail" class="run-detail" aria-labelledby="run-title" hidden>
+      <div class="section-heading"><div><span class="eyebrow">02 · Selected run</span><h2 id="run-title"></h2></div><button id="close-run" type="button">Close detail</button></div>
+      <p id="run-request" class="request"></p>
+      <dl id="run-facts" class="facts"></dl>
+      <section id="workflow-section" class="workflow-section" aria-label="Workflow sequence" hidden><h3>Workflow</h3><div id="workflow" class="sequence"></div><div class="symbol-legend" aria-label="Workflow legend"><button type="button" data-legend="agent"><i class="legend-step agent"></i>Agent</button><button type="button" data-legend="goal"><i class="legend-step goal"></i>Goal</button><button type="button" data-legend="senate"><i class="legend-step senate"></i>Senate</button><button type="button" data-legend="swarm"><i class="legend-step swarm"></i>Swarm</button><button type="button" data-legend="program"><i class="legend-step program"></i>Program work</button><button type="button" data-legend="human"><i class="legend-step human"></i>Human work</button><button type="button" data-legend="gateway"><i class="legend-step gateway"></i>Gateway / routing</button><button type="button" data-legend="event"><i class="legend-tick"></i>Start / end</button></div></section>
+      <div class="work-layout">
+        <aside class="jobs-panel"><h3>Workers</h3><p id="job-count" class="quiet"></p><nav id="jobs" aria-label="Select a worker"></nav></aside>
+        <section class="job-panel" aria-labelledby="job-title">
+          <div class="job-heading"><div><span id="job-kind" class="eyebrow"></span><h3 id="job-title">Select a worker</h3></div><span id="job-status" class="state-label"></span></div>
+          <div id="job-activity" class="quiet"></div><div class="job-actions"><button id="open-transcript" type="button">Open transcript</button><button id="inspect-worker" type="button">Inspect worker</button><button id="show-inspector" type="button">Selected item</button></div>
+          <div id="execution-controls" class="execution-controls" hidden><span class="eyebrow">Execution</span><button type="button" data-control="pause">Pause execution</button><button type="button" data-control="resume">Resume execution</button><button type="button" data-control="cancel">Cancel execution</button><span id="control-feedback" role="status"></span></div>
+          <div class="entity-workspace"><div class="visual-workspace"><div id="typed-view"></div>
+          <section id="world-section" hidden aria-label="World view">
+            <div class="world-heading"><h4>World</h4><span id="frame-mode" class="eyebrow">Latest saved state</span></div>
+            <div id="world-metrics" class="facts"></div>
+            <div class="frame-controls"><button id="world-live" type="button">Latest</button><label for="frame">Recorded state</label><input id="frame" type="range" min="0" max="0" value="0" disabled><output id="frame-label">Waiting for a recorded state</output></div>
+            <div id="world" class="world-mount"></div>
+          </section>
+          <section id="console" class="console" aria-labelledby="console-title">
+            <div class="console-heading"><div class="console-title-line"><h4 id="console-title">Console</h4><p id="console-context"></p></div><label id="member-label" hidden>Member<select id="console-member"><option value="">Whole swarm</option></select></label></div>
+            <p id="member-feedback" class="quiet" role="status"></p>
+            <div class="console-toolbar"><div class="console-tabs" role="tablist" aria-label="Console content"><button id="tab-transcript" type="button" role="tab" aria-controls="transcript-section" aria-selected="true" data-console="transcript">Transcript</button><button id="tab-events" type="button" role="tab" aria-controls="console-events" aria-selected="false" data-console="events" tabindex="-1">Events</button><button id="tab-output" type="button" role="tab" aria-controls="console-output" aria-selected="false" data-console="output" tabindex="-1">Output</button><button id="tab-text" type="button" role="tab" aria-controls="console-text" aria-selected="false" data-console="text" tabindex="-1" hidden>Selected text</button></div><div class="console-search"><label for="console-search">Find</label><input id="console-search" type="search" placeholder="Find text" autocomplete="off"><output id="console-matches"></output><button id="console-next" type="button">Next</button></div><button id="console-follow" type="button" aria-pressed="true">Follow latest</button></div>
+
+            <section id="transcript-section" role="tabpanel" aria-labelledby="tab-transcript"><div class="conversation-controls"><div class="source-controls"><label for="transcript-source">Conversation</label><select id="transcript-source"><option value="">Whole execution</option></select></div><details id="source-details" class="source-details"><summary>Source details</summary><p id="source-path" class="source-path"></p></details></div><p id="source-feedback" class="quiet" role="status"></p><h4 id="transcript-title" class="console-subtitle">Transcript</h4><div id="transcript" class="console-content" tabindex="0"></div></section>
+            <section id="console-events" role="tabpanel" aria-labelledby="tab-events" hidden><ol id="events" class="console-content"></ol></section>
+            <section id="console-output" role="tabpanel" aria-labelledby="tab-output" hidden><div id="output" class="console-content program-log" tabindex="0"></div></section>
+            <section id="console-text" role="tabpanel" aria-labelledby="tab-text" hidden><h4 id="text-title" class="console-subtitle"></h4><div id="long-text" class="console-content" tabindex="0"></div></section>
+          </section>
+          <section id="result-section" class="final-result" hidden><span class="eyebrow">Final result</span><div id="result"></div></section>
+          </div></div>
+
+        </section>
+      </div>
+    </section>
+    </div>
+    <aside id="inspector" class="selection-inspector" aria-labelledby="inspector-title" tabindex="-1" hidden><button id="close-inspector" type="button">Close details</button><span class="eyebrow">Selected item</span><h4 id="inspector-title">Worker</h4><div id="inspector-description"></div><div id="inspector-tree"></div></aside>
+  </main>
+  <footer><span>asys · Run inspection</span><span>Execution records remain available after a run ends.</span></footer>
+  <script type="module" src="/assets/dashboard.mjs"></script>
+</body>
+</html>

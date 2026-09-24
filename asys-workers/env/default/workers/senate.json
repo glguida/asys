@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "kind": "senate",
+  "config": {
+    "version": 1,
+    "princeps": {
+      "name": "Princeps senatus"
+    },
+    "senators": [
+      {
+        "name": "Reviewer",
+        "prompt": "Check assumptions and supporting evidence."
+      }
+    ]
+  }
+}

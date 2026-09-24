@@ -1,6 +1,7 @@
 """Dcomp process execution and component ownership for host launchers."""
 import json
 import os
+from pathlib import Path
 import shlex
 import signal
 import subprocess
@@ -22,11 +23,18 @@ class ComponentHost:
         self.directory = None
         self.owned = []
         self.interrupted = threading.Event()
-        self.dcomp = [os.environ.get("DCOMP_BINARY") or "dcomp"]
-        for option, field in [("--state-root", "dcomp_state_root"), ("--runtime-root", "runtime_root")]:
-            path = getattr(args, field, None)
-            if path:
-                self.dcomp += [option, str(path.expanduser().resolve())]
+        # Freeze effective connection settings, including environment defaults.
+        # Saved runs and services must keep addressing the same installation
+        # after the invoking shell selects another setup.
+        selected_state = (getattr(args, 'dcomp_state_root', None)
+                          or os.environ.get('DCOMP_STATE_ROOT')
+                          or Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'dcomp')
+        state = Path(selected_state).expanduser().resolve()
+        selected_runtime = (getattr(args, 'runtime_root', None)
+                            or os.environ.get('DCOMP_RUNTIME_ROOT') or state / 'run')
+        runtime = Path(selected_runtime).expanduser().resolve()
+        self.dcomp = [os.environ.get('DCOMP_BINARY') or 'dcomp',
+                      '--state-root', str(state), '--runtime-root', str(runtime)]
 
     def check_interrupt(self):
         if self.interrupted.is_set():

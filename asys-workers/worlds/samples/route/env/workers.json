@@ -5,7 +5,7 @@
     "route-member": {
       "command": [
         "python3",
-        "/opt/asys/asys-workers/worlds/samples/route/participant.py"
+        "/opt/asys/environment/programs/route-member.py"
       ]
     },
     "route-global": {
